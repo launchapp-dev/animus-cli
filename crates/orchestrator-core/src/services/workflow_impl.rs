@@ -149,9 +149,11 @@ fn query_workflows(workflows: Vec<OrchestratorWorkflow>, query: &WorkflowQuery) 
 }
 
 fn workflow_query_can_use_db_page(query: &WorkflowQuery) -> bool {
+    // `workflow_ref` (the type filter) is pushed down to the journal backend's
+    // bounded list/query_ids, so it stays on the fast DB-page path; task_id /
+    // phase_id / search still fall back to the in-memory scan.
     query.page.limit.is_some()
         && matches!(query.sort, WorkflowQuerySort::StartedAt)
-        && query.filter.workflow_ref.is_none()
         && query.filter.task_id.is_none()
         && query.filter.phase_id.is_none()
         && query.filter.search_text.as_deref().is_none_or(|value| value.trim().is_empty())
@@ -161,6 +163,22 @@ fn workflow_query_can_use_db_page(query: &WorkflowQuery) -> bool {
 impl WorkflowServiceApi for InMemoryServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
         Ok(self.state.read().await.workflows.values().cloned().collect())
+    }
+
+    async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>> {
+        Ok(self.state.read().await.workflows.values().map(crate::workflow::WorkflowRunSummary::from_workflow).collect())
+    }
+
+    async fn list_active(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        Ok(self
+            .state
+            .read()
+            .await
+            .workflows
+            .values()
+            .filter(|w| matches!(w.status, WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused))
+            .cloned()
+            .collect())
     }
 
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
@@ -192,11 +210,32 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 
     async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
+        WorkflowServiceApi::run_with_id(self, id, input, actor).await
+    }
+
+    async fn run_with_id(
+        &self,
+        id: String,
+        input: WorkflowRunInput,
+        actor: Option<&Actor>,
+    ) -> Result<OrchestratorWorkflow> {
         let workflow = {
             let mut lock = self.state.write().await;
-            let task = input.subject.task_id().and_then(|id| lock.tasks.get(id).cloned());
+            let task = input.subject.as_ref().and_then(|s| s.task_id()).and_then(|id| lock.tasks.get(id).cloned());
             let workflow_ref =
                 effective_workflow_ref(input.workflow_ref(), crate::workflow::STANDARD_WORKFLOW_REF, task.as_ref());
+            if let Some(existing) = lock.workflows.get(&id) {
+                if existing.subject == input.subject
+                    && existing.workflow_ref.as_deref() == Some(workflow_ref.as_str())
+                    && existing.input == input.input
+                    && existing.vars == input.vars
+                {
+                    return Ok(existing.clone());
+                }
+                return Err(crate::types::conflict(format!(
+                    "workflow id '{id}' already belongs to a different effective request"
+                )));
+            }
             let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 None,
                 Some(workflow_ref.as_str()),
@@ -366,10 +405,32 @@ impl WorkflowServiceApi for FileServiceHub {
         self.workflow_manager().list_all()
     }
 
+    async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>> {
+        self.workflow_manager().list_all_summaries()
+    }
+
+    async fn list_active(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        self.workflow_manager().list_active()
+    }
+
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
         if workflow_query_can_use_db_page(&query) {
             let manager = self.workflow_manager();
-            let (ids, total) = manager.query_ids(query.page, query.filter.status)?;
+            // Fast path for the first page (the workflow-list UI + graphql poll):
+            // fetch the bounded runs in ONE journal RPC, plus a cheap ids-only
+            // query for `total`, instead of query_ids + a per-id load loop (N+1 —
+            // one RPC per run, which serialized behind other journal traffic and
+            // made the list intermittently multi-second).
+            let workflow_ref = query.filter.workflow_ref.as_deref();
+            if query.page.offset == 0 {
+                if let Some(limit) = query.page.limit {
+                    let (_ids, total) = manager.query_ids(query.page, query.filter.status, workflow_ref)?;
+                    let items = manager.list_page(query.filter.status, workflow_ref, limit)?;
+                    return Ok(ListPage::new(items, total, query.page));
+                }
+            }
+            // Offset > 0: the journal list RPC has no offset, so keep the id-walk.
+            let (ids, total) = manager.query_ids(query.page, query.filter.status, workflow_ref)?;
             let mut items = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Ok(workflow) = manager.load(&id) {
@@ -401,19 +462,70 @@ impl WorkflowServiceApi for FileServiceHub {
 
     async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
-        let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
-        let retry_configs = load_phase_retry_configs(self.project_root.as_path(), actor);
+        WorkflowServiceApi::run_with_id(self, id, input, actor).await
+    }
+
+    async fn run_with_id(
+        &self,
+        id: String,
+        input: WorkflowRunInput,
+        actor: Option<&Actor>,
+    ) -> Result<OrchestratorWorkflow> {
         // Resolve the bootstrap config from the actor's partition so a per-user
         // `config_source` (global∪private∪shared) contributes the default
         // workflow ref, skip guards, and phase plan. `actor = None` = global.
         let workflow_config = crate::load_workflow_config_or_default_for_actor(self.project_root.as_path(), actor);
-        let task = if let Some(task_id) = input.subject.task_id() {
+        let task = if let Some(task_id) = input.subject.as_ref().and_then(|s| s.task_id()) {
             crate::workflow::load_task(&self.project_root, task_id).ok()
         } else {
             None
         };
         let workflow_ref =
             effective_workflow_ref(input.workflow_ref(), &workflow_config.config.default_workflow_ref, task.as_ref());
+        let manager = self.workflow_manager();
+        match manager.load(&id) {
+            Ok(existing) => {
+                if existing.subject != input.subject
+                    || existing.workflow_ref.as_deref() != Some(workflow_ref.as_str())
+                    || existing.input != input.input
+                    || existing.vars != input.vars
+                {
+                    return Err(crate::types::conflict(format!(
+                        "workflow id '{id}' already belongs to a different effective request"
+                    )));
+                }
+                match (manager.load_workflow_actor(&id), actor) {
+                    (Some(stored), Some(requested))
+                        if stored.user_id == requested.user_id && stored.tenant_id == requested.tenant_id => {}
+                    (None, Some(requested)) => {
+                        // Crash reconciliation: save() can land before its
+                        // actor sidecar. The stable id is known only to the
+                        // scoped reservation claimant, so repair the missing
+                        // owner before the run can be returned or spawned.
+                        manager.set_workflow_actor(&id, Some(requested))?;
+                    }
+                    (None, None) => {}
+                    _ => {
+                        return Err(crate::types::conflict(format!(
+                            "workflow id '{id}' is owned by a different actor partition"
+                        )));
+                    }
+                }
+                return Ok(existing);
+            }
+            Err(error) if protocol::classify_anyhow_error_kind(&error) == protocol::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error.context(format!(
+                    "cannot safely reconcile workflow launch '{id}'; journal availability is unknown"
+                )));
+            }
+        }
+        // Existing crash-stranded runs return above without requiring the
+        // current state-machine/runtime config to still compile. The journaled
+        // run is authoritative for reconciliation; configuration is needed only
+        // when this claimant must create the preallocated id for the first time.
+        let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
+        let retry_configs = load_phase_retry_configs(self.project_root.as_path(), actor);
         let skip_guards = crate::resolve_workflow_skip_guards(&workflow_config.config, Some(workflow_ref.as_str()));
         let executor = WorkflowLifecycleExecutor::with_state_machines(
             crate::resolve_phase_plan_for_workflow_ref_for_actor(
@@ -426,13 +538,15 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         let mut workflow = executor.bootstrap(id.clone(), input.with_workflow_ref(workflow_ref));
-        if let Ok(subject_context) =
-            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
-        {
-            executor.skip_guarded_phases(&mut workflow, &subject_context);
+        // A subjectless run binds a None subject context: no subject to resolve,
+        // so subject template vars are simply absent and no guard phases are
+        // skipped on subject identity here.
+        if let Some(subject) = workflow.subject.clone() {
+            if let Ok(subject_context) = self.subject_resolver().resolve_subject_context(&subject, None, None).await {
+                executor.skip_guarded_phases(&mut workflow, &subject_context);
+            }
         }
 
-        let manager = self.workflow_manager();
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Start)?;
         // Persist the actor partition so EVERY later lifecycle transition
@@ -537,10 +651,11 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision)?;
-        if let Ok(subject_context) =
-            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
-        {
-            executor.skip_guarded_phases(&mut workflow, &subject_context);
+        // Subjectless runs bind a None subject context (nothing to resolve).
+        if let Some(subject) = workflow.subject.clone() {
+            if let Ok(subject_context) = self.subject_resolver().resolve_subject_context(&subject, None, None).await {
+                executor.skip_guarded_phases(&mut workflow, &subject_context);
+            }
         }
         manager.save(&workflow)?;
         let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;

@@ -71,6 +71,9 @@ pub(crate) enum SubjectCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectListArgs {
+    /// Authenticated actor JSON. Selects the non-downgradable v2 subject wire.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to list (e.g. `task`, `issue`, `linear`). When omitted,
     /// falls back to `default_subject_kind` in `.animus/config.json`
     /// (defaults to `task`).
@@ -102,6 +105,9 @@ pub(crate) struct SubjectListArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectGetArgs {
+    /// Authenticated actor JSON. Selects the non-downgradable v2 subject wire.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -115,6 +121,9 @@ pub(crate) struct SubjectGetArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectCreateArgs {
+    /// Authenticated actor JSON. The created subject is owned by this actor.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -135,10 +144,19 @@ pub(crate) struct SubjectCreateArgs {
     /// Optional free-form body / description.
     #[arg(long, value_name = "BODY")]
     pub body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (e.g. `--data '{"source":"krisp","occurred_at":"2026-07-09T21:00:00Z"}'`).
+    /// Lets command-phase / scripted callers set declared kind fields that
+    /// have no dedicated flag. Merges with (does not replace) other fields.
+    #[arg(long, value_name = "JSON")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectUpdateArgs {
+    /// Authenticated actor JSON. Only an owned subject can be updated.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -148,6 +166,9 @@ pub(crate) struct SubjectUpdateArgs {
     /// kind-qualified form (e.g. `task:TASK-001`).
     #[arg(long, value_name = "ID")]
     pub id: String,
+    /// Rename the subject. Replaces the subject's title with this value.
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
     /// New normalized status.
     #[arg(long, value_name = "STATUS")]
     pub status: Option<String>,
@@ -161,10 +182,19 @@ pub(crate) struct SubjectUpdateArgs {
     /// long-form content onto a subject (e.g. an agent's findings).
     #[arg(long, value_name = "BODY")]
     pub body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (e.g. `--data '{"source":"krisp","occurred_at":"2026-07-09T21:00:00Z"}'`).
+    /// Lets command-phase / scripted callers set declared kind fields that
+    /// have no dedicated flag. Merges with (does not replace) other fields.
+    #[arg(long, value_name = "JSON")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectBatchCreateArgs {
+    /// Authenticated actor JSON applied to every item.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -183,6 +213,9 @@ pub(crate) struct SubjectBatchCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectBatchUpdateArgs {
+    /// Authenticated actor JSON applied to every item.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -210,6 +243,9 @@ pub(crate) struct SubjectNextArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectStatusArgs {
+    /// Authenticated actor JSON. Only an owned subject can be changed.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -226,6 +262,9 @@ pub(crate) struct SubjectStatusArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectDeleteArgs {
+    /// Authenticated actor JSON. Only an owned subject can be deleted.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).

@@ -1,14 +1,14 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 91 built-in tools across daemon, cost, queue, agent, output,
+registers 97 built-in tools across daemon, cost, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
 
-That headline 91 counts the full management-mode surface. A default
-agent-injected server (`animus mcp serve` without `--management`) exposes 89:
+That headline 97 counts the full management-mode surface. A default
+agent-injected server (`animus mcp serve` without `--management`) exposes 95:
 the two `animus.interactions.*` management tools are gated behind
 `--management` so an agent can never list or answer its own pending approvals.
 
@@ -20,6 +20,18 @@ the server default. Marketplace tools may omit `project_root` because they
 operate on the public registry. Plugin mutation tools that touch installed
 binaries can still accept `project_root` so project-local `.animus/plugins.lock`
 participates in integrity tracking when present.
+
+When a trusted host starts the server with `--require-actor --actor-json`,
+Animus pins that actor for the server lifetime. Missing or malformed identity
+stops startup, child commands cannot replace the pin, and the server removes
+every route whose command/protocol cannot enforce it. The retained surface is
+workflow run/list/get, workflow config get/validate, workflow output reads, chat
+send, subject list/get/create/update/batch-create/batch-update/status,
+interaction creation/management, and tool discovery. Subject `next`, queue
+operations, config writes, resources, and other global routes are deliberately
+unavailable rather than silently downgraded. Actor-bound subject calls use the
+v2 subject protocol and never fall back to legacy v1 methods. See
+[Actor-bound application contract](../architecture/actor-bound-application-contract.md).
 
 **OAuth-protected upstream MCP servers.** Connecting *agents* to OAuth-backed
 MCP servers is handled by the `animus mcp auth` CLI surface plus the
@@ -134,16 +146,18 @@ approval gate stays human-only.
 | `animus.daemon.agents` | List currently running agent tasks and their status | `project_root` |
 | `animus.daemon.logs` | Read recent daemon log entries | `limit`, `search`, `project_root` |
 | `animus.daemon.config` | Read current daemon automation settings | `project_root` |
-| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
+| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `max_daily_usd`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
 | `animus.daemon.observe` | Routing front-door over the existing observability surfaces: returns the merged, chronological window of daemon events + logs (or routes to a single `source`). Non-streaming — always returns and never follows live. Works offline (reads scoped event/log history; the daemon need not be running) | `since`, `source` (`logs`/`events`/`stream`/`workflow`), `workflow_id`, `limit`, `project_root` |
 
 ---
 
-## Cost & Budget (1 tool)
+## Cost & Budget (3 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `animus.cost.decisions` | List recorded budget-cap breaches from the scoped breach log. Works offline (reads the scoped breach log; the daemon need not be running) | `since`, `project_root` |
+| `animus.budget.get` | Read the fleet budget posture: fleet daily spend cap, today's rolling-24h spend, remaining headroom, whether the cap is exceeded, whether dispatch is paused on the cap, and every configured per-workflow / per-phase budget cap. Works offline | `project_root` |
+| `animus.budget.set` | Set or clear the fleet daily spend cap (admin). Wraps `daemon config --max-daily-usd`; hot-reloaded by the running daemon | `max_daily_usd`, `clear`, `project_root` |
 
 ---
 
@@ -158,12 +172,12 @@ plugin (e.g. `linear`, `jira`, `github-issue`).
 |---|---|---|
 | `animus.subject.list` | List subjects for a kind via the active `subject_backend` plugin. Returns a bounded page by default (`limit` defaults to 50; pass `limit: 0` to remove the cap); the result carries `next_cursor` (and `total` when the backend reports it) — pass `cursor` to fetch the next page. | `kind`, `status`, `limit`, `cursor`, `project_root` |
 | `animus.subject.get` | Fetch a subject by wire id (`<kind>:<native_id>`) | `kind`, `id`, `project_root` |
-| `animus.subject.create` | Create a subject through the active `subject_backend` plugin | `kind`, `title`, `priority`, `status`, `labels[]`, `body`, `project_root` |
-| `animus.subject.update` | Update a subject through the active `subject_backend` plugin | `kind`, `id`, `priority`, `status`, `labels[]`, `body`, `project_root` |
+| `animus.subject.create` | Create a subject through the active `subject_backend` plugin. `data` is a JSON object of structured custom fields (declared kind fields with no dedicated arg, e.g. a transcript's `source` / `occurred_at`) merged into the subject's `data`. | `kind`, `title`, `priority`, `status`, `labels[]`, `body`, `data`, `project_root` |
+| `animus.subject.update` | Update a subject through the active `subject_backend` plugin. `data` is a JSON object of structured custom fields merged into the subject's `data` (via `patch.custom`). | `kind`, `id`, `title`, `priority`, `status`, `labels[]`, `body`, `data`, `project_root` |
 | `animus.subject.next` | Return the highest-priority Ready subject for the given kind | `kind`, `project_root` |
 | `animus.subject.status` | Set the status of a subject by id through the active `subject_backend` | `kind`, `id`, `status`, `project_root` |
-| `animus.subject.batch-create` | Create up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`title`, `status`, `priority`, `labels[]`, `body`), `on_error`, `project_root` |
-| `animus.subject.batch-update` | Patch up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`id`, `status`, `priority`, `labels[]`), `on_error`, `project_root` |
+| `animus.subject.batch-create` | Create up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`title`, `status`, `priority`, `labels[]`, `body`, `data`), `on_error`, `project_root` |
+| `animus.subject.batch-update` | Patch up to 100 subjects of one kind in a single call (per-item dispatch). A per-item `data` object (→ `patch.custom`) makes a data-only item valid. | `kind`, `items[]` (`id`, `status`, `priority`, `labels[]`, `data`), `on_error`, `project_root` |
 
 ---
 
@@ -182,17 +196,35 @@ bounded fetch for recent entries, not a live stream.
 
 ---
 
+## Environment Operations (4 tools)
+
+Surface the CLI's `animus environment {list,get,teardown,reap}` node-management
+verbs to MCP callers. They drive the installed `environment` plugin's node-
+management surface (`environment/list` · `/get` · `/teardown_node` · `/reap`) so
+agents + the portal can inspect and reap ephemeral run nodes without a dashboard
+delete. `reap` defaults to deleting only DEAD (FAILED/CRASHED) nodes — always
+safe, since a live node is never dead; `all`+`force` also reaps healthy orphans.
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `animus.environment.list` | List managed environment nodes with their state + orphan flag | `environment`, `project_root` |
+| `animus.environment.get` | Describe one managed node by substrate id or name | `id`, `environment`, `project_root` |
+| `animus.environment.teardown` | Destroy one managed node by substrate id or name (idempotent) | `id`, `environment`, `project_root` |
+| `animus.environment.reap` | Reap orphaned/dead nodes (default: only dead) | `all`, `force`, `dry_run`, `older_than_secs`, `environment`, `project_root` |
+
+---
+
 ## Workflow Operations (22 tools)
 
 ### Runtime & Inspection Tools (12)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.workflow.run` | Start a workflow for a subject (async, via daemon). For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post), pass `subject_id` (the kernel resolves the kind) instead of `task_id` | `task_id`, `requirement_id`, `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `project_root` |
-| `animus.workflow.run-multiple` | Batch-run workflows for multiple tasks | `runs[]` (each: `task_id`, `workflow_ref`, `input_json`), `on_error`, `project_root` |
-| `animus.workflow.execute` | Execute a workflow synchronously (no daemon) | `task_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json`, `project_root` |
+| `animus.workflow.run` | Start a workflow for a subject (async, via daemon). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `project_root` |
+| `animus.workflow.run-multiple` | Batch-run workflows for multiple subjects | `runs[]` (each: `subject_id`, `workflow_ref`, `input_json`), `on_error`, `project_root` |
+| `animus.workflow.execute` | Execute a workflow synchronously (no daemon) | `subject_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json`, `project_root` |
 | `animus.workflow.get` | Get full workflow state by ID | `id`, `project_root` |
-| `animus.workflow.list` | List workflow executions | `status`, `workflow_ref`, `task_id`, `phase_id`, `search`, `sort`, `limit`, `offset`, `max_tokens`, `project_root` |
+| `animus.workflow.list` | List workflow executions | `status`, `workflow_ref`, `subject_id`, `phase_id`, `search`, `sort`, `limit`, `offset`, `max_tokens`, `project_root` |
 | `animus.workflow.pause` | Pause a running workflow | `id`, `confirm`, `dry_run`, `project_root` |
 | `animus.workflow.cancel` | Cancel a running workflow permanently | `id`, `confirm`, `dry_run`, `project_root` |
 | `animus.workflow.resume` | Resume a paused workflow | `id`, `project_root` |
@@ -224,7 +256,7 @@ bounded fetch for recent entries, not a live stream.
 |---|---|---|
 | `animus.queue.list` | List queued subject dispatches | `project_root` |
 | `animus.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post), pass `subject_id` (qualified `blog:BLOG-001` or bare `BLOG-001`; the kernel resolves the kind) instead of `task_id` | `task_id`, `requirement_id`, `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `run_at`, `expire_after`, `project_root` |
+| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `run_at`, `expire_after`, `project_root` |
 | `animus.queue.reorder` | Set preferred dispatch order | `subject_ids[]`, `project_root` |
 | `animus.queue.hold` | Hold one or more pending subjects from dispatch | `subject_id`, `subject_ids[]`, `project_root` |
 | `animus.queue.release` | Release one or more held subjects for dispatch | `subject_id`, `subject_ids[]`, `project_root` |

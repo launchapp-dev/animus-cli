@@ -1,10 +1,12 @@
 //! Stdio hosting, discovery, and routing for Animus-compatible plugins.
 
+pub mod db_registry;
 mod discovery;
 mod host;
 pub mod lockfile;
 pub mod manifest_cache;
 mod registry;
+pub mod resident_host_registry;
 pub mod scope;
 pub mod session;
 pub mod signature_verifier;
@@ -12,11 +14,13 @@ pub mod status;
 mod subject_router;
 mod transport;
 
+pub use db_registry::{DbRegistryEntry, PluginRegistrySource, StaticRegistrySource};
 pub use discovery::{
-    discover_by_kind, discover_plugins, is_scanned_plugin_name, legacy_plugins_registry_path, plugin_install_dir,
-    plugins_registry_path, project_plugin_install_dir, project_plugins_registry_path,
-    registered_skip_manifest_check_at_install, registered_skip_manifest_check_at_install_scoped,
-    resolve_configured_binary, DiscoveredPlugin, DiscoverySource, DiscoveryWarning, PluginConfigEntry, PluginDiscovery,
+    discover_by_kind, discover_plugins, discover_plugins_including_project_local, is_scanned_plugin_name,
+    legacy_plugins_registry_path, plugin_install_dir, plugins_registry_path, project_plugin_install_dir,
+    project_plugins_registry_path, registered_skip_manifest_check_at_install,
+    registered_skip_manifest_check_at_install_scoped, resolve_configured_binary, DiscoveredPlugin, DiscoverySource,
+    DiscoveryWarning, PluginConfigEntry, PluginDiscovery,
 };
 pub use host::{
     check_protocol_compat, current_secret_snapshot_provider, install_process_slot_factory,

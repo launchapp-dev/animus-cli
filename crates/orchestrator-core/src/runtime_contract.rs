@@ -106,6 +106,25 @@ pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
     }
 }
 
+/// Capabilities for a provider tool the kernel does not recognize as a built-in
+/// CLI — i.e. a provider PLUGIN (every provider ships out-of-tree as of
+/// v0.4.12). The kernel never spawns a plugin provider via `cli.launch`, so the
+/// launch-time flags are conservative and only inform prompt/context
+/// heuristics. `supports_mcp` here is a fallback default only: whenever a
+/// provider plugin actually backs the tool, [`build_runtime_contract`]
+/// OVERWRITES it with the plugin's DECLARED value (the authoritative source).
+fn plugin_provider_capabilities() -> CliCapabilities {
+    CliCapabilities {
+        supports_file_editing: false,
+        supports_streaming: true,
+        supports_tool_use: true,
+        supports_vision: false,
+        supports_long_context: true,
+        max_context_tokens: None,
+        supports_mcp: true,
+    }
+}
+
 fn cli_capabilities_from_tool_config(config: &CliToolConfig) -> CliCapabilities {
     CliCapabilities {
         supports_file_editing: config.supports_file_editing.unwrap_or(false),
@@ -358,6 +377,21 @@ pub fn build_cli_launch_contract(
     }))
 }
 
+/// Best-effort resolution of whether a PROVIDER PLUGIN backs `tool` and, if
+/// so, its DECLARED `supports_mcp`. Discovers installed provider plugins
+/// against the ambient project root (cwd — the daemon, runner, and CLI all run
+/// with cwd = the project). Returns `None` when no provider plugin backs the
+/// tool (a genuinely in-tree/legacy name, or a tool with no installed plugin).
+///
+/// This is the seam that makes the loaded plugin's OWN declaration — not a
+/// hardcoded name table — the source of truth for MCP-server injection. It is
+/// intentionally kept out of the pure [`build_runtime_contract_inner`] so that
+/// logic is hermetically testable.
+fn provider_declared_supports_mcp(tool: &str) -> Option<bool> {
+    let root = std::env::current_dir().ok()?;
+    orchestrator_plugin_host::session::provider_declared_supports_mcp(&root, tool)
+}
+
 pub fn build_runtime_contract(
     tool: &str,
     model_id: &str,
@@ -367,15 +401,71 @@ pub fn build_runtime_contract(
     mcp_endpoint: Option<&str>,
     mcp_agent_id: Option<&str>,
 ) -> Option<Value> {
+    // Resolve the backing provider plugin's DECLARED MCP capability and thread
+    // it into the pure builder so the MCP-injection decision consults the loaded
+    // plugin's declaration rather than the name-based capability table.
+    let provider_supports_mcp = provider_declared_supports_mcp(tool);
+    build_runtime_contract_inner(
+        tool,
+        model_id,
+        prompt,
+        resume_plan,
+        command_override,
+        mcp_endpoint,
+        mcp_agent_id,
+        provider_supports_mcp,
+    )
+}
+
+/// Pure runtime-contract builder. `provider_supports_mcp` is the loaded
+/// provider plugin's DECLARED `supports_mcp` (`Some`) or `None` when no
+/// provider plugin backs the tool. Kept separate from discovery so the
+/// capability-resolution logic is deterministically testable.
+#[allow(clippy::too_many_arguments)]
+fn build_runtime_contract_inner(
+    tool: &str,
+    model_id: &str,
+    prompt: &str,
+    resume_plan: Option<&CliSessionResumePlan>,
+    command_override: Option<&str>,
+    mcp_endpoint: Option<&str>,
+    mcp_agent_id: Option<&str>,
+    provider_supports_mcp: Option<bool>,
+) -> Option<Value> {
     let normalized = normalized_tool(tool);
-    let launch = build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override)?;
-    let capabilities = cli_capabilities_for_tool(&normalized)?;
+    let launch = build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override);
+    let capabilities = cli_capabilities_for_tool(&normalized);
+
+    // Resolve the CLI shape from the built-in tables (unchanged): a known
+    // built-in CLI has BOTH a launch entry and a capability entry; a tool in
+    // neither table is a provider PLUGIN and gets the generic provider caps
+    // with no `cli.launch`; a tool in exactly one table is a partial/non-CLI
+    // built-in and stays unsupported.
+    let (launch, mut capabilities) = match (launch, capabilities) {
+        (Some(launch), Some(capabilities)) => (Some(launch), capabilities),
+        (None, None) => (None, plugin_provider_capabilities()),
+        _ => return None,
+    };
+
+    // THE injection-decision change: when a provider plugin actually backs this
+    // tool, its DECLARED `supports_mcp` (the plugin's manifest-backed
+    // SessionCapabilities value, resolved from where the plugin is loaded) — NOT
+    // the name-based capability table — decides whether the daemon injects this
+    // agent's profile/skill MCP servers. This is what makes profile-declared
+    // servers (krisp, github) reach an out-of-tree provider like `tool: portal`
+    // that declares `supports_mcp: true`. `None` means no plugin backs the tool
+    // (it cannot be dispatched anyway), so the table default is left untouched.
+    if let Some(declared) = provider_supports_mcp {
+        capabilities.supports_mcp = declared;
+    }
     let enforce_mcp_only = mcp_endpoint.is_some() && capabilities.supports_mcp;
 
     let mut cli = serde_json::Map::new();
     cli.insert("name".to_string(), json!(normalized));
     cli.insert("capabilities".to_string(), json!(capabilities));
-    cli.insert("launch".to_string(), launch);
+    if let Some(launch) = launch {
+        cli.insert("launch".to_string(), launch);
+    }
 
     if let Some(plan) = resume_plan {
         cli.insert(
@@ -466,6 +556,80 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(allowed_prefixes.contains(&"animus."));
         assert!(allowed_prefixes.contains(&"mcp__animus__"));
+    }
+
+    #[test]
+    fn plugin_declared_mcp_true_marks_out_of_tree_provider_tool_mcp_capable() {
+        // A provider tool the kernel has no built-in CLI entry for (every
+        // provider ships as a plugin now, e.g. LaunchApp's `portal`) whose
+        // backing plugin DECLARES `supports_mcp: true` must assemble a runtime
+        // contract flagged `supports_mcp: true`, so the daemon injects the
+        // agent's profile/skill MCP servers. Regression for the OAuth/krisp
+        // bridge: the value now comes from the plugin's OWN declaration, not a
+        // name heuristic.
+        let contract = build_runtime_contract_inner("portal", "z-ai/glm-5.2", "hi", None, None, None, None, Some(true))
+            .expect("plugin-provider runtime contract should build when the plugin declares MCP");
+
+        assert_eq!(contract.pointer("/cli/name").and_then(Value::as_str), Some("portal"));
+        assert_eq!(contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
+        // The kernel never launches a plugin provider via `cli.launch`; the
+        // block is intentionally absent so downstream launch-arg mutators no-op.
+        assert!(
+            contract.pointer("/cli/launch").is_none(),
+            "plugin-provider contract must omit cli.launch; got {contract}"
+        );
+    }
+
+    #[test]
+    fn plugin_declared_mcp_false_keeps_provider_tool_non_mcp() {
+        // A provider tool whose backing plugin DECLARES `supports_mcp: false`
+        // still assembles a contract (the tool is dispatchable) but is flagged
+        // non-MCP-capable, so no profile/skill MCP servers are injected.
+        let contract =
+            build_runtime_contract_inner("portal", "z-ai/glm-5.2", "hi", None, None, None, None, Some(false))
+                .expect("a dispatchable provider tool should still assemble a contract");
+        assert_eq!(contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn plugin_declared_mcp_is_authoritative_for_known_builtin_names() {
+        // A KNOWN built-in name backed by a provider plugin resolves its
+        // `supports_mcp` from the plugin declaration (uniform treatment), while
+        // keeping the built-in table's rich cli-metadata (launch block, etc.).
+        let with_plugin =
+            build_runtime_contract_inner("codex", default_codex_model(), "hi", None, None, None, None, Some(true))
+                .expect("known built-in with a backing plugin should build");
+        assert_eq!(with_plugin.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
+        assert!(with_plugin.pointer("/cli/launch").is_some(), "known built-in must keep its launch block");
+        // A plugin declaring false overrides the built-in table's `true`.
+        let opted_out =
+            build_runtime_contract_inner("codex", default_codex_model(), "hi", None, None, None, None, Some(false))
+                .expect("known built-in should still build");
+        assert_eq!(opted_out.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(false));
+    }
+
+    #[test]
+    fn no_backing_plugin_falls_back_to_static_table_for_known_builtins() {
+        // With no provider plugin backing the tool (`None`), a known built-in
+        // CLI still resolves from the static table exactly as before.
+        let contract = build_runtime_contract_inner("codex", default_codex_model(), "hi", None, None, None, None, None)
+            .expect("known built-in should build from the static fallback");
+        assert_eq!(contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
+        assert!(contract.pointer("/cli/launch").is_some());
+    }
+
+    #[test]
+    fn no_backing_plugin_preserves_static_table_behavior() {
+        // Partial built-ins (`custom`/`cursor`/`cline`) have a capability-table
+        // entry but no launch-table entry: they stay unsupported (None).
+        assert!(build_runtime_contract_inner("custom", "m", "hi", None, None, None, None, None).is_none());
+        // An unknown name with no backing plugin keeps the historical built-in
+        // fallback: it builds a provider-shaped contract. `supports_mcp` is left
+        // at the table default here (no plugin to consult) — harmless, since a
+        // tool with no installed provider plugin cannot be dispatched anyway.
+        let unknown = build_runtime_contract_inner("definitely-not-a-tool", "m", "hi", None, None, None, None, None)
+            .expect("an unknown tool keeps the built-in provider fallback contract");
+        assert_eq!(unknown.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
     }
 
     #[test]

@@ -146,8 +146,9 @@ pub fn load_workflow_config_with_metadata(project_root: &Path, actor: Option<&Ac
             schema: config.schema.clone(),
             version: config.version,
             hash: workflow_config_hash(&config),
-            // Plugin-sourced (YAML on disk / Postgres / API) — a non-builtin source.
-            source: WorkflowConfigSource::Yaml,
+            // Plugin-sourced base (config_source plugin: Postgres / API / YAML-on-disk).
+            // `path` is the project root the plugin sourced from, not a real YAML file.
+            source: WorkflowConfigSource::Plugin,
         },
         config,
         path,
@@ -269,6 +270,88 @@ pub(crate) fn compile_workflow_config_onto_base(
         config,
         path,
     })
+}
+
+/// Three-way outcome of attempting to source the base workflow config,
+/// distinguishing "no config source is configured" (benign — callers may fall
+/// back to other config) from "the config source failed to load" (transient /
+/// erroring — the config could NOT be determined).
+///
+/// This is the non-swallowing counterpart to
+/// [`load_workflow_config_or_default`]: the `_or_default` path degrades ANY
+/// load failure into an empty builtin base, which is correct for system
+/// reconcilers but catastrophic for credential/OAuth resolution — a transient
+/// `config_source` plugin failure (DB overload under bulk `mcp call`) would be
+/// misreported as "server not defined" with an empty `mcp_servers`. Credential
+/// resolvers route through [`try_load_workflow_config`] instead so a source
+/// outage propagates as [`WorkflowConfigAvailability::SourceUnavailable`]
+/// rather than silently emptying the config.
+pub enum WorkflowConfigAvailability {
+    /// The config was sourced and compiled successfully. Boxed because
+    /// `LoadedWorkflowConfig` is large relative to the other (small) variants.
+    Loaded(Box<LoadedWorkflowConfig>),
+    /// No `config_source` plugin is installed (and no injected test base): the
+    /// project simply has no workflow-config source. Benign — callers fall back
+    /// to other config (e.g. project `.animus/config.json`).
+    NoSource,
+    /// A `config_source` plugin IS present but base acquisition or compilation
+    /// failed (spawn / handshake / RPC / DB overload, or a validation error).
+    /// The config could not be determined; callers must NOT treat this as an
+    /// empty/absent config.
+    SourceUnavailable(anyhow::Error),
+}
+
+/// Non-swallowing load: classify base acquisition into
+/// [`WorkflowConfigAvailability`] so credential/OAuth resolvers can tell a
+/// genuinely-absent config source apart from a transient source failure.
+///
+/// Unlike [`load_workflow_config_with_metadata`] (which collapses "no plugin
+/// installed" into an error) and [`load_workflow_config_or_default`] (which
+/// collapses every error into an empty base), this inspects the
+/// `config_source` base result directly:
+/// - `Ok(None)` (no plugin / no injected base) => [`WorkflowConfigAvailability::NoSource`].
+/// - `Ok(Some(base))` => compile it (pack overlays + validate); a compile
+///   failure surfaces as [`WorkflowConfigAvailability::SourceUnavailable`].
+/// - `Err(_)` (plugin present but its load failed) =>
+///   [`WorkflowConfigAvailability::SourceUnavailable`].
+pub fn try_load_workflow_config(project_root: &Path, actor: Option<&Actor>) -> WorkflowConfigAvailability {
+    let (base, cache_version) = match super::config_source_client::resolve_plugin_base(project_root, actor) {
+        Ok(None) => return WorkflowConfigAvailability::NoSource,
+        Ok(Some(plugin_base)) => plugin_base,
+        Err(err) => return WorkflowConfigAvailability::SourceUnavailable(err),
+    };
+
+    // Reuse the SAME compiled-config cache as `load_workflow_config_with_metadata`
+    // (keyed by source token + pack fingerprint + actor) so an unchanged source
+    // and pack set short-circuits the pack-overlay merge + validate below.
+    // `resolve_server_url` routes OAuth resolution through this path once per
+    // `mcp call`, so honoring the cache keeps a bulk burst from recompiling pack
+    // overlays on every call.
+    let registry = match resolve_pack_registry(project_root) {
+        Ok(registry) => registry,
+        Err(err) => return WorkflowConfigAvailability::SourceUnavailable(err),
+    };
+    let compile_token = format!(
+        "{cache_version}\u{1f}{}\u{1f}{}",
+        pack_registry_fingerprint(&registry),
+        super::config_source_client::actor_cache_key(actor),
+    );
+    if let Some(cached) = super::config_source_client::cached_compiled(project_root, actor, &compile_token) {
+        return WorkflowConfigAvailability::Loaded(Box::new(cached));
+    }
+
+    match compile_workflow_config_onto_base(project_root, base) {
+        Ok(mut loaded) => {
+            // The base is plugin-sourced (identical to
+            // `load_workflow_config_with_metadata`), so label it `Plugin` rather
+            // than `Yaml`; this also keeps the shared cache entry consistent
+            // across both loaders.
+            loaded.metadata.source = WorkflowConfigSource::Plugin;
+            super::config_source_client::store_compiled(project_root, actor, compile_token, loaded.clone());
+            WorkflowConfigAvailability::Loaded(Box::new(loaded))
+        }
+        Err(err) => WorkflowConfigAvailability::SourceUnavailable(err),
+    }
 }
 
 pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowConfig {

@@ -1,6 +1,6 @@
 # Crate Map
 
-The Animus workspace is a Cargo workspace of 10 crates organized by runtime
+The Animus workspace is a Cargo workspace of 9 crates organized by runtime
 responsibility. `Cargo.toml` is the source of truth for membership.
 
 The `protocol` (kernel wire types) and `animus-config-protocol` crates moved
@@ -44,22 +44,15 @@ binary inside the installed plugin (see
 | Crate | Responsibility |
 |---|---|
 | `orchestrator-plugin-host` | Plugin discovery, install lockfiles, manifest probes, stdio host, router, signature verification, and the `session::*` provider plugin session bridge (folded in from the former `orchestrator-session-host` crate in v0.5.3) |
-| `animus-plugin-protocol` | In-tree copy of the stdio plugin protocol types |
 | `animus-plugin-runtime` | Runtime helper crate for plugin implementations |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates
 for the kernel wire types (`protocol`), the `config_source` contract
 (`animus-config-protocol`), provider/session contracts, plus
-queue/workflow/subject plugin routing. The root `Cargo.toml` pins `protocol`,
-`animus-config-protocol`, `animus-provider-protocol`,
-`animus-session-backend`, `animus-subject-protocol`,
-`animus-journal-protocol`, and `animus-actor` to the same
-`animus-protocol` tag (`v0.1.26`); `crates/orchestrator-cli/Cargo.toml` adds
-crate-local pins for `animus-control-protocol`,
-`animus-log-storage-protocol`, `animus-subject-protocol-wire`, and
-`animus-workflow-runner-protocol` at `v0.1.26`, while
-`animus-queue-protocol` and `animus-subject-protocol-v05` stay on the matched
-`v0.5.10` compatibility pair.
+queue/workflow/subject plugin routing and the shared application chat contract.
+The root `Cargo.toml` pins all of them to the unified
+`animus-protocol` tag (`v0.7.0-rc.12`); member crates inherit those workspace
+dependencies so there is no legacy queue/subject source split.
 
 ## Web
 

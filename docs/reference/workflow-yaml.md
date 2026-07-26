@@ -31,6 +31,8 @@ schedules:       # Cron-driven workflow dispatch
 triggers:        # Event-driven workflow dispatch
 daemon:          # Daemon-wide runtime tuning
 secrets:         # Declarative secret references (v0.5.5+)
+workspaces:          # Named repo sets an environment materializes (v0.7+)
+environment_routing: # Default + rule-based environment plugin selection (v0.7+)
 ```
 
 All sections are optional. Multiple YAML files in `.animus/workflows/` are merged,
@@ -648,6 +650,19 @@ workflows:
 | `phases` | PhaseEntry[] | yes | Ordered list of phase entries |
 | `variables` | Variable[] | no | Variables used by this workflow |
 | `budget` | BudgetConfig | no | Cost ceiling for the whole workflow run (v0.5.5+) |
+| `environment` | string | no | Environment plugin id (or routing rule key) every phase in this workflow runs in unless the phase overrides it (v0.7+). See [environment](#environment). |
+| `workspace` | string | no | Named [`workspace`](#workspaces) (repo set) this workflow runs against (v0.7+). |
+
+A rich phase entry (see [Phase Entry Types](#phase-entry-types)) additionally
+accepts a phase-level `environment:` and `workspace:` that override the
+workflow-level values:
+
+```yaml
+    phases:
+      - implementation:
+          environment: firecracker   # this phase runs in the microVM env
+          workspace: fullstack       # against the multi-repo workspace
+```
 
 ## budget
 
@@ -1274,6 +1289,93 @@ the same id). The `daemon:` block **field-merges**: as each overlay is applied,
 only the fields the overlay explicitly sets override the previously-accumulated
 block — fields defined only in earlier overlays survive a later partial
 `daemon:` block.
+
+---
+
+## workspaces (v0.7+)
+
+> Foundation config for the `environment` plugin kind. The kernel parses,
+> merges, and compiles these fields today; the runtime that materializes a
+> workspace and executes the harness inside it is delivered by the environment
+> plugin (worktree / container / microVM) and the workflow runner. With no
+> environment plugin installed the runner falls back to local execution and
+> `workspaces:` / `environment_routing:` are inert.
+
+A **workspace** is a named set of repositories an environment materializes as a
+single checkout tree. Workflows and phases reference a workspace by name via
+`workspace:`; when unset, the environment's default single-repo workspace is
+used.
+
+```yaml
+workspaces:
+  fullstack:
+    repos:
+      - url: https://github.com/acme/api
+        primary: true          # the default command cwd (first entry if none set)
+      - url: https://github.com/acme/web
+        name: web              # checkout subdir (defaults to last url path segment)
+        git_ref: develop       # branch/tag/commit (defaults to remote default)
+```
+
+### WorkspaceRepo fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | yes | Clone URL or local path for the repository |
+| `name` | string | no | Subdirectory to check out under (defaults to the last `url` path segment) |
+| `git_ref` | string | no | Git ref (branch/tag/commit) to check out (defaults to the remote default branch) |
+| `primary` | bool | no | Marks the primary repo (default command cwd); the first entry wins if none is marked |
+
+## environment_routing (v0.7+)
+
+Config-level selection of WHICH environment plugin runs a given unit of work.
+The kernel evaluates `rules` top-to-bottom (first match wins) and falls back to
+`default` when none match.
+
+```yaml
+environment_routing:
+  default: local              # environment plugin id used when no rule matches
+  rules:
+    - match:
+        kind: task            # subject kind (unset = wildcard)
+        harness: claude       # provider/tool id (unset = wildcard)
+      environment: firecracker
+      spec:                   # optional spec overrides merged into the compiled EnvironmentSpec
+        image: acme/dev:latest
+    - match:
+        harness: codex        # any kind, codex harness -> sandbox env
+      environment: sandbox
+```
+
+### Resolution precedence
+
+For each unit of work the environment plugin id is resolved as (highest first):
+
+1. Phase-level `environment:` override.
+2. First matching `environment_routing.rules` entry (a rule matches when its
+   `match.kind` is unset-or-equals the subject kind **AND** its `match.harness`
+   is unset-or-equals the harness — an all-unset `match` is a catch-all).
+3. Workflow-level `environment:` override.
+4. `environment_routing.default`.
+5. None — no explicit environment; the runner uses built-in local execution.
+
+### EnvironmentRule fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `match.kind` | string | no | Match on subject kind (unset = wildcard) |
+| `match.harness` | string | no | Match on harness / provider tool id (unset = wildcard) |
+| `environment` | string | yes | Environment plugin id to route matching work to |
+| `spec` | map | no | Opaque spec overrides merged into the compiled `EnvironmentSpec` |
+
+## environment (v0.7+)
+
+The `environment:` key (on a workflow definition or a rich phase entry) pins a
+unit of work to a specific environment plugin id, overriding
+`environment_routing`. Phase-level wins over workflow-level. See the resolution
+precedence above. The `environment` plugin kind is an **optional** preflight
+role: `animus daemon preflight` / `animus plugin status` report an installed
+environment plugin, but its absence never blocks daemon boot.
 
 ---
 

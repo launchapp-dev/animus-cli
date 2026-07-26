@@ -1165,6 +1165,7 @@ fn discover_plugins_for_daemon<H: DaemonRunHooks>(
                         DiscoverySource::ProjectLocal => "project_local",
                         DiscoverySource::PluginPath => "plugin_path",
                         DiscoverySource::SystemPath => "system_path",
+                        DiscoverySource::DbRegistry => "db_registry",
                     },
                     path: p.path.display().to_string(),
                 })

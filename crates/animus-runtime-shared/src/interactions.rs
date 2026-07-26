@@ -84,10 +84,33 @@ pub enum InteractionStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionActorRef {
+    pub user_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InteractionRecord {
     pub id: String,
     pub kind: InteractionKind,
     pub agent_id: String,
+    /// Authenticated transport actor that owns this interaction. Records
+    /// created by legacy local CLI paths have no actor and are deliberately
+    /// invisible to actor-bound application reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<InteractionActorRef>,
+    /// Application workspace partition. Today this is the authenticated
+    /// actor's tenant id; it is persisted explicitly for projection layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// Trusted creator attribution. This is provenance, not authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initiated_by: Option<String>,
+    /// Users eligible to answer. `answered_by` is display attribution only
+    /// and never participates in this authorization check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub eligible_responder_user_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +190,35 @@ fn normalize_opt(value: Option<&str>) -> Option<String> {
     value.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned)
 }
 
+fn interaction_actor_fields(
+    actor: Option<&animus_actor::Actor>,
+) -> (Option<InteractionActorRef>, Option<String>, Option<String>, Vec<String>) {
+    match actor {
+        Some(actor) => (
+            Some(InteractionActorRef { user_id: actor.user_id.clone(), tenant_id: actor.tenant_id.clone() }),
+            actor.tenant_id.clone(),
+            Some(actor.user_id.clone()),
+            vec![actor.user_id.clone()],
+        ),
+        None => (None, None, None, Vec::new()),
+    }
+}
+
+fn actor_can_read(record: &InteractionRecord, actor: &animus_actor::Actor) -> bool {
+    let Some(owner) = record.actor.as_ref() else {
+        return false;
+    };
+    owner.tenant_id == actor.tenant_id
+        && (owner.user_id == actor.user_id || record.eligible_responder_user_ids.iter().any(|id| id == &actor.user_id))
+}
+
+fn actor_can_answer(record: &InteractionRecord, actor: &animus_actor::Actor) -> bool {
+    let Some(owner) = record.actor.as_ref() else {
+        return false;
+    };
+    owner.tenant_id == actor.tenant_id && record.eligible_responder_user_ids.iter().any(|id| id == &actor.user_id)
+}
+
 // Same lock-file + exclusive-flock pattern as `agent_state::with_state_file_lock`:
 // `.lock` sidecar next to the interaction file, created on demand, never deleted.
 fn with_interaction_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -228,15 +280,43 @@ pub fn create_question_interaction(
     workflow_id: Option<&str>,
     task_id: Option<&str>,
 ) -> Result<InteractionRecord> {
+    create_question_interaction_for_actor(
+        project_root,
+        agent_id,
+        question,
+        options,
+        timeout_secs,
+        workflow_id,
+        task_id,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_question_interaction_for_actor(
+    project_root: &str,
+    agent_id: &str,
+    question: &str,
+    options: &[String],
+    timeout_secs: Option<u64>,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<InteractionRecord> {
     let agent_id = agent_id.trim();
     let question = question.trim();
     anyhow::ensure!(!agent_id.is_empty(), "agent_id must not be empty");
     anyhow::ensure!(!question.is_empty(), "question must not be empty");
 
+    let (actor, workspace_id, initiated_by, eligible_responder_user_ids) = interaction_actor_fields(actor);
     let record = InteractionRecord {
         id: Uuid::new_v4().to_string(),
         kind: InteractionKind::Question,
         agent_id: agent_id.to_string(),
+        actor,
+        workspace_id,
+        initiated_by,
+        eligible_responder_user_ids,
         workflow_id: normalize_opt(workflow_id),
         task_id: normalize_opt(task_id),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -285,6 +365,33 @@ pub fn create_structured_question_interaction(
     workflow_id: Option<&str>,
     task_id: Option<&str>,
 ) -> Result<InteractionRecord> {
+    create_structured_question_interaction_for_actor(
+        project_root,
+        agent_id,
+        questions,
+        tool_name,
+        raw_input,
+        suggestions,
+        timeout_secs,
+        workflow_id,
+        task_id,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_structured_question_interaction_for_actor(
+    project_root: &str,
+    agent_id: &str,
+    questions: Vec<InteractionQuestion>,
+    tool_name: Option<&str>,
+    raw_input: Value,
+    suggestions: Option<Value>,
+    timeout_secs: Option<u64>,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<InteractionRecord> {
     let agent_id = agent_id.trim();
     anyhow::ensure!(!agent_id.is_empty(), "agent_id must not be empty");
     anyhow::ensure!(!questions.is_empty(), "questions must not be empty");
@@ -294,10 +401,15 @@ pub fn create_structured_question_interaction(
     } else {
         questions.iter().map(|q| q.question.as_str()).collect::<Vec<_>>().join(" | ")
     };
+    let (actor, workspace_id, initiated_by, eligible_responder_user_ids) = interaction_actor_fields(actor);
     let record = InteractionRecord {
         id: Uuid::new_v4().to_string(),
         kind: InteractionKind::Question,
         agent_id: agent_id.to_string(),
+        actor,
+        workspace_id,
+        initiated_by,
+        eligible_responder_user_ids,
         workflow_id: normalize_opt(workflow_id),
         task_id: normalize_opt(task_id),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -338,7 +450,32 @@ pub fn create_native_question_interaction(
     workflow_id: Option<&str>,
     task_id: Option<&str>,
 ) -> Result<InteractionRecord> {
-    create_structured_question_interaction(
+    create_native_question_interaction_for_actor(
+        project_root,
+        agent_id,
+        questions,
+        raw_input,
+        suggestions,
+        timeout_secs,
+        workflow_id,
+        task_id,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_native_question_interaction_for_actor(
+    project_root: &str,
+    agent_id: &str,
+    questions: Vec<InteractionQuestion>,
+    raw_input: Value,
+    suggestions: Option<Value>,
+    timeout_secs: Option<u64>,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<InteractionRecord> {
+    create_structured_question_interaction_for_actor(
         project_root,
         agent_id,
         questions,
@@ -348,6 +485,7 @@ pub fn create_native_question_interaction(
         timeout_secs,
         workflow_id,
         task_id,
+        actor,
     )
 }
 
@@ -363,15 +501,47 @@ pub fn create_approval_interaction(
     workflow_id: Option<&str>,
     task_id: Option<&str>,
 ) -> Result<InteractionRecord> {
+    create_approval_interaction_for_actor(
+        project_root,
+        agent_id,
+        action,
+        tool_name,
+        arguments,
+        suggestions,
+        timeout_secs,
+        workflow_id,
+        task_id,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_approval_interaction_for_actor(
+    project_root: &str,
+    agent_id: &str,
+    action: &str,
+    tool_name: Option<&str>,
+    arguments: Option<Value>,
+    suggestions: Option<Value>,
+    timeout_secs: Option<u64>,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<InteractionRecord> {
     let agent_id = agent_id.trim();
     let action = action.trim();
     anyhow::ensure!(!agent_id.is_empty(), "agent_id must not be empty");
     anyhow::ensure!(!action.is_empty(), "action must not be empty");
 
+    let (actor, workspace_id, initiated_by, eligible_responder_user_ids) = interaction_actor_fields(actor);
     let record = InteractionRecord {
         id: Uuid::new_v4().to_string(),
         kind: InteractionKind::Approval,
         agent_id: agent_id.to_string(),
+        actor,
+        workspace_id,
+        initiated_by,
+        eligible_responder_user_ids,
         workflow_id: normalize_opt(workflow_id),
         task_id: normalize_opt(task_id),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -408,6 +578,14 @@ pub fn load_interaction(project_root: &str, id: &str) -> Result<Option<Interacti
     read_interaction(&path).map(Some)
 }
 
+pub fn load_interaction_for_actor(
+    project_root: &str,
+    id: &str,
+    actor: &animus_actor::Actor,
+) -> Result<Option<InteractionRecord>> {
+    Ok(load_interaction(project_root, id)?.filter(|record| actor_can_read(record, actor)))
+}
+
 pub fn list_interactions(
     project_root: &str,
     include_resolved: bool,
@@ -438,6 +616,17 @@ pub fn list_interactions(
     Ok(records)
 }
 
+pub fn list_interactions_for_actor(
+    project_root: &str,
+    include_resolved: bool,
+    agent_id: Option<&str>,
+    actor: &animus_actor::Actor,
+) -> Result<Vec<InteractionRecord>> {
+    let mut records = list_interactions(project_root, include_resolved, agent_id)?;
+    records.retain(|record| actor_can_read(record, actor));
+    Ok(records)
+}
+
 pub fn answer_interaction(
     project_root: &str,
     id: &str,
@@ -454,6 +643,27 @@ pub fn answer_interaction(
             answered_by: answered_by.map(ToOwned::to_owned),
             ..InteractionAnswer::default()
         },
+    )
+}
+
+pub fn answer_interaction_for_actor(
+    project_root: &str,
+    id: &str,
+    answer: &str,
+    message: Option<&str>,
+    answered_by: Option<&str>,
+    actor: &animus_actor::Actor,
+) -> Result<InteractionRecord> {
+    apply_interaction_answer_for_actor(
+        project_root,
+        id,
+        InteractionAnswer {
+            answer: answer.to_string(),
+            message: message.map(ToOwned::to_owned),
+            answered_by: answered_by.map(ToOwned::to_owned),
+            ..InteractionAnswer::default()
+        },
+        actor,
     )
 }
 
@@ -491,6 +701,24 @@ fn validate_structured_answers(record: &InteractionRecord, answer: &InteractionA
 /// approvals require `allow`/`deny`, structured questions require `answers`
 /// keyed by question text and/or a freeform `response`.
 pub fn apply_interaction_answer(project_root: &str, id: &str, answer: InteractionAnswer) -> Result<InteractionRecord> {
+    apply_interaction_answer_inner(project_root, id, answer, None)
+}
+
+pub fn apply_interaction_answer_for_actor(
+    project_root: &str,
+    id: &str,
+    answer: InteractionAnswer,
+    actor: &animus_actor::Actor,
+) -> Result<InteractionRecord> {
+    apply_interaction_answer_inner(project_root, id, answer, Some(actor))
+}
+
+fn apply_interaction_answer_inner(
+    project_root: &str,
+    id: &str,
+    answer: InteractionAnswer,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<InteractionRecord> {
     let id = id.trim();
     let flat_answer = answer.answer.trim().to_string();
     anyhow::ensure!(!id.is_empty(), "interaction id must not be empty");
@@ -502,6 +730,9 @@ pub fn apply_interaction_answer(project_root: &str, id: &str, answer: Interactio
             return Err(anyhow!("no interaction with id '{}'", id));
         }
         let mut record = read_interaction(&path)?;
+        if actor.is_some_and(|actor| !actor_can_answer(&record, actor)) {
+            return Err(anyhow!("no interaction with id '{}'", id));
+        }
         if record.status != InteractionStatus::Pending {
             return Err(anyhow!(
                 "interaction '{}' is not pending (status: {})",
@@ -581,6 +812,74 @@ pub fn expire_interaction(project_root: &str, id: &str) -> Result<Option<Interac
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn actor(user_id: &str, tenant_id: &str, claims: &[&str]) -> animus_actor::Actor {
+        animus_actor::Actor {
+            user_id: user_id.to_string(),
+            tenant_id: Some(tenant_id.to_string()),
+            claims: claims.iter().map(|claim| (*claim).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn actor_bound_interactions_conceal_other_tenants_and_authorize_eligible_responders() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy();
+        let alice = actor("alice", "tenant-a", &["admin", "mutable-claim"]);
+        let bob = actor("bob", "tenant-a", &[]);
+        let tenant_b_alice = actor("alice", "tenant-b", &[]);
+
+        let mut created = create_question_interaction_for_actor(
+            &project_root,
+            "swe",
+            "Proceed?",
+            &[],
+            None,
+            Some("wf-owned"),
+            None,
+            Some(&alice),
+        )
+        .expect("actor interaction");
+        assert_eq!(created.actor.as_ref().map(|owner| owner.user_id.as_str()), Some("alice"));
+        assert_eq!(created.workspace_id.as_deref(), Some("tenant-a"));
+        assert_eq!(created.initiated_by.as_deref(), Some("alice"));
+        let serialized = serde_json::to_value(&created).expect("serialize");
+        assert!(serialized["actor"].get("claims").is_none(), "mutable claims must not be persisted");
+
+        assert_eq!(list_interactions_for_actor(&project_root, false, None, &alice).unwrap().len(), 1);
+        assert!(list_interactions_for_actor(&project_root, false, None, &bob).unwrap().is_empty());
+        assert!(list_interactions_for_actor(&project_root, false, None, &tenant_b_alice).unwrap().is_empty());
+        let denied =
+            answer_interaction_for_actor(&project_root, &created.id, "yes", None, Some("alice"), &tenant_b_alice)
+                .expect_err("same user in another tenant must be denied");
+        assert!(denied.to_string().contains("no interaction"));
+
+        created.eligible_responder_user_ids.push("bob".to_string());
+        write_interaction_atomic(&interaction_path(&project_root, &created.id), &created).expect("add responder");
+        assert_eq!(list_interactions_for_actor(&project_root, false, None, &bob).unwrap().len(), 1);
+        let answered = answer_interaction_for_actor(
+            &project_root,
+            &created.id,
+            "yes",
+            None,
+            Some("display-name-is-not-auth"),
+            &bob,
+        )
+        .expect("eligible responder may answer");
+        assert_eq!(answered.answered_by.as_deref(), Some("display-name-is-not-auth"));
+    }
+
+    #[test]
+    fn actor_bound_interactions_do_not_adopt_global_legacy_records() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy();
+        create_question_interaction(&project_root, "swe", "Legacy?", &[], None, None, None)
+            .expect("legacy interaction");
+        let alice = actor("alice", "tenant-a", &[]);
+        assert!(list_interactions_for_actor(&project_root, true, None, &alice).unwrap().is_empty());
+    }
 
     #[test]
     fn question_create_answer_roundtrips() {

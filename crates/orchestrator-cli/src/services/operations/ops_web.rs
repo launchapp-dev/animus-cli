@@ -381,7 +381,7 @@ async fn describe_host(plugin: &DiscoveredPlugin, host: &PluginHost, project_roo
     // by treating METHOD_NOT_FOUND / METHOD_NOT_SUPPORTED as a deprecation
     // warning + continue, but new plugins MUST honor the spec to actually
     // bind.
-    let is_transport_kind = plugin.manifest.plugin_kind == TRANSPORT_PLUGIN_KIND;
+    let is_transport_kind = plugin.manifest.serves_kind(TRANSPORT_PLUGIN_KIND);
     let start_reply = if is_transport_kind { drive_transport_start(plugin, host, project_root).await? } else { None };
 
     let mut url = start_reply.as_ref().and_then(bind_url_for_kind_from_info);
@@ -395,7 +395,7 @@ async fn describe_host(plugin: &DiscoveredPlugin, host: &PluginHost, project_roo
             url = extract_url(&value);
         }
     }
-    let serves_ui = plugin.manifest.plugin_kind == WEB_UI_PLUGIN_KIND || plugin_advertises_web_ui(plugin);
+    let serves_ui = plugin.manifest.serves_kind(WEB_UI_PLUGIN_KIND) || plugin_advertises_web_ui(plugin);
     Ok(SpawnedTransport {
         name: plugin.name.clone(),
         kind: plugin.manifest.plugin_kind.clone(),
@@ -573,16 +573,19 @@ fn partition_transport_plugins(
     let mut web_ui_plugins: Vec<DiscoveredPlugin> = Vec::new();
     for plugin in discovered {
         let advertises_web_ui = plugin_advertises_web_ui(&plugin);
-        match plugin.manifest.plugin_kind.as_str() {
-            WEB_UI_PLUGIN_KIND => web_ui_plugins.push(plugin),
-            TRANSPORT_PLUGIN_KIND => {
-                if advertises_web_ui {
-                    web_ui_plugins.push(plugin);
-                } else {
-                    api_plugins.push(plugin);
-                }
+        // v0.7 multi-kind: bin by served ROLE (primary `plugin_kind` OR any
+        // additional `plugin_kinds`) rather than the primary field alone, so a
+        // consolidated plugin serving `web_ui` / `transport_backend` as a
+        // secondary role is still surfaced to the browser / API path. web_ui
+        // wins when a plugin serves both.
+        if plugin.manifest.serves_kind(WEB_UI_PLUGIN_KIND) {
+            web_ui_plugins.push(plugin);
+        } else if plugin.manifest.serves_kind(TRANSPORT_PLUGIN_KIND) {
+            if advertises_web_ui {
+                web_ui_plugins.push(plugin);
+            } else {
+                api_plugins.push(plugin);
             }
-            _ => {}
         }
     }
     api_plugins.sort_by_key(|p| {
@@ -672,11 +675,13 @@ mod tests {
                 name: name.to_string(),
                 version: "0.0.0".to_string(),
                 plugin_kind: plugin_kind.to_string(),
+                plugin_kinds: vec![],
                 description: "test fixture".to_string(),
                 protocol_version: "1.0.0".to_string(),
                 capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
                 env_required: Vec::new(),
                 notification_buffer_size: None,
+                supports_mcp: None,
             },
             source: DiscoverySource::ExplicitConfig,
         }

@@ -125,6 +125,90 @@ fn resolve_run_id_arg(project_root: &str, run_id: Option<String>, workflow_id: O
     }
 }
 
+fn resolve_workflow_id_for_run(project_root: &str, run_id: &str) -> Result<Option<String>> {
+    ensure_safe_run_id(run_id)?;
+    let project = Path::new(project_root);
+    let state_root = protocol::scoped_state_root(project).unwrap_or_else(|| project.join(".animus"));
+    let runs_dir = state_root.join("runs");
+    if !runs_dir.is_dir() {
+        return Ok(None);
+    }
+    for workflow_entry in fs::read_dir(&runs_dir).with_context(|| format!("read runs dir {}", runs_dir.display()))? {
+        let workflow_entry = workflow_entry?;
+        if !workflow_entry.path().is_dir() {
+            continue;
+        }
+        let phases_dir = workflow_entry.path().join("phases");
+        if !phases_dir.is_dir() {
+            continue;
+        }
+        for phase_entry in
+            fs::read_dir(&phases_dir).with_context(|| format!("read phases dir {}", phases_dir.display()))?
+        {
+            let path = phase_entry?.path();
+            if !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with(".session.json")) {
+                continue;
+            }
+            if let Ok(Some(checkpoint)) = phase_session::read_path(&path) {
+                if checkpoint.run_id == run_id {
+                    return Ok(Some(checkpoint.workflow_id));
+                }
+            }
+        }
+    }
+    // A legacy root run may use the workflow id directly. Do this only after
+    // scanning canonical phase checkpoints: a normal phase run also has its
+    // own `runs/<run_id>` directory and must not be mistaken for a workflow.
+    if orchestrator_core::WorkflowStateManager::new(project_root).load_workflow_actor(run_id).is_some() {
+        return Ok(Some(run_id.to_string()));
+    }
+    Ok(None)
+}
+
+fn ensure_output_actor_access(
+    project_root: &str,
+    workflow_id: Option<&str>,
+    run_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<()> {
+    let Some(actor) = actor else {
+        return Ok(());
+    };
+    let workflow_id = match workflow_id {
+        Some(workflow_id) => Some(workflow_id.to_string()),
+        None => match run_id {
+            Some(run_id) => resolve_workflow_id_for_run(project_root, run_id)?,
+            None => None,
+        },
+    }
+    .ok_or_else(|| not_found_error("run not found"))?;
+    super::ops_workflow::ensure_workflow_actor_access(project_root, &workflow_id, Some(actor))
+}
+
+/// Resolve the run id for a SPECIFIC `(workflow_id, phase_id)` from the phase
+/// session checkpoints (`runs/<workflow_id>/phases/*.session.json`). Lets the UI
+/// load one phase's transcript instead of only the workflow's latest run.
+fn resolve_run_id_for_workflow_phase(project_root: &str, workflow_id: &str, phase_id: &str) -> Result<String> {
+    let Some(workflow_run_dir) = resolve_run_dir_for_lookup(project_root, workflow_id)? else {
+        return Err(not_found_error(format!("no run directory recorded for workflow {workflow_id}")));
+    };
+    let phases_dir = workflow_run_dir.join("phases");
+    if phases_dir.is_dir() {
+        for entry in fs::read_dir(&phases_dir).with_context(|| format!("read phases dir {}", phases_dir.display()))? {
+            let path = entry?.path();
+            if !path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".session.json")) {
+                continue;
+            }
+            if let Ok(Some(checkpoint)) = phase_session::read_path(&path) {
+                if checkpoint.phase_id == phase_id {
+                    return Ok(checkpoint.run_id);
+                }
+            }
+        }
+    }
+    Err(not_found_error(format!("no run recorded for phase '{phase_id}' of workflow {workflow_id}")))
+}
+
 fn extract_timestamp_hint(line: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(line).ok()?;
     parsed
@@ -277,7 +361,19 @@ pub(crate) fn get_phase_outputs(
 pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         OutputCommand::Read(args) => {
-            let run_id = resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?;
+            let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+            ensure_output_actor_access(
+                project_root,
+                args.workflow_id.as_deref(),
+                args.run_id.as_deref(),
+                actor.as_ref(),
+            )?;
+            let run_id = match (&args.phase, &args.workflow_id) {
+                (Some(phase), Some(workflow_id)) => {
+                    resolve_run_id_for_workflow_phase(project_root, workflow_id, phase)?
+                }
+                _ => resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?,
+            };
             let run_dir = resolve_run_dir_for_lookup(project_root, &run_id)?
                 .ok_or_else(|| not_found_error(format!("run directory not found for {run_id}")))?;
             let events_path = run_dir.join("events.jsonl");
@@ -290,6 +386,8 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
             print_value(events, json)
         }
         OutputCommand::PhaseOutputs(args) => {
+            let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+            ensure_output_actor_access(project_root, Some(&args.workflow_id), None, actor.as_ref())?;
             let outputs = get_phase_outputs(project_root, &args.workflow_id, args.phase_id.as_deref())?;
             if json {
                 print_value(
@@ -812,6 +910,29 @@ mod tests {
         });
         std::fs::write(phases_dir.join(format!("{phase_id}.session.json")), checkpoint.to_string())
             .expect("checkpoint should be written");
+    }
+
+    #[test]
+    fn run_owner_resolution_prefers_phase_checkpoint_over_same_named_run_directory() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project");
+        write_session_checkpoint(&project_root, "wf-owned", "implementation", "run-phase-1", "2026-07-24T00:00:00Z");
+        std::fs::create_dir_all(run_dir(
+            project_root.to_string_lossy().as_ref(),
+            &RunId("run-phase-1".to_string()),
+            None,
+        ))
+        .expect("phase run dir");
+
+        assert_eq!(
+            resolve_workflow_id_for_run(project_root.to_string_lossy().as_ref(), "run-phase-1")
+                .expect("resolve owner")
+                .as_deref(),
+            Some("wf-owned")
+        );
     }
 
     #[test]

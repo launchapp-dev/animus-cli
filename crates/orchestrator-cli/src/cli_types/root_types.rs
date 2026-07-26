@@ -142,6 +142,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubjectCommand,
     },
+    /// Manage environment nodes (ephemeral run instances): list, inspect, tear
+    /// down one, and reap orphaned/dead nodes via the installed environment plugin.
+    Environment {
+        #[command(subcommand)]
+        command: EnvironmentCommand,
+    },
     /// Inspect or install Animus flavor manifests (`flavors/<name>.toml`).
     Flavor {
         #[command(subcommand)]

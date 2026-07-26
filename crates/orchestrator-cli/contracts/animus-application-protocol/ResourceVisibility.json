@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceVisibility",
+  "description": "Visibility vocabulary carried by application resource projections.",
+  "oneOf": [
+    {
+      "description": "Visible only through an explicit relationship or administration.",
+      "type": "string",
+      "const": "private"
+    },
+    {
+      "description": "Visible within the authenticated organization boundary.",
+      "type": "string",
+      "const": "org"
+    },
+    {
+      "description": "Publicly readable.",
+      "type": "string",
+      "const": "public"
+    }
+  ]
+}

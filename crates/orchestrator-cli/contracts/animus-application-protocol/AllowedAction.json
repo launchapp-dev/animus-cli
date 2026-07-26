@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AllowedAction",
+  "description": "Portal-derived action a client may render for a projected resource.\n\nThis enum standardizes the wire vocabulary; it does not grant an action.\nThe authenticated application boundary remains the authority that derives\nthe array for each caller and resource.",
+  "oneOf": [
+    {
+      "description": "Read the resource projection.",
+      "type": "string",
+      "const": "read"
+    },
+    {
+      "description": "Inspect an agent's safe configuration projection.",
+      "type": "string",
+      "const": "inspect"
+    },
+    {
+      "description": "Launch a workflow run from the resource.",
+      "type": "string",
+      "const": "launch"
+    },
+    {
+      "description": "Mint or consume a stream grant for a run.",
+      "type": "string",
+      "const": "stream"
+    },
+    {
+      "description": "Send a message to a conversation.",
+      "type": "string",
+      "const": "send"
+    },
+    {
+      "description": "Respond to an interaction.",
+      "type": "string",
+      "const": "respond"
+    }
+  ]
+}

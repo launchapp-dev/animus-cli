@@ -557,6 +557,17 @@ pub(crate) fn set_config_agent_payload(project_root: &str, id: &str, input_json:
     write_back_payload(project_root, &config)
 }
 
+/// `animus workflow config phase-set` — upsert one phase definition on the
+/// config_source base (`WorkflowConfig.phase_definitions`), NOT the agent-runtime
+/// overlay that `workflow phases upsert` writes. A workflow set afterwards that
+/// references this phase then resolves during post-pack-merge validation.
+pub(crate) fn set_config_phase_payload(project_root: &str, id: &str, input_json: &str) -> Result<Value> {
+    let definition: orchestrator_config::PhaseExecutionDefinition = serde_json::from_str(input_json)
+        .context("invalid phase execution definition JSON for workflow config phase-set")?;
+    let config = orchestrator_core::set_phase_definition(Path::new(project_root), id, definition)?;
+    write_back_payload(project_root, &config)
+}
+
 /// `animus workflow config agent-remove` — remove one agent definition.
 pub(crate) fn remove_config_agent_payload(project_root: &str, id: &str) -> Result<Value> {
     let config = orchestrator_core::remove_agent_profile(Path::new(project_root), id)?;

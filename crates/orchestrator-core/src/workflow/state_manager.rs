@@ -362,6 +362,27 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
+    /// The `limit` newest runs (optionally status-filtered) in a SINGLE journal
+    /// RPC — the fast path for the workflow-list first page (avoids the per-id
+    /// load loop / N+1). Backend order (newest-first) mirrors `query_ids`.
+    pub fn list_page(
+        &self,
+        status: Option<crate::types::WorkflowStatus>,
+        workflow_ref: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<OrchestratorWorkflow>> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list_page(plugin, &self.project_root, status, workflow_ref, limit);
+        }
+        // SQLite dev fallback: fetch all, filter by ref, truncate (no plugin round-trips).
+        let mut all = self.list_all()?;
+        if let Some(wref) = workflow_ref {
+            all.retain(|w| w.workflow_ref.as_deref() == Some(wref));
+        }
+        all.truncate(limit);
+        Ok(all)
+    }
+
     pub fn list_all(&self) -> Result<Vec<OrchestratorWorkflow>> {
         if let Some(plugin) = self.journal_plugin() {
             return super::journal_client::list(plugin, &self.project_root, &[]);
@@ -377,19 +398,111 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
+    /// Every run's lightweight [`super::journal_client::WorkflowRunSummary`] via
+    /// the no-blob projection. The daemon's stale-in-progress reconcile uses this
+    /// instead of [`Self::list_all`] so its heartbeat sweep never fetches +
+    /// deserializes every run's opaque blob (the ~6s all-runs scan that
+    /// head-of-line-blocked the shared journal host). Plugin backend: ONE
+    /// `journal/list { summary: true }` RPC. SQLite backend: project the columns.
+    pub fn list_all_summaries(&self) -> Result<Vec<super::journal_client::WorkflowRunSummary>> {
+        use super::journal_client::WorkflowRunSummary;
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list_summaries(plugin, &self.project_root);
+        }
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare("SELECT id, task_id, status, started_at, completed_at FROM workflows")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (workflow_id, task_id, status, started_at, completed_at) = row?;
+            let Some(status) = super::journal_client::status_from_wire(&status) else {
+                continue;
+            };
+            let started_at = started_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now);
+            let completed_at = completed_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            out.push(WorkflowRunSummary {
+                workflow_id,
+                task_id: task_id.unwrap_or_default(),
+                workflow_ref: None,
+                status,
+                started_at,
+                completed_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Inter-workflow fan-in coordinator (see [`super::dependency`]). Snapshots
+    /// every run from the journal and returns the held JOIN runs that are ready to
+    /// FIRE or should be CANCELLED right now, per their declared upstream barrier.
+    ///
+    /// The daemon calls this on each `workflow_completed` / `workflow_failed` event
+    /// (and its reconcile tick): fire (release + dispatch) the [`JoinDecision::Fire`]
+    /// joins, cancel the [`JoinDecision::Cancel`] ones. Because only `Pending` /
+    /// `Paused` joins are eligible, a join is returned at most once over its
+    /// lifetime — the fan-in is idempotent under repeated evaluation.
+    ///
+    /// [`JoinDecision::Fire`]: super::dependency::JoinDecision::Fire
+    /// [`JoinDecision::Cancel`]: super::dependency::JoinDecision::Cancel
+    pub fn resolve_ready_joins(&self) -> Result<Vec<super::dependency::JoinResolution>> {
+        let runs = self.list_all()?;
+        let snapshots: Vec<super::dependency::RunSnapshot> =
+            runs.iter().map(super::dependency::RunSnapshot::from_workflow).collect();
+        Ok(super::dependency::resolve_ready_joins(&snapshots))
+    }
+
+    /// Every held JOIN run's resolution, including `Wait` and `Block` (see
+    /// [`super::dependency::resolve_all_joins`]). For status/observability surfaces
+    /// that show why a join is still held.
+    pub fn resolve_all_joins(&self) -> Result<Vec<super::dependency::JoinResolution>> {
+        let runs = self.list_all()?;
+        let snapshots: Vec<super::dependency::RunSnapshot> =
+            runs.iter().map(super::dependency::RunSnapshot::from_workflow).collect();
+        Ok(super::dependency::resolve_all_joins(&snapshots))
+    }
+
     pub fn query_ids(
         &self,
         page: ListPageRequest,
         status: Option<crate::types::WorkflowStatus>,
+        workflow_ref: Option<&str>,
     ) -> Result<(Vec<String>, usize)> {
         if let Some(plugin) = self.journal_plugin() {
             // The journal protocol's query_ids has no offset/total, so fetch the
-            // full matching id set from the plugin and paginate client-side to
-            // preserve the (page, total) contract.
-            let all_ids = super::journal_client::query_ids(plugin, &self.project_root, status)?;
+            // full matching id set from the plugin (status + workflow_ref filtered
+            // server-side) and paginate client-side to preserve the (page, total)
+            // contract.
+            let all_ids = super::journal_client::query_ids(plugin, &self.project_root, status, workflow_ref)?;
             let total = all_ids.len();
             let (start, end) = page.bounds(total);
             let ids = all_ids.into_iter().skip(start).take(end.saturating_sub(start)).collect();
+            return Ok((ids, total));
+        }
+        // SQLite dev fallback: a workflow_ref filter is applied in memory (small
+        // local store) to avoid a combinatorial SQL branch; the plugin path above
+        // is the production one.
+        if let Some(wref) = workflow_ref {
+            let mut runs = self.list_all()?;
+            runs.retain(|w| status.is_none_or(|s| w.status == s) && w.workflow_ref.as_deref() == Some(wref));
+            runs.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.id.cmp(&b.id)));
+            let total = runs.len();
+            let (start, end) = page.bounds(total);
+            let ids = runs[start..end].iter().map(|w| w.id.clone()).collect();
             return Ok((ids, total));
         }
         let conn = self.open_db()?;
@@ -1108,11 +1221,11 @@ pub fn load_workflow_ref_index(project_root: &std::path::Path) -> Result<std::co
     if let Some(plugin) = super::journal_client::plugin_for(project_root) {
         // Best-effort, matching the SQLite path: a backend error yields an empty
         // index rather than failing the caller (cost attribution degrades, not breaks).
-        let runs = super::journal_client::list(&plugin, project_root, &[]).unwrap_or_default();
-        return Ok(runs
-            .into_iter()
-            .filter_map(|workflow| workflow.workflow_ref.clone().map(|r| (workflow.id.clone(), r)))
-            .collect());
+        // No-blob summaries: id + workflow_ref are both indexed columns, so this
+        // avoids the all-runs full-blob fetch (this index is rebuilt every
+        // housekeeping tick by the budget-enforcement scan).
+        let runs = super::journal_client::list_summaries(&plugin, project_root).unwrap_or_default();
+        return Ok(runs.into_iter().filter_map(|run| run.workflow_ref.map(|r| (run.workflow_id, r))).collect());
     }
     let conn = match open_project_db(project_root) {
         Ok(conn) => conn,

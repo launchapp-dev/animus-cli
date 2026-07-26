@@ -30,11 +30,10 @@ cargo build -p orchestrator-daemon-runtime
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 10 crates. The current workspace members are:
+The workspace is a Cargo workspace of 9 crates. The current workspace members are:
 
 ```text
 crates/
-├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
 ├── animus-runtime-shared/
 ├── animus-mcp-oauth/
@@ -128,19 +127,9 @@ before the script falls back to `npx`. If neither route is available, the
 final Vercel deploy cannot proceed. The script also requires `timeout` (GNU
 coreutils) or `gtimeout` to bound the Vercel deploy step.
 
-Protocol schema exports live at the repo root:
-
-```bash
-cargo run -p animus-plugin-protocol --bin animus-plugin-protocol-export-schema
-```
-
-For `animus-subject-protocol` schema exports, work in the upstream
-`launchapp-dev/animus-protocol` repository — the in-tree mirror was removed
-in v0.5 in favor of the canonical git-pinned crate.
-
-These commands write to `/schemas/animus-plugin-protocol/` under the
-workspace root. Do not commit accidental crate-local output such as
-`crates/orchestrator-cli/schemas/`.
+For plugin and subject protocol schema exports, work in the upstream
+`launchapp-dev/animus-protocol` repository. Their in-tree mirrors were removed
+in favor of the canonical git-pinned crates.
 
 ## Project Conventions
 

@@ -143,24 +143,35 @@ pub fn default_provider_repo_spec() -> String {
     format_repo_spec(first)
 }
 
-/// Resolve the correct curated subject backend for a given `subject_kind`.
+/// The curated subject backend preflight installs when NO subject backend is
+/// present and `at_least_one_subject_backend` is unsatisfied. This is a
+/// kind-agnostic starter — the daemon requires SOME subject backend but must
+/// not privilege `task`/`requirement`; a deployment that installs any other
+/// subject backend (sqlite, markdown, a custom kind) satisfies preflight
+/// without this ever being installed. Returns `None` only if the curated
+/// table is empty (a build-time invariant guards against that).
+pub fn default_subject_backend_repo() -> Option<String> {
+    DEFAULT_SUBJECT_PLUGINS.first().copied().map(format_repo_spec)
+}
+
+/// Resolve the curated subject backend for a given `subject_kind`.
 /// Returns `None` when no curated backend claims the kind, in which case
 /// the daemon falls back to whichever third-party plugin the user installs.
+///
+/// No kind is privileged: the two built-ins whose backend basename does not
+/// match their kind name (`task` -> `animus-subject-default`,
+/// `requirement` -> `animus-subject-requirements`) are aliased explicitly, and
+/// every other kind resolves by the uniform `animus-subject-<kind>` convention
+/// (`sqlite`, `markdown`, `linear`, ...). Unknown kinds return `None`.
 pub fn default_subject_repo_for_kind(kind: &str) -> Option<String> {
-    let basename = match kind {
-        // Task workflows use the in-tree `animus-subject-default` backend,
-        // which is the curated drop-in replacement for the removed in-tree
-        // `InTreeTaskSubjectBackend`.
-        "task" => "animus-subject-default",
-        // Requirement workflows use the dedicated requirements backend,
-        // NOT animus-subject-linear (that is a Linear-issue mirror that
-        // happens to claim `subject_kind:task`).
-        "requirement" => "animus-subject-requirements",
-        _ => return None,
+    let basename: String = match kind {
+        "task" => "animus-subject-default".to_string(),
+        "requirement" => "animus-subject-requirements".to_string(),
+        other => format!("animus-subject-{other}"),
     };
     DEFAULT_SUBJECT_PLUGINS
         .iter()
-        .find(|(slug, _)| slug.rsplit('/').next() == Some(basename))
+        .find(|(slug, _)| slug.rsplit('/').next() == Some(basename.as_str()))
         .copied()
         .map(format_repo_spec)
 }
@@ -200,6 +211,26 @@ mod tests {
     #[test]
     fn unknown_subject_kind_returns_none() {
         assert!(default_subject_repo_for_kind("nonsense").is_none());
+    }
+
+    #[test]
+    fn non_privileged_kinds_resolve_by_uniform_convention() {
+        // De-privilege: task/requirement are no longer the only resolvable
+        // kinds. Any curated `animus-subject-<kind>` backend resolves by its
+        // uniform kind name — no special-casing required.
+        for (kind, basename) in [("sqlite", "animus-subject-sqlite"), ("markdown", "animus-subject-markdown")] {
+            let spec = default_subject_repo_for_kind(kind).unwrap_or_else(|| panic!("{kind} kind must resolve"));
+            assert!(spec.contains(basename), "kind '{kind}' must resolve to {basename}, got: {spec}");
+        }
+    }
+
+    #[test]
+    fn default_subject_backend_is_kind_agnostic_starter() {
+        // The generic starter backend is resolved WITHOUT going through a
+        // task-specific path, so the auto-install default no longer privileges
+        // the `task` kind.
+        let spec = default_subject_backend_repo().expect("curated subject table is non-empty");
+        assert!(spec.starts_with("launchapp-dev/animus-subject-"), "starter must be a curated subject backend: {spec}");
     }
 
     #[test]

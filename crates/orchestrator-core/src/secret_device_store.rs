@@ -187,22 +187,57 @@ impl DeviceEncryptedSecretStore {
     }
 
     fn atomic_write(&self, bytes: &[u8]) -> SecretStoreResult<()> {
+        use std::io::Write;
         let dir = self.secrets_path.parent().expect("secrets path has a parent");
         std::fs::create_dir_all(dir).map_err(|e| io_err(dir, e))?;
-        restrict_dir(dir);
-        let tmp = dir.join(format!(".secrets.{}.tmp", std::process::id()));
-        std::fs::write(&tmp, bytes).map_err(|e| io_err(&tmp, e))?;
-        restrict_file(&tmp);
+        restrict_dir(dir)?;
+
+        // Create the temp file with O_EXCL + 0600 (unix) so the ciphertext is
+        // never world-readable, even for the brief window between write and
+        // chmod, and a pre-created path (regular file or symlink) cannot be
+        // written through. Retry on collision with a fresh random name.
+        let mut attempts = 0u32;
+        let tmp = loop {
+            let candidate = dir.join(format!(".secrets.{}.{:x}.tmp", std::process::id(), rand::rngs::OsRng.next_u64()));
+            match create_new_restricted(&candidate) {
+                Ok(mut f) => {
+                    f.write_all(bytes).map_err(|e| {
+                        let _ = std::fs::remove_file(&candidate);
+                        io_err(&candidate, e)
+                    })?;
+                    f.sync_all().map_err(|e| {
+                        let _ = std::fs::remove_file(&candidate);
+                        io_err(&candidate, e)
+                    })?;
+                    break candidate;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempts < 8 => {
+                    attempts += 1;
+                    continue;
+                }
+                Err(e) => return Err(io_err(&candidate, e)),
+            }
+        };
+
         // POSIX `rename` atomically replaces an existing destination; Windows
         // `rename` errors if the destination exists, so fall back to removing
         // the old file first (the advisory write lock serializes this).
         match std::fs::rename(&tmp, &self.secrets_path) {
             Ok(()) => Ok(()),
             Err(_) if self.secrets_path.exists() => {
-                std::fs::remove_file(&self.secrets_path).map_err(|e| io_err(&self.secrets_path, e))?;
-                std::fs::rename(&tmp, &self.secrets_path).map_err(|e| io_err(&self.secrets_path, e))
+                std::fs::remove_file(&self.secrets_path).map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    io_err(&self.secrets_path, e)
+                })?;
+                std::fs::rename(&tmp, &self.secrets_path).map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp);
+                    io_err(&self.secrets_path, e)
+                })
             }
-            Err(e) => Err(io_err(&self.secrets_path, e)),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(io_err(&self.secrets_path, e))
+            }
         }
     }
 
@@ -301,20 +336,30 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Open a fresh temp file exclusively (`O_EXCL`) with owner-only `0600` bits on
+/// unix, so the ciphertext is never even briefly world-readable and a
+/// pre-created path (regular file or symlink) cannot be written through.
 #[cfg(unix)]
-fn restrict_file(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-#[cfg(unix)]
-fn restrict_dir(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+fn create_new_restricted(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new().create_new(true).write(true).mode(0o600).open(path)
 }
 #[cfg(not(unix))]
-fn restrict_file(_path: &Path) {}
+fn create_new_restricted(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().create_new(true).write(true).open(path)
+}
+
+#[cfg(unix)]
+fn restrict_dir(path: &Path) -> SecretStoreResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    // Do not swallow the chmod failure: a secrets dir left group/world-readable
+    // is a real exposure, so surface it rather than silently continuing.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|e| io_err(path, e))
+}
 #[cfg(not(unix))]
-fn restrict_dir(_path: &Path) {}
+fn restrict_dir(_path: &Path) -> SecretStoreResult<()> {
+    Ok(())
+}
 
 /// Build the configured [`SecretStore`] for a repo scope. Reads the global
 /// `secrets` config to choose the backend. Conservative default: the OS keyring

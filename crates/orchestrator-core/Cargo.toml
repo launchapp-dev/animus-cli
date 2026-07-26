@@ -20,6 +20,11 @@ tempfile = "3"
 protocol = { workspace = true }
 animus-actor = { workspace = true }
 animus-journal-protocol = { workspace = true }
+# v0.7 environment plugin kind: wire types (EnvironmentSpec/HarnessCommand/
+# ExecRequest/...) + prepare/exec/exec_stream/teardown methods. Re-exported as
+# `orchestrator_core::environment` to seed the follow-on runtime
+# EnvironmentClient (prepare/exec/teardown) — not yet implemented here.
+animus-environment-protocol = { workspace = true }
 animus-plugin-protocol = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 orchestrator-config = { workspace = true }

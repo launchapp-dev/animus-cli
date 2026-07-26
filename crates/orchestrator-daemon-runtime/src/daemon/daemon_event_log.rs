@@ -317,9 +317,11 @@ mod daemon_logs_dispatch_tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: animus_plugin_protocol::PLUGIN_KIND_LOG_STORAGE_BACKEND.to_string(),
+                                plugin_kinds: vec![],
                                 description: None,
                             },
                             capabilities: PluginCapabilities::default(),
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     method => {

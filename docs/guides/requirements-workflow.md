@@ -23,13 +23,16 @@ animus subject status --kind requirement --id requirement:REQ-001 --status ready
 
 ## Execute a Workflow for a Requirement
 
-Use the workflow surface when the requirement itself should drive execution:
+Use the workflow surface when the requirement itself should drive execution.
+A requirement is an ordinary subject kind, so name the workflow explicitly
+(there is no requirement-specific default workflow — without a workflow ref the
+run uses the project default):
 
 ```bash
-animus workflow run --requirement-id REQ-001
+animus workflow run animus.requirement/plan --subject-id requirement:REQ-001
 ```
 
-`animus workflow run --requirement-id ...` uses the same fallback pattern as
+`animus workflow run --subject-id ...` uses the same fallback pattern as
 task execution: Animus checks the in-tree requirement store first, then retries
 through the active `subject_backend` resolver when the requirement is owned by
 a plugin.

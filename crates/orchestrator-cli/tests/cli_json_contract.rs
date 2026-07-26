@@ -28,6 +28,143 @@ fn assert_error_envelope(payload: &Value, expected_code: &str, expected_exit_cod
 }
 
 #[test]
+fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let payload = harness.run_json_ok(&["chat", "capabilities"])?;
+    assert_success_envelope(&payload);
+    assert_eq!(payload.pointer("/data/schema").and_then(Value::as_str), Some("animus.chat.capabilities.v1"));
+    assert_eq!(payload.pointer("/data/send/durable_idempotency/supported").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        payload.pointer("/data/send/durable_idempotency/authority/schema").and_then(Value::as_str),
+        Some("animus.chat.operation_authority.v1")
+    );
+    assert_eq!(
+        payload
+            .pointer("/data/send/durable_idempotency/authority/plugin_store/required_backend_capability")
+            .and_then(Value::as_str),
+        Some("conversation_operations_shared_v1")
+    );
+    assert_eq!(
+        payload
+            .pointer("/data/send/durable_idempotency/authority/plugin_store/required_backend_capabilities")
+            .and_then(Value::as_array),
+        Some(&vec![
+            Value::String("conversation_operations_shared_v1".to_string()),
+            Value::String("conversation_operation_fenced_append_v1".to_string()),
+        ])
+    );
+    assert_eq!(
+        payload
+            .pointer("/data/send/durable_idempotency/authority/plugin_store/missing_capability")
+            .and_then(Value::as_str),
+        Some("fail_closed")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/durable_idempotency/authority/portal_required_flag").and_then(Value::as_str),
+        Some("--require-shared-authority")
+    );
+    assert_eq!(payload.pointer("/data/send/identity_binding/supported").and_then(Value::as_bool), Some(true));
+    assert_eq!(payload.pointer("/data/send/identity_binding/agent_field").and_then(Value::as_str), Some("agent_id"));
+    assert_eq!(payload.pointer("/data/send/identity_binding/revision_field").and_then(Value::as_str), Some("revision"));
+    assert_eq!(payload.pointer("/data/send/identity_binding/client_selectable").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        payload.pointer("/data/conversation_store/actor_required_when_plugin").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        payload.pointer("/data/conversation_store/legacy_user_assertion_must_match_actor").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        payload.pointer("/data/conversation_store/tenant_scope_field").and_then(Value::as_str),
+        Some("tenant_id")
+    );
+    assert_eq!(payload.pointer("/data/conversation_store/features").and_then(Value::as_array).map(Vec::len), Some(8));
+    assert_eq!(payload.pointer("/data/send/partial_success/supported").and_then(Value::as_bool), Some(true));
+    let events = payload
+        .pointer("/data/send/partial_success/jsonl_events")
+        .and_then(Value::as_array)
+        .expect("capability probe should list terminal JSONL events");
+    assert!(events.iter().any(|event| event == "turn_failed"));
+    assert_eq!(payload.pointer("/data/send/application_controls/supported").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/schema").and_then(Value::as_str),
+        Some("animus.chat.application_controls.v1")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/flag").and_then(Value::as_str),
+        Some("--application-controls-json")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/unknown_fields").and_then(Value::as_str),
+        Some("reject")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/operator_conflicts").and_then(Value::as_str),
+        Some("reject")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/fields/2/enum").and_then(Value::as_array),
+        Some(&vec![
+            Value::String("default".to_string()),
+            Value::String("review".to_string()),
+            Value::String("auto_edit".to_string()),
+            Value::String("unrestricted".to_string()),
+        ])
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/fields/3/source").and_then(Value::as_str),
+        Some("configured_agents")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/fields/4/source").and_then(Value::as_str),
+        Some("configured_skills")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/raw_controls_accepted").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/sensitive_values_accepted").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/backend/schema").and_then(Value::as_str),
+        Some("animus.chat.backend_readiness.v1")
+    );
+    assert_eq!(payload.pointer("/data/backend/kind").and_then(Value::as_str), Some("file"));
+    assert_eq!(payload.pointer("/data/backend/authority_mode").and_then(Value::as_str), Some("local_sqlite"));
+    assert_eq!(
+        payload.pointer("/data/backend/required_capability").and_then(Value::as_str),
+        Some("conversation_operations_shared_v1")
+    );
+    assert_eq!(payload.pointer("/data/backend/required_capability_observed").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        payload.pointer("/data/backend/required_capabilities").and_then(Value::as_array),
+        Some(&vec![
+            Value::String("conversation_operations_shared_v1".to_string()),
+            Value::String("conversation_operation_fenced_append_v1".to_string()),
+        ])
+    );
+    assert_eq!(payload.pointer("/data/backend/required_capabilities_observed").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        payload.pointer("/data/backend/shared_operation_capability_observed").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/backend/fenced_append_capability_observed").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/backend/required_operation_methods_observed").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(payload.pointer("/data/backend/ready").and_then(Value::as_bool), Some(true));
+    assert!(payload.pointer("/data/backend/error_code").is_some_and(Value::is_null));
+    Ok(())
+}
+
+#[test]
 fn status_command_json_payload_includes_dashboard_schema_and_slices() -> Result<()> {
     let harness = CliHarness::new()?;
 

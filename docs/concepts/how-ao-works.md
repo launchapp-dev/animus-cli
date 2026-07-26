@@ -96,8 +96,8 @@ encode domain behavior.
 Examples:
 
 - `animus subject next --kind task`
-- `animus workflow run animus.task/standard --task-id TASK-001`
-- `animus workflow run animus.requirement/execute --requirement-id REQ-001`
+- `animus workflow run animus.task/standard --subject-id TASK-001`
+- `animus workflow run animus.requirement/execute --subject-id requirement:REQ-001`
 - `animus mcp serve`
 - ready-queue and schedule dispatches
 

@@ -28,6 +28,65 @@ fn file_hub(project_root: &std::path::Path) -> anyhow::Result<FileServiceHub> {
     FileServiceHub::new(project_root)
 }
 
+#[tokio::test]
+async fn run_with_id_reconciles_exact_request_and_preserves_actor_across_restart() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
+    let actor = animus_actor::Actor {
+        user_id: "alice".to_string(),
+        claims: vec!["mutable".to_string()],
+        tenant_id: Some("workspace-a".to_string()),
+    };
+    let input = WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string()));
+    let created = WorkflowServiceApi::run_with_id(&hub, "reserved-run-1".to_string(), input.clone(), Some(&actor))
+        .await
+        .expect("first bootstrap");
+    assert_eq!(created.id, "reserved-run-1");
+
+    let restarted = file_hub(temp.path()).expect("restarted hub");
+    let replayed = WorkflowServiceApi::run_with_id(
+        &restarted,
+        "reserved-run-1".to_string(),
+        input.clone(),
+        Some(&animus_actor::Actor {
+            user_id: "alice".to_string(),
+            claims: vec!["new-claim-does-not-change-identity".to_string()],
+            tenant_id: Some("workspace-a".to_string()),
+        }),
+    )
+    .await
+    .expect("same effective request should reconcile");
+    assert_eq!(replayed.started_at, created.started_at);
+    let owner =
+        crate::WorkflowStateManager::new(temp.path()).load_workflow_actor("reserved-run-1").expect("actor sidecar");
+    assert_eq!(owner.user_id, "alice");
+    assert_eq!(owner.tenant_id.as_deref(), Some("workspace-a"));
+
+    let other_actor = animus_actor::Actor {
+        user_id: "bob".to_string(),
+        claims: Vec::new(),
+        tenant_id: Some("workspace-a".to_string()),
+    };
+    assert!(WorkflowServiceApi::run_with_id(
+        &restarted,
+        "reserved-run-1".to_string(),
+        input.clone(),
+        Some(&other_actor),
+    )
+    .await
+    .is_err());
+    assert!(WorkflowServiceApi::run_with_id(
+        &restarted,
+        "reserved-run-1".to_string(),
+        WorkflowRunInput::for_task("TASK-2".to_string(), Some("standard".to_string())),
+        Some(&actor),
+    )
+    .await
+    .is_err());
+}
+
 #[test]
 fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -828,12 +887,16 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
                     },
                 )]),
                 budget: None,
+                environment: None,
+                workspace: None,
             }),
             "push-branch".to_string().into(),
         ],
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
@@ -867,6 +930,7 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
             guardrail_violations: Vec::new(),
             commit_message: None,
             target_phase: None,
+            verdict_key: None,
         }),
     )
     .await
@@ -995,6 +1059,8 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("workflow config should be written");
 
@@ -1022,6 +1088,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             approval_policy: None,
             hooks: Default::default(),
             skills: Vec::new(),
+            application_chat_controls: None,
             capabilities: Default::default(),
             mcp_server_configs: None,
             structured_capabilities: None,
@@ -1173,6 +1240,8 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
     let _config_source_seam_after_write =
@@ -2683,6 +2752,8 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
@@ -2753,6 +2824,7 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
     let root = temp.path().to_string_lossy().to_string();
     crate::dispatch_workflow_event(
         hub.clone(),
+        &crate::HubTaskProjectionStore::new(hub.clone()),
         &root,
         crate::WorkflowEvent::Pause { workflow_id: workflow.id.clone(), reason_detail: None },
     )
@@ -2767,6 +2839,7 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
 
     crate::dispatch_workflow_event(
         hub.clone(),
+        &crate::HubTaskProjectionStore::new(hub.clone()),
         &root,
         crate::WorkflowEvent::ApproveManualPhase {
             workflow_id: workflow.id.clone(),

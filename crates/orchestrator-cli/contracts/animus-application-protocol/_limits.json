@@ -1,0 +1,9 @@
+{
+  "application_chat_control_ref_max_utf8_bytes": 64,
+  "application_chat_controls_max_utf8_bytes": 2048,
+  "application_chat_controls_schema": "animus.chat.application_controls.v1",
+  "application_chat_error_max_utf8_bytes": 1024,
+  "application_chat_sequence_max": 9007199254740991,
+  "application_protocol_string_max_utf8_bytes": 512,
+  "schema": "animus.application.limits.v1"
+}

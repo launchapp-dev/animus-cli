@@ -14,7 +14,7 @@
 //!   Started → Thinking → ToolCall → ToolResult → TextDelta×3 → FinalText →
 //!   Metadata → Finished — all visible *before* the request future resolves.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -29,25 +29,13 @@ use tokio::time::timeout;
 /// produces flaky test results.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-fn workspace_target_debug() -> PathBuf {
-    if let Ok(override_dir) = std::env::var("ANIMUS_TESTKIT_BIN_DIR") {
-        let p = PathBuf::from(override_dir);
-        if p.exists() {
-            return p;
-        }
-    }
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.parent().and_then(Path::parent).expect("workspace root");
-    workspace_root.join("target").join("debug")
+fn mock_provider_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_animus-provider-mock"))
 }
 
 fn ensure_mock_provider() {
-    let bin = workspace_target_debug().join("animus-provider-mock");
-    assert!(
-        bin.exists(),
-        "animus-provider-mock binary not built; set ANIMUS_TESTKIT_BIN_DIR=<path>/animus-plugin-testkit/target/debug \
-         or run `cargo build -p animus-provider-mock` against the testkit (fixtures/animus-provider-mock) first"
-    );
+    let bin = mock_provider_binary();
+    assert!(bin.is_file(), "Cargo-provided mock provider fixture is missing: {}", bin.display());
 }
 
 fn build_request() -> SessionRequest {
@@ -82,7 +70,7 @@ fn isolated_discovery_env() -> (Vec<protocol::test_utils::EnvVarGuard>, tempfile
         protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty.to_string_lossy().as_ref())),
         protocol::test_utils::EnvVarGuard::set(
             "ANIMUS_PLUGIN_PATH",
-            Some(workspace_target_debug().to_string_lossy().as_ref()),
+            Some(mock_provider_binary().parent().expect("fixture binary directory").to_string_lossy().as_ref()),
         ),
     ];
     (guards, isolated)

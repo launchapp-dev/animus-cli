@@ -164,6 +164,10 @@ async fn enforce_on_exceed_action(
     record: &BudgetExceededRecord,
     warn: &mut dyn FnMut(String),
 ) -> std::result::Result<&'static str, ()> {
+    // Route task-status projections through the installed subject backend when
+    // one owns `task` (portal), else the in-tree store. Resolved once and
+    // shared by every projection in this action.
+    let store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     if record.on_exceed == ON_EXCEED_FAIL {
         // `fail` is terminal by declaration. The daemon applies it directly
         // — the breaching phase's runner may already have exited, so there
@@ -197,6 +201,7 @@ async fn enforce_on_exceed_action(
         if current.status == WorkflowStatus::Paused {
             if let Err(error) = dispatch_workflow_event(
                 hub.clone(),
+                store.as_ref(),
                 project_root,
                 WorkflowEvent::Resume { workflow_id: record.workflow_id.clone(), feedback: None },
             )
@@ -215,7 +220,7 @@ async fn enforce_on_exceed_action(
                 // daemon's completion reconciliation does.
                 if let Some(task_id) = orchestrator_core::workflow_task_id(&workflow) {
                     orchestrator_core::project_task_terminal_workflow_status(
-                        hub,
+                        store.as_ref(),
                         &task_id,
                         WorkflowStatus::Failed,
                         Some(reason),
@@ -233,7 +238,7 @@ async fn enforce_on_exceed_action(
                     Ok(updated) if updated.status == WorkflowStatus::Failed => {
                         if let Some(task_id) = orchestrator_core::workflow_task_id(&updated) {
                             orchestrator_core::project_task_terminal_workflow_status(
-                                hub,
+                                store.as_ref(),
                                 &task_id,
                                 WorkflowStatus::Failed,
                                 Some(reason),
@@ -267,6 +272,7 @@ async fn enforce_on_exceed_action(
     }
     match dispatch_workflow_event(
         hub.clone(),
+        store.as_ref(),
         project_root,
         WorkflowEvent::Pause { workflow_id: record.workflow_id.clone(), reason_detail: Some(record.breach_summary()) },
     )

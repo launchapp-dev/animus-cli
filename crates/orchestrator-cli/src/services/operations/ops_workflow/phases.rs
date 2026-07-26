@@ -18,7 +18,9 @@ use crate::services::plugin_clients;
 use super::config::{manual_approvals_path, title_case_phase_id};
 use super::emit_daemon_event;
 use crate::dry_run_envelope;
-use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
+use crate::services::runtime::execution_fact_projection::{
+    project_terminal_workflow_result, project_terminal_workflow_result_for_actor,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManualApprovalRecord {
@@ -91,28 +93,34 @@ pub(crate) fn workflow_execute_request_for_existing(
     // rebuild one from the persisted record (authoritative for workflow_ref /
     // input / vars). Task / requirement / custom keep the existing convenience
     // fields untouched.
-    let kind = workflow.subject.kind();
-    let subject_dispatch =
-        if kind == SUBJECT_KIND_TASK || kind == SUBJECT_KIND_REQUIREMENT || kind == SUBJECT_KIND_CUSTOM {
-            None
-        } else {
-            Some(
-                SubjectDispatch::for_subject_with_metadata(
-                    workflow.subject.clone(),
-                    workflow.workflow_ref.clone().unwrap_or_default(),
-                    "reattach-detached-runner",
-                    workflow.started_at,
+    // A subjectless run reattaches with NO subject at all: no subject_dispatch
+    // and no convenience fields, so the runner resumes it subjectless.
+    let subject_dispatch = match workflow.subject.as_ref() {
+        None => None,
+        Some(subject) => {
+            let kind = subject.kind();
+            if kind == SUBJECT_KIND_TASK || kind == SUBJECT_KIND_REQUIREMENT || kind == SUBJECT_KIND_CUSTOM {
+                None
+            } else {
+                Some(
+                    SubjectDispatch::for_subject_with_metadata(
+                        subject.clone(),
+                        workflow.workflow_ref.clone().unwrap_or_default(),
+                        "reattach-detached-runner",
+                        workflow.started_at,
+                    )
+                    .with_input(workflow.input.clone())
+                    .with_vars(workflow.vars.clone()),
                 )
-                .with_input(workflow.input.clone())
-                .with_vars(workflow.vars.clone()),
-            )
-        };
+            }
+        }
+    };
     workflow_proto::WorkflowExecuteRequest {
         workflow_id: Some(workflow.id.clone()),
         subject_dispatch,
         subject_ref: None,
-        task_id: workflow.subject.task_id().map(str::to_string),
-        requirement_id: workflow.subject.requirement_id().map(str::to_string),
+        task_id: workflow.subject.as_ref().and_then(|s| s.task_id()).map(str::to_string),
+        requirement_id: workflow.subject.as_ref().and_then(|s| s.requirement_id()).map(str::to_string),
         title: None,
         description: None,
         workflow_ref: workflow.workflow_ref.clone(),
@@ -159,18 +167,19 @@ pub(crate) struct DetachedRunnerOverrides {
 pub(crate) const WORKFLOW_ACTOR_ENV: &str = "ANIMUS_WORKFLOW_ACTOR_JSON";
 
 /// Read the relayed [`Actor`] from [`WORKFLOW_ACTOR_ENV`], if the daemon set it
-/// on this (detached-runner-child) process. A malformed value is ignored
-/// (logged) rather than failing the run — a dropped actor degrades to global
-/// scope, never a crash.
-pub(crate) fn workflow_actor_from_env() -> Option<Actor> {
-    let raw = std::env::var(WORKFLOW_ACTOR_ENV).ok()?;
-    match serde_json::from_str::<Actor>(&raw) {
-        Ok(actor) => Some(actor),
-        Err(error) => {
-            tracing::warn!(%error, "ignoring malformed {WORKFLOW_ACTOR_ENV}; running with no actor");
-            None
-        }
-    }
+/// on this (detached-runner-child) process. Absence preserves the legacy local
+/// system scope; a present malformed value fails closed and can never erase an
+/// authenticated actor into global scope.
+pub(crate) fn workflow_actor_from_env() -> Result<Option<Actor>> {
+    let Some(raw) = std::env::var_os(WORKFLOW_ACTOR_ENV) else {
+        return Ok(None);
+    };
+    let raw = raw.into_string().map_err(|_| {
+        anyhow!("{WORKFLOW_ACTOR_ENV} is present but is not valid UTF-8; refusing unscoped workflow run")
+    })?;
+    serde_json::from_str::<Actor>(&raw)
+        .map(Some)
+        .with_context(|| format!("{WORKFLOW_ACTOR_ENV} is present but malformed; refusing unscoped workflow run"))
 }
 
 fn detached_runner_command(
@@ -178,7 +187,7 @@ fn detached_runner_command(
     project_root: &str,
     workflow_id: &str,
     overrides: &DetachedRunnerOverrides,
-) -> std::process::Command {
+) -> Result<std::process::Command> {
     let mut command = std::process::Command::new(program);
     command.arg("--project-root").arg(project_root).arg("--json").args([
         "workflow",
@@ -201,21 +210,16 @@ fn detached_runner_command(
     // persisted record (which carries no actor), so this is the only channel
     // that delivers the caller identity to the detached run.
     if let Some(actor) = overrides.actor.as_ref() {
-        match serde_json::to_string(actor) {
-            Ok(json) => {
-                command.env(WORKFLOW_ACTOR_ENV, json);
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to encode actor for detached runner; run proceeds with no actor");
-            }
-        }
+        let json = serde_json::to_string(actor)
+            .context("failed to encode actor for detached runner; refusing unscoped workflow run")?;
+        command.env(WORKFLOW_ACTOR_ENV, json);
     }
     command
         .current_dir(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    command
+    Ok(command)
 }
 
 /// Spawn a detached `animus workflow run --sync --workflow-id <id>` child
@@ -237,7 +241,7 @@ fn spawn_detached_workflow_runner_with_program(
     workflow_id: &str,
     overrides: &DetachedRunnerOverrides,
 ) -> Result<u32> {
-    let mut command = detached_runner_command(program, project_root, workflow_id, overrides);
+    let mut command = detached_runner_command(program, project_root, workflow_id, overrides)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -275,6 +279,60 @@ pub(crate) async fn start_workflow_with_runner(
     // workflow resolves at run-time, not only from the global view. The same
     // actor is relayed to the detached runner child via WORKFLOW_ACTOR_ENV.
     let workflow = hub.workflows().run(input, overrides.actor.as_ref()).await?;
+    finalize_workflow_runner_start(hub, project_root, workflow, overrides).await
+}
+
+/// Bootstrap a caller-idempotent launch with the workflow id that was durably
+/// reserved before any run record or child process existed. Reusing the same id
+/// is what makes a crash between reservation, journal save, and spawn safely
+/// reconcilable without scanning another actor's runs.
+pub(crate) async fn bootstrap_reserved_workflow(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: String,
+    input: WorkflowRunInput,
+    actor: &Actor,
+) -> Result<OrchestratorWorkflow> {
+    ensure_workflow_runner_plugin(Path::new(project_root))?;
+    hub.workflows().run_with_id(workflow_id, input, Some(actor)).await
+}
+
+/// Complete the task projection + detached spawn after an idempotency claimant
+/// has renewed its lease. If a previous process already spawned this exact run,
+/// the live pid registry is authoritative and prevents a duplicate child.
+pub(crate) async fn finalize_workflow_runner_start(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow: OrchestratorWorkflow,
+    overrides: DetachedRunnerOverrides,
+) -> Result<OrchestratorWorkflow> {
+    finalize_workflow_runner_start_guarded(hub, project_root, workflow, overrides, None).await
+}
+
+pub(crate) async fn finalize_workflow_runner_start_guarded(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow: OrchestratorWorkflow,
+    overrides: DetachedRunnerOverrides,
+    before_spawn: Option<&(dyn Fn() -> Result<()> + Send + Sync)>,
+) -> Result<OrchestratorWorkflow> {
+    if matches!(
+        workflow.status,
+        orchestrator_core::WorkflowStatus::Running | orchestrator_core::WorkflowStatus::Pending
+    ) && orchestrator_core::workflow_runner_liveness(Path::new(project_root), &workflow.id).live
+    {
+        return Ok(workflow);
+    }
+    // Route the Ready->InProgress transition through the installed subject
+    // backend when one owns `task` (portal); the in-tree store is empty there,
+    // so the transition would silently no-op and the daemon would re-dispatch
+    // the task after its workflow finished.
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        overrides.actor.as_ref(),
+    )
+    .await;
     // Mirror the daemon's ready-dispatch contract: a dispatched task moves
     // to InProgress. Terminal projection never auto-completes tasks, so a
     // task left Ready here would be re-dispatched by the daemon after its
@@ -282,11 +340,10 @@ pub(crate) async fn start_workflow_with_runner(
     // runner's terminal projection cannot be overwritten afterwards.
     let mut task_status_before_dispatch = None;
     if !workflow.task_id.is_empty() {
-        if let Ok(task) = hub.tasks().get(&workflow.task_id).await {
-            if matches!(task.status, orchestrator_core::TaskStatus::Ready | orchestrator_core::TaskStatus::Backlog) {
-                let _ =
-                    hub.tasks().set_status(&workflow.task_id, orchestrator_core::TaskStatus::InProgress, false).await;
-                task_status_before_dispatch = Some(task.status);
+        if let Ok(view) = task_store.get(&workflow.task_id).await {
+            if matches!(view.status, orchestrator_core::TaskStatus::Ready | orchestrator_core::TaskStatus::Backlog) {
+                let _ = task_store.set_status(&workflow.task_id, orchestrator_core::TaskStatus::InProgress).await;
+                task_status_before_dispatch = Some(view.status);
             }
         }
     }
@@ -306,23 +363,35 @@ pub(crate) async fn start_workflow_with_runner(
         workflow.status,
         orchestrator_core::WorkflowStatus::Running | orchestrator_core::WorkflowStatus::Pending
     ) {
-        project_terminal_workflow_result(
+        project_terminal_workflow_result_for_actor(
             hub.clone(),
             project_root,
-            workflow.subject.id(),
+            workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
             Some(workflow.task_id.as_str()),
             workflow.workflow_ref.as_deref(),
             Some(workflow.id.as_str()),
             workflow.status,
             workflow.failure_reason.as_deref(),
+            overrides.actor.as_ref(),
         )
         .await;
         return Ok(workflow);
     }
+    if let Some(before_spawn) = before_spawn {
+        // This is deliberately adjacent to spawn. Actor-idempotency leases can
+        // change hands while subject projection awaits a remote backend; a
+        // superseded process must not launch a second child after that await.
+        if let Err(error) = before_spawn() {
+            if let Some(previous_status) = task_status_before_dispatch {
+                let _ = task_store.set_status(&workflow.task_id, previous_status).await;
+            }
+            return Err(error);
+        }
+    }
     if let Err(error) = spawn_detached_workflow_runner(project_root, &workflow.id, &overrides) {
         let _ = hub.workflows().cancel(&workflow.id).await;
         if let Some(previous_status) = task_status_before_dispatch {
-            let _ = hub.tasks().set_status(&workflow.task_id, previous_status, false).await;
+            let _ = task_store.set_status(&workflow.task_id, previous_status).await;
         }
         return Err(error.context(format!("failed to start workflow runner for workflow '{}'", workflow.id)));
     }
@@ -367,7 +436,7 @@ pub(crate) async fn resume_workflow_with_runner(
     // concurrent runner for the same record.
     match orchestrator_daemon_runtime::agent_record::scan_orphans_for_project(Path::new(project_root)) {
         Ok(report) => {
-            let subject_id = existing.subject.id();
+            let subject_id = existing.subject.as_ref().map(|s| s.id()).unwrap_or_default();
             let daemon_owned = report.detected.iter().any(|agent| {
                 agent.subject_id == subject_id
                     || (!existing.task_id.is_empty() && agent.task_id.as_deref() == Some(existing.task_id.as_str()))
@@ -386,8 +455,12 @@ pub(crate) async fn resume_workflow_with_runner(
     }
     ensure_workflow_runner_plugin(Path::new(project_root))?;
     register_workflow_runner_pid(Path::new(project_root), workflow_id, std::process::id())?;
+    // Route task-status projections through the installed subject backend when
+    // one owns `task` (portal), else the in-tree store.
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = match dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::Resume { workflow_id: workflow_id.to_string(), feedback },
     )
@@ -410,8 +483,13 @@ pub(crate) async fn resume_workflow_with_runner(
         if let Ok(repaused) = hub.workflows().pause(workflow_id).await {
             if repaused.status == orchestrator_core::WorkflowStatus::Paused {
                 if let Some(task_id) = orchestrator_core::workflow_task_id(&repaused) {
-                    let _ =
-                        orchestrator_core::project_task_workflow_paused(hub.clone(), &task_id, workflow_id, None).await;
+                    let _ = orchestrator_core::project_task_workflow_paused(
+                        task_store.as_ref(),
+                        &task_id,
+                        workflow_id,
+                        None,
+                    )
+                    .await;
                 }
             }
         }
@@ -650,8 +728,10 @@ pub(crate) async fn approve_manual_phase(
 ) -> Result<Value> {
     let _runner_pid_guard = WorkflowRunnerPidGuard::register(project_root, workflow_id)?;
     let approval_timestamp = Utc::now().to_rfc3339();
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::ApproveManualPhase {
             workflow_id: workflow_id.to_string(),
@@ -689,7 +769,7 @@ pub(crate) async fn approve_manual_phase(
                     project_terminal_workflow_result(
                         hub.clone(),
                         project_root,
-                        reloaded.subject.id(),
+                        reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                         Some(reloaded.task_id.as_str()),
                         reloaded.workflow_ref.as_deref(),
                         Some(reloaded.id.as_str()),
@@ -707,7 +787,7 @@ pub(crate) async fn approve_manual_phase(
                     project_terminal_workflow_result(
                         hub.clone(),
                         project_root,
-                        reloaded.subject.id(),
+                        reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                         Some(reloaded.task_id.as_str()),
                         reloaded.workflow_ref.as_deref(),
                         Some(reloaded.id.as_str()),
@@ -733,7 +813,7 @@ pub(crate) async fn approve_manual_phase(
     project_terminal_workflow_result(
         hub.clone(),
         project_root,
-        final_workflow.subject.id(),
+        final_workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
         Some(final_workflow.task_id.as_str()),
         final_workflow.workflow_ref.as_deref(),
         Some(final_workflow.id.as_str()),
@@ -770,8 +850,10 @@ pub(crate) async fn reject_manual_phase(
     phase_id: &str,
     note: &str,
 ) -> Result<Value> {
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::RejectManualPhase {
             workflow_id: workflow_id.to_string(),
@@ -785,7 +867,7 @@ pub(crate) async fn reject_manual_phase(
     project_terminal_workflow_result(
         hub.clone(),
         project_root,
-        updated.subject.id(),
+        updated.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
         Some(updated.task_id.as_str()),
         updated.workflow_ref.as_deref(),
         Some(updated.id.as_str()),
@@ -1291,7 +1373,7 @@ workflows:
             rework_counts: std::collections::HashMap::new(),
             total_reworks: 0,
             decision_history: Vec::new(),
-            subject: protocol::orchestrator::SubjectRef::new("blog", "blog:BLOG-001"),
+            subject: Some(protocol::orchestrator::SubjectRef::new("blog", "blog:BLOG-001")),
         };
 
         let request = super::workflow_execute_request_for_existing(&workflow);
@@ -1300,8 +1382,8 @@ workflows:
         assert_eq!(request.task_id, None);
         assert_eq!(request.requirement_id, None);
         let dispatch = request.subject_dispatch.expect("generic kind must carry subject_dispatch");
-        assert_eq!(dispatch.subject.kind(), "blog");
-        assert_eq!(dispatch.subject.id(), "blog:BLOG-001");
+        assert_eq!(dispatch.subject.as_ref().unwrap().kind(), "blog");
+        assert_eq!(dispatch.subject.as_ref().map(|s| s.id()).unwrap_or_default(), "blog:BLOG-001");
         assert_eq!(dispatch.workflow_ref, "draft-post");
     }
 
@@ -1349,7 +1431,8 @@ workflows:
             "/tmp/project",
             "wf-123",
             &super::DetachedRunnerOverrides::default(),
-        );
+        )
+        .expect("command should build");
         let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
@@ -1366,7 +1449,8 @@ workflows:
                 phase_timeout_secs: Some(120),
                 actor: None,
             },
-        );
+        )
+        .expect("command should build");
         let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
@@ -1410,7 +1494,8 @@ workflows:
             "/tmp/project",
             "wf-actor",
             &super::DetachedRunnerOverrides { actor: Some(actor.clone()), ..Default::default() },
-        );
+        )
+        .expect("actor command should build");
         let (_, value) = command
             .get_envs()
             .find(|(k, _)| *k == std::ffi::OsStr::new(super::WORKFLOW_ACTOR_ENV))
@@ -1418,6 +1503,25 @@ workflows:
         let json = value.expect("actor env must have a value").to_string_lossy().into_owned();
         let decoded: animus_actor::Actor = serde_json::from_str(&json).expect("actor env must be valid JSON");
         assert_eq!(decoded, actor, "actor must round-trip through the env handoff unchanged");
+    }
+
+    #[test]
+    fn malformed_workflow_actor_env_fails_closed() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _actor_env = EnvVarGuard::set(super::WORKFLOW_ACTOR_ENV, Some("{not-json"));
+
+        let error = super::workflow_actor_from_env().expect_err("malformed present actor env must fail");
+        let message = format!("{error:#}");
+        assert!(message.contains(super::WORKFLOW_ACTOR_ENV), "error must identify the trusted channel: {message}");
+        assert!(message.contains("refusing unscoped"), "error must explain the fail-closed outcome: {message}");
+    }
+
+    #[test]
+    fn absent_workflow_actor_env_preserves_local_system_scope() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _actor_env = EnvVarGuard::set(super::WORKFLOW_ACTOR_ENV, None);
+
+        assert_eq!(super::workflow_actor_from_env().expect("absent env should be valid"), None);
     }
 
     #[cfg(unix)]

@@ -1,16 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::Arc;
 
+use animus_environment_protocol::{EnvironmentHandle, EnvironmentSpec, RepoRef};
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use orchestrator_plugin_host::PluginRegistry;
 use protocol::orchestrator::{SubjectRef, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK};
 use serde_json::json;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::{PlanningAdapterApi, ProjectAdapter, SubjectContext, SubjectResolver, TaskAdapterApi};
 
@@ -493,75 +494,113 @@ where
 
         let worktree_path_str = worktree_path.to_string_lossy().to_string();
         let branch_ref = format!("refs/heads/{branch_name}");
-        let status = if git_ref_exists(project_root, &branch_ref) {
-            info!(
-                task_id = %task.id,
-                branch_name,
-                execution_cwd = %worktree_path_str,
-                source = "existing_branch",
-                "Provisioning managed task worktree from existing branch"
-            );
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(project_root)
-                .args(["worktree", "add", worktree_path_str.as_str(), branch_name.as_str()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .with_context(|| {
-                    format!(
-                        "failed to create worktree '{}' for existing branch '{}' in {}",
-                        worktree_path_str, branch_name, project_root
-                    )
-                })?
+        let branch_exists = git_ref_exists(project_root, &branch_ref);
+
+        // v0.7 TASK-166: optionally delegate ONLY the `git worktree add`
+        // materialization step to an installed `environment` plugin. Everything
+        // around it — branch/path/base-ref selection, existing-worktree reuse,
+        // task-record persistence, and `.mcp.json` sync — stays in-tree. The
+        // delegation is gated behind ANIMUS_ENVIRONMENT_DELEGATE so the DEFAULT
+        // stays the in-tree `git worktree add` below, byte-for-byte unchanged. A
+        // missing / unresolvable / broken environment plugin falls back to the
+        // in-tree path (see `delegate_worktree_materialization`), so an env
+        // plugin can never break a run that would otherwise have succeeded.
+        let delegated_cwd = environment_delegate_plugin_id().and_then(|plugin_id| {
+            delegate_worktree_materialization(
+                project_root,
+                &plugin_id,
+                &worktree_path_str,
+                &branch_name,
+                branch_exists,
+                &task.id,
+            )
+        });
+
+        let execution_cwd = if let Some(cwd) = delegated_cwd {
+            cwd
         } else {
-            refresh_preferred_worktree_base_refs(project_root);
-            let base_ref = preferred_worktree_base_ref(project_root);
-            info!(
-                task_id = %task.id,
-                branch_name,
-                base_ref,
-                execution_cwd = %worktree_path_str,
-                source = "preferred_base_ref",
-                "Provisioning managed task worktree from preferred base ref"
-            );
-            ProcessCommand::new("git")
-                .arg("-C")
-                .arg(project_root)
-                .args(["worktree", "add", "-b", branch_name.as_str(), worktree_path_str.as_str(), base_ref.as_str()])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .with_context(|| {
-                    format!(
-                        "failed to create worktree '{}' for branch '{}' from '{}' in {}",
-                        worktree_path_str, branch_name, base_ref, project_root
-                    )
-                })?
+            let status = if branch_exists {
+                info!(
+                    task_id = %task.id,
+                    branch_name,
+                    execution_cwd = %worktree_path_str,
+                    source = "existing_branch",
+                    "Provisioning managed task worktree from existing branch"
+                );
+                ProcessCommand::new("git")
+                    .arg("-C")
+                    .arg(project_root)
+                    .args(["worktree", "add", worktree_path_str.as_str(), branch_name.as_str()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .with_context(|| {
+                        format!(
+                            "failed to create worktree '{}' for existing branch '{}' in {}",
+                            worktree_path_str, branch_name, project_root
+                        )
+                    })?
+            } else {
+                refresh_preferred_worktree_base_refs(project_root);
+                let base_ref = preferred_worktree_base_ref(project_root);
+                info!(
+                    task_id = %task.id,
+                    branch_name,
+                    base_ref,
+                    execution_cwd = %worktree_path_str,
+                    source = "preferred_base_ref",
+                    "Provisioning managed task worktree from preferred base ref"
+                );
+                ProcessCommand::new("git")
+                    .arg("-C")
+                    .arg(project_root)
+                    .args([
+                        "worktree",
+                        "add",
+                        "-b",
+                        branch_name.as_str(),
+                        worktree_path_str.as_str(),
+                        base_ref.as_str(),
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .with_context(|| {
+                        format!(
+                            "failed to create worktree '{}' for branch '{}' from '{}' in {}",
+                            worktree_path_str, branch_name, base_ref, project_root
+                        )
+                    })?
+            };
+
+            if !status.success() {
+                anyhow::bail!(
+                    "failed to provision managed worktree '{}' for task {} on branch '{}'",
+                    worktree_path_str,
+                    task.id,
+                    branch_name
+                );
+            }
+            worktree_path_str.clone()
         };
 
-        if !status.success() {
-            anyhow::bail!(
-                "failed to provision managed worktree '{}' for task {} on branch '{}'",
-                worktree_path_str,
-                task.id,
-                branch_name
-            );
-        }
-
-        sync_managed_worktree_mcp_config(project_root, &worktree_path)?;
+        // Sync `.mcp.json` into the ACTUAL execution cwd. For the in-tree path
+        // `execution_cwd == worktree_path_str` (== `worktree_path`), so this is
+        // byte-for-byte the previous behavior; for the delegated path it targets
+        // the plugin's returned `workspace_root`.
+        sync_managed_worktree_mcp_config(project_root, Path::new(&execution_cwd))?;
         let mut updated = task;
         let task_id = updated.id.clone();
-        updated.worktree_path = Some(worktree_path_str.clone());
+        updated.worktree_path = Some(execution_cwd.clone());
         updated.branch_name = Some(branch_name.clone());
         let _ = self.hub.replace(updated).await?;
         info!(
             task_id = %task_id,
             branch_name,
-            execution_cwd = %worktree_path_str,
+            execution_cwd = %execution_cwd,
             "Provisioned managed task worktree"
         );
-        Ok(worktree_path_str)
+        Ok(execution_cwd)
     }
 }
 
@@ -681,6 +720,262 @@ fn default_task_branch_name(task_id: &str) -> String {
     format!("animus/{}", protocol::sanitize_identifier(task_id, "task"))
 }
 
+/// The environment plugin id used when the delegate gate is enabled with a
+/// boolean truthy value (rather than an explicit plugin id).
+const DEFAULT_ENVIRONMENT_PLUGIN_ID: &str = "worktree";
+
+/// The v0.7 TASK-166 delegate gate: decide whether `ensure_execution_cwd` should
+/// delegate the `git worktree add` materialization to an `environment` plugin,
+/// and which plugin id to route to.
+///
+/// Read from `ANIMUS_ENVIRONMENT_DELEGATE`:
+/// - unset / empty / `0` / `false` / `no` / `off` → `None` (the DEFAULT: run the
+///   in-tree `git worktree add` unchanged, byte-for-byte).
+/// - a boolean truthy token (`1` / `true` / `yes` / `on`) → delegate to the
+///   [`DEFAULT_ENVIRONMENT_PLUGIN_ID`] (`worktree`).
+/// - any other value → delegate to that value as the explicit environment plugin
+///   id (passed to [`crate::EnvironmentClient::resolve`]).
+///
+/// The gate exists because the adapter has no clean signal at this call site for
+/// "an environment plugin is configured for this run" (it holds only the subject
+/// hub, not the compiled workflow/routing config). Keeping delegation opt-in via
+/// an explicit env var guarantees the default path is unchanged for every
+/// existing deployment; wiring the routing config in is a later step.
+fn environment_delegate_plugin_id() -> Option<String> {
+    let raw = std::env::var("ANIMUS_ENVIRONMENT_DELEGATE").ok()?;
+    match raw.trim() {
+        "" | "0" | "false" | "no" | "off" => None,
+        "1" | "true" | "yes" | "on" => Some(DEFAULT_ENVIRONMENT_PLUGIN_ID.to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// Delegate ONLY the `git worktree add` materialization to an `environment`
+/// plugin, using the branch / path / base-ref the caller already resolved.
+///
+/// The kernel remains the source of truth for WHERE (target path), WHICH branch,
+/// and WHAT base ref; those are packed into `spec.metadata` as the opaque
+/// `{target_path, branch, base_ref, create_branch}` contract the reference
+/// worktree plugin understands (avoiding a protocol bump). The plugin performs
+/// the single `git worktree add` and returns its `workspace_root`.
+///
+/// Returns `Some(workspace_root)` on success, or `None` when delegation could not
+/// happen (plugin not installed / not resolvable, or `prepare` failed) — the
+/// caller then runs the in-tree `git worktree add`. A delegation failure is a
+/// warning, never a hard error: a broken env plugin must not break a run.
+fn delegate_worktree_materialization(
+    project_root: &str,
+    plugin_id: &str,
+    worktree_path_str: &str,
+    branch_name: &str,
+    branch_exists: bool,
+    task_id: &str,
+) -> Option<String> {
+    // Resolve create_branch + base_ref exactly as the in-tree path would: an
+    // existing branch is checked out as-is; otherwise a new branch is created
+    // from the preferred base ref (refreshing origin/main|master first).
+    let (create_branch, base_ref) = if branch_exists {
+        (false, branch_name.to_string())
+    } else {
+        refresh_preferred_worktree_base_refs(project_root);
+        (true, preferred_worktree_base_ref(project_root))
+    };
+
+    let spec = EnvironmentSpec {
+        kind: plugin_id.to_string(),
+        repos: vec![RepoRef {
+            url: project_root.to_string(),
+            name: None,
+            git_ref: Some(base_ref.clone()),
+            primary: true,
+        }],
+        image: None,
+        resources: None,
+        env: BTreeMap::new(),
+        metadata: json!({
+            "target_path": worktree_path_str,
+            "branch": branch_name,
+            "base_ref": base_ref,
+            "create_branch": create_branch,
+        }),
+    };
+
+    match prepare_environment(project_root, plugin_id, spec) {
+        Ok(handle) => {
+            // Phase-1 invariant: the kernel is authoritative for WHERE the
+            // worktree lives, so the plugin must materialize at the EXACT managed
+            // `target_path` we directed it to. Requiring `workspace_root ==
+            // target_path` (not merely "somewhere under the managed root") keeps
+            // both the existing-worktree reuse branch (which requires the
+            // persisted path to be the managed target) and the `.mcp.json` sync
+            // correct. A plugin that returns any other path is a delegation miss:
+            // clean up whatever it left and fall back to the in-tree add.
+            if !paths_refer_to_same_location(&handle.workspace_root, worktree_path_str) {
+                warn!(
+                    task_id,
+                    plugin_id,
+                    workspace_root = %handle.workspace_root,
+                    target_path = %worktree_path_str,
+                    "Environment plugin returned a workspace other than the directed target path; falling back to in-tree git worktree add"
+                );
+                cleanup_partial_delegated_worktree(project_root, worktree_path_str, branch_name, create_branch);
+                return None;
+            }
+            // A plugin can return `Ok` at the right path without having actually
+            // materialized the expected worktree: a no-op / plain directory, or a
+            // checkout on the WRONG branch (ignoring the `branch`/`create_branch`
+            // metadata). Accepting either would persist + reuse an execution cwd
+            // that is not the task's checkout/branch — so the run would edit the
+            // wrong branch. Require the target to be a real git worktree ON the
+            // directed branch; otherwise clean it up and fall back to the in-tree
+            // add (which recreates the worktree on the correct branch).
+            let on_branch = worktree_current_branch(&handle.workspace_root);
+            if on_branch.as_deref() != Some(branch_name) {
+                warn!(
+                    task_id,
+                    plugin_id,
+                    workspace_root = %handle.workspace_root,
+                    expected_branch = %branch_name,
+                    actual_branch = on_branch.as_deref().unwrap_or("<not a git worktree>"),
+                    "Environment plugin reported success but the target is not a git worktree on the directed branch; falling back to in-tree git worktree add"
+                );
+                cleanup_partial_delegated_worktree(project_root, worktree_path_str, branch_name, create_branch);
+                return None;
+            }
+            info!(
+                task_id,
+                plugin_id,
+                branch_name,
+                base_ref = %base_ref,
+                create_branch,
+                execution_cwd = %handle.workspace_root,
+                source = "environment_plugin",
+                "Delegated managed task worktree materialization to environment plugin"
+            );
+            Some(handle.workspace_root)
+        }
+        Err(err) => {
+            warn!(
+                task_id,
+                plugin_id,
+                error = %err,
+                "Environment plugin worktree materialization failed; falling back to in-tree git worktree add"
+            );
+            // A failed `prepare` may have PARTIALLY materialized (e.g. `git
+            // worktree add` ran, then the RPC timed out): prune anything left at
+            // the target so the in-tree fallback add is not blocked by a
+            // pre-existing worktree/branch.
+            cleanup_partial_delegated_worktree(project_root, worktree_path_str, branch_name, create_branch);
+            None
+        }
+    }
+}
+
+/// Whether two paths resolve to the same filesystem location. Canonicalizes both
+/// (collapsing symlinks like macOS `/var` → `/private/var`); when a path does not
+/// yet exist (canonicalize fails), falls back to a lexical comparison.
+fn paths_refer_to_same_location(a: &str, b: &str) -> bool {
+    let (pa, pb) = (Path::new(a), Path::new(b));
+    match (pa.canonicalize(), pb.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => pa == pb,
+    }
+}
+
+/// Best-effort cleanup of a worktree/branch an environment plugin may have
+/// PARTIALLY materialized at `target` before a delegation miss, so the in-tree
+/// `git worktree add` fallback starts from a clean slate. Every git/fs call is
+/// best-effort (failures ignored) — a no-op when the plugin left nothing behind.
+///
+/// SAFETY: cleanup is restricted to the directed managed `target` — the ONLY
+/// location this provisioning attempt owns (always under
+/// `~/.animus/<scope>/worktrees`). It deliberately does NOT touch the plugin's
+/// returned `workspace_root`: a buggy plugin could return an arbitrary path (the
+/// project root, `$HOME`, or a SIBLING task's worktree), and force-removing or
+/// deleting that would destroy data the kernel does not own. A wrong-path plugin
+/// that also leaves its branch checked out elsewhere may therefore block the
+/// in-tree fallback add — that surfaces as a provisioning error (safe), never as
+/// data loss.
+fn cleanup_partial_delegated_worktree(project_root: &str, target: &str, branch_name: &str, created_branch: bool) {
+    let git = |args: &[&str]| {
+        let _ = ProcessCommand::new("git")
+            .arg("-C")
+            .arg(project_root)
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    };
+    // Force-remove the worktree at the managed target and delete its directory,
+    // then prune the stale administrative entry.
+    git(&["worktree", "remove", "--force", target]);
+    let _ = std::fs::remove_dir_all(target);
+    git(&["worktree", "prune"]);
+    // Only when THIS delegation intended to CREATE the branch (it did not exist
+    // at entry) can a now-existing branch have come from the plugin — delete it
+    // so the in-tree `-b` add can recreate it. An existing-branch delegation must
+    // never delete the branch it was told to reuse. Best-effort: if the plugin
+    // left the branch checked out in a worktree the kernel does not own, this
+    // fails harmlessly and the fallback add surfaces the branch conflict.
+    if created_branch {
+        git(&["branch", "-D", branch_name]);
+    }
+}
+
+/// Resolve the `environment` plugin for `plugin_id` and run `environment/prepare`
+/// with `spec`. Split out so a unit test can inject a fake `prepare` (via
+/// [`env_delegate_test_seam`]) without a real plugin binary on disk.
+fn prepare_environment(project_root: &str, plugin_id: &str, spec: EnvironmentSpec) -> Result<EnvironmentHandle> {
+    #[cfg(test)]
+    if let Some(result) = env_delegate_test_seam::maybe_prepare(project_root, plugin_id, &spec) {
+        return result;
+    }
+    let client = crate::EnvironmentClient::resolve(Path::new(project_root), plugin_id)?;
+    client.prepare(spec)
+}
+
+/// Test-only injection seam standing in for a resolved `environment` plugin, so
+/// `ensure_execution_cwd`'s delegation branch can be exercised without spawning a
+/// real STDIO plugin. Mirrors `config_source_client`'s test-base seam.
+#[cfg(test)]
+mod env_delegate_test_seam {
+    use super::{EnvironmentHandle, EnvironmentSpec, Result};
+    use std::sync::Mutex;
+
+    type PrepareFn = Box<dyn Fn(&str, &str, &EnvironmentSpec) -> Result<EnvironmentHandle> + Send + Sync>;
+
+    static SEAM: Mutex<Option<PrepareFn>> = Mutex::new(None);
+
+    /// Drops the installed fake `prepare` when it leaves scope so one test cannot
+    /// leak its seam into another.
+    pub(super) struct SeamGuard;
+
+    impl Drop for SeamGuard {
+        fn drop(&mut self) {
+            *SEAM.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        }
+    }
+
+    /// Install a fake `prepare` for the duration of the returned guard.
+    pub(super) fn install<F>(prepare: F) -> SeamGuard
+    where
+        F: Fn(&str, &str, &EnvironmentSpec) -> Result<EnvironmentHandle> + Send + Sync + 'static,
+    {
+        *SEAM.lock().unwrap_or_else(|p| p.into_inner()) = Some(Box::new(prepare));
+        SeamGuard
+    }
+
+    /// Invoke the installed fake, if any. `None` => no seam installed, so the
+    /// production `EnvironmentClient::resolve` + `prepare` path runs.
+    pub(super) fn maybe_prepare(
+        project_root: &str,
+        plugin_id: &str,
+        spec: &EnvironmentSpec,
+    ) -> Option<Result<EnvironmentHandle>> {
+        SEAM.lock().unwrap_or_else(|p| p.into_inner()).as_ref().map(|prepare| prepare(project_root, plugin_id, spec))
+    }
+}
+
 fn repo_ao_root(project_root: &str) -> Result<PathBuf> {
     protocol::scoped_state_root(Path::new(project_root))
         .ok_or_else(|| anyhow!("failed to resolve scoped state root for {project_root}"))
@@ -728,6 +1023,29 @@ fn path_is_within_root(path: &Path, root: &Path) -> bool {
         return false;
     };
     path_canonical.starts_with(root_canonical)
+}
+
+/// The branch currently checked out at `worktree_path`, or `None` when the path
+/// is not a git worktree or is in a detached-HEAD state (`--abbrev-ref HEAD`
+/// yields the literal `HEAD`). Used to verify a delegated worktree landed on the
+/// directed task branch before accepting it.
+fn worktree_current_branch(worktree_path: &str) -> Option<String> {
+    let output = ProcessCommand::new("git")
+        .arg("-C")
+        .arg(worktree_path)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
+    }
 }
 
 fn git_ref_exists(project_root: &str, reference: &str) -> bool {
@@ -1174,6 +1492,23 @@ mod tests {
         assert!(status.success(), "git {:?} failed in {}", args, project_root.display());
     }
 
+    /// The branch checked out in the worktree at `dir`.
+    fn worktree_head_branch(dir: &Path) -> String {
+        let out =
+            ProcessCommand::new("git").arg("-C").arg(dir).args(["rev-parse", "--abbrev-ref", "HEAD"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Serializes the tests that reach `ensure_execution_cwd`'s worktree
+    /// materialization against each other. The delegate gate
+    /// (`ANIMUS_ENVIRONMENT_DELEGATE`) and the `env_delegate_test_seam` are both
+    /// process-global, so the in-tree-path test and the delegation-path test must
+    /// not overlap (one would observe the other's env var / installed seam).
+    async fn delegate_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
+    }
+
     #[tokio::test]
     async fn builtin_subject_resolver_uses_requirement_adapter_registry() {
         let hub = Arc::new(TestHub::default());
@@ -1206,6 +1541,11 @@ mod tests {
 
     #[tokio::test]
     async fn builtin_project_adapter_provisions_task_worktree_via_task_adapter() {
+        // No delegate gate set here: this pins the DEFAULT in-tree `git worktree
+        // add` path. Hold the shared lock so a concurrent delegation-path test
+        // cannot leak its env var / seam into this run.
+        let _serialize = delegate_env_lock().await;
+        std::env::remove_var("ANIMUS_ENVIRONMENT_DELEGATE");
         let project_root = temp_dir("task");
         let canonical_project_root = project_root.canonicalize().unwrap();
         run_git(&project_root, &["init", "--initial-branch=main"]);
@@ -1248,6 +1588,137 @@ mod tests {
         let updated = hub.get("TASK-1").await.unwrap();
         assert_eq!(updated.worktree_path.as_deref(), Some(cwd.as_str()));
         assert_eq!(updated.branch_name.as_deref(), Some("animus/task-1"));
+    }
+
+    // ---------------------------------------------------------------------
+    // v0.7 TASK-166: `ensure_execution_cwd` thin-delegate. With the delegate
+    // gate on AND an environment plugin resolvable (here: an injected fake
+    // `prepare`), the adapter delegates ONLY the `git worktree add` and returns
+    // the plugin's `workspace_root`. With the gate off (the default) it uses the
+    // in-tree `git worktree add`. The existing
+    // `builtin_project_adapter_provisions_task_worktree_via_task_adapter` test
+    // above pins the no-regression in-tree path; this pins BOTH branches.
+    // ---------------------------------------------------------------------
+    #[tokio::test]
+    async fn ensure_execution_cwd_delegates_to_environment_plugin_when_gated_on() {
+        let _serialize = delegate_env_lock().await;
+
+        let project_root = temp_dir("delegate");
+        run_git(&project_root, &["init", "--initial-branch=main"]);
+        run_git(&project_root, &["config", "user.email", "ao@example.com"]);
+        run_git(&project_root, &["config", "user.name", "Animus"]);
+        std::fs::write(project_root.join("README.md"), "hello\n").unwrap();
+        run_git(&project_root, &["add", "README.md"]);
+        run_git(&project_root, &["commit", "-m", "init"]);
+
+        let hub = Arc::new(TestHub::default());
+        hub.replace(sample_task("TASK-DELEGATE")).await.unwrap();
+        let adapter = BuiltinProjectAdapter::new(hub.clone());
+        let subject = SubjectRef::task("TASK-DELEGATE".to_string());
+        let resolver = BuiltinSubjectResolver::new(hub.clone());
+        let context = resolver.resolve_subject_context(&subject, None, None).await.unwrap();
+
+        // The fake stands in for the reference worktree plugin: it materializes a
+        // REAL git worktree at the directed `target_path` (under the managed
+        // worktree root, honoring the Phase-1 delegation contract) and returns it
+        // as `workspace_root`. A wrong path OR a non-worktree directory would be
+        // (correctly) rejected by the adapter's validation.
+        let managed_target = default_task_worktree_path(project_root.to_str().unwrap(), "TASK-DELEGATE")
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let seen: Arc<Mutex<Option<(String, EnvironmentSpec)>>> = Arc::new(Mutex::new(None));
+        let seen_for_seam = seen.clone();
+        let _seam = env_delegate_test_seam::install(move |source_root, plugin_id, spec| {
+            *seen_for_seam.lock().unwrap() = Some((plugin_id.to_string(), spec.clone()));
+            let meta = &spec.metadata;
+            let target = meta.get("target_path").and_then(serde_json::Value::as_str).unwrap().to_string();
+            let branch = meta.get("branch").and_then(serde_json::Value::as_str).unwrap();
+            let base_ref = meta.get("base_ref").and_then(serde_json::Value::as_str).unwrap();
+            let create_branch = meta.get("create_branch").and_then(serde_json::Value::as_bool).unwrap();
+            // Mirror the reference plugin's single `git worktree add`.
+            let mut args = vec!["-C".to_string(), source_root.to_string(), "worktree".to_string(), "add".to_string()];
+            if create_branch {
+                args.extend(["-b".to_string(), branch.to_string(), target.clone(), base_ref.to_string()]);
+            } else {
+                args.extend([target.clone(), branch.to_string()]);
+            }
+            let status = ProcessCommand::new("git").args(&args).status().unwrap();
+            assert!(status.success(), "fake plugin git worktree add failed");
+            Ok(EnvironmentHandle {
+                id: "env-test".to_string(),
+                workspace_root: target,
+                metadata: serde_json::Value::Null,
+            })
+        });
+
+        // ----- delegation path: gate ON -----
+        std::env::set_var("ANIMUS_ENVIRONMENT_DELEGATE", "worktree");
+        let delegated_cwd =
+            adapter.ensure_execution_cwd(project_root.to_str().unwrap(), &subject, &context).await.unwrap();
+        std::env::remove_var("ANIMUS_ENVIRONMENT_DELEGATE");
+
+        assert_eq!(
+            delegated_cwd, managed_target,
+            "delegated cwd must be the plugin's workspace_root (the managed target)"
+        );
+
+        // `prepare` was invoked with the resolved spec: plugin id + the opaque
+        // directed-materialization metadata the reference worktree plugin reads.
+        let (plugin_id, spec) = seen.lock().unwrap().clone().expect("prepare must have been called");
+        assert_eq!(plugin_id, "worktree");
+        assert_eq!(spec.kind, "worktree");
+        assert_eq!(spec.repos.len(), 1);
+        assert_eq!(spec.repos[0].url, project_root.to_str().unwrap());
+        assert!(spec.repos[0].primary);
+        let meta = &spec.metadata;
+        assert_eq!(
+            meta.get("target_path").and_then(serde_json::Value::as_str),
+            Some(
+                default_task_worktree_path(project_root.to_str().unwrap(), "TASK-DELEGATE")
+                    .unwrap()
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert_eq!(meta.get("branch").and_then(serde_json::Value::as_str), Some("animus/task-delegate"));
+        assert_eq!(meta.get("create_branch").and_then(serde_json::Value::as_bool), Some(true));
+
+        // The plugin's workspace_root is persisted as the task's worktree path,
+        // and the branch is recorded exactly as in the in-tree path.
+        let persisted = hub.get("TASK-DELEGATE").await.unwrap();
+        assert_eq!(persisted.worktree_path.as_deref(), Some(managed_target.as_str()));
+        assert_eq!(persisted.branch_name.as_deref(), Some("animus/task-delegate"));
+        // The plugin (not the in-tree code) materialized the worktree: `prepare`
+        // was invoked (`seen` is Some, asserted above) and the returned target is
+        // a real git worktree with the expected branch checked out. `.mcp.json`,
+        // written by the adapter's post-materialization sync, IS present —
+        // proving the delegated path still runs the sync.
+        assert!(Path::new(&managed_target).join(".git").exists(), "delegated worktree materialized");
+        assert_eq!(
+            worktree_head_branch(Path::new(&managed_target)),
+            "animus/task-delegate",
+            "delegated worktree is on the directed branch"
+        );
+        assert!(
+            Path::new(&managed_target).join(".mcp.json").is_file(),
+            "adapter synced .mcp.json into the delegated workspace"
+        );
+
+        // ----- fallback path: gate OFF -----
+        // With no gate, a fresh task provisions via the in-tree `git worktree
+        // add` (the seam is never consulted).
+        *seen.lock().unwrap() = None;
+        hub.replace(sample_task("TASK-INTREE")).await.unwrap();
+        let intree_subject = SubjectRef::task("TASK-INTREE".to_string());
+        let intree_ctx = resolver.resolve_subject_context(&intree_subject, None, None).await.unwrap();
+        std::env::remove_var("ANIMUS_ENVIRONMENT_DELEGATE");
+        let intree_cwd =
+            adapter.ensure_execution_cwd(project_root.to_str().unwrap(), &intree_subject, &intree_ctx).await.unwrap();
+
+        assert!(seen.lock().unwrap().is_none(), "gate off => prepare must NOT be called");
+        assert!(intree_cwd.contains("task-task-intree"), "in-tree cwd under managed root: {intree_cwd}");
+        assert!(Path::new(&intree_cwd).exists(), "in-tree worktree materialized on disk");
     }
 
     #[test]
@@ -1432,6 +1903,33 @@ mod tests {
             .ensure_execution_cwd("/project/root", &subject, &ctx)
             .await
             .expect("plugin-owned subject should resolve cwd");
+        assert_eq!(cwd, "/project/root");
+    }
+
+    #[tokio::test]
+    async fn resolve_binds_subjectless_adhoc_dispatch_without_error() {
+        // Dispatch A (subjectless runs): a subjectless / ad-hoc run is
+        // represented as a `custom`-kind subject with an `adhoc:<nanos>` id. The
+        // run-loop MUST bind it to a valid context — the built-in custom adapter
+        // resolves it, so it never hits "no subject adapter registered", and the
+        // execution cwd is the project root (no managed worktree). This is a
+        // valid mode, not a failure.
+        let hub = Arc::new(TestHub::default());
+        let registry = builtin_subject_adapter_registry(hub);
+
+        let subject = SubjectRef::new(SUBJECT_KIND_CUSTOM, "adhoc:1730000000000000000");
+        let ctx = registry
+            .resolve_subject_context(&subject, None, None)
+            .await
+            .expect("subjectless ad-hoc run must bind, not die at the subject adapter");
+        assert_eq!(ctx.subject_kind, SUBJECT_KIND_CUSTOM);
+        assert_eq!(ctx.subject_id, "adhoc:1730000000000000000");
+        assert!(ctx.task.is_none(), "a subjectless run has no backing task");
+
+        let cwd = registry
+            .ensure_execution_cwd("/project/root", &subject, &ctx)
+            .await
+            .expect("subjectless run resolves an execution cwd");
         assert_eq!(cwd, "/project/root");
     }
 

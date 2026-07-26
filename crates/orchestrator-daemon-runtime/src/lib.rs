@@ -8,6 +8,7 @@ pub mod metrics;
 pub mod quotas;
 mod schedule;
 mod subject_dispatch;
+mod task_projection;
 mod tick;
 
 pub use audit::{
@@ -25,10 +26,12 @@ pub use daemon::{
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan, build_runner_command,
     build_runner_command_from_dispatch, build_runner_command_with_resume, dispatch_capacity_for_options,
-    execute_dispatch_plan_via_runner, is_terminally_completed_workflow, ready_dispatch_limit, schedule_headroom,
-    workflow_current_phase_id, CompletedProcess, CompletedProcessReconciliation, CompletionReconciliationPlan,
-    DispatchNotice, DispatchNoticeSink, DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary,
-    PlannedDispatchStart, ProcessManager, TickBudget, WorkflowConcurrencyCapReached, WorkflowFailureEvent,
+    execute_dispatch_plan_via_runner, is_local_environment, is_terminally_completed_workflow, ready_dispatch_limit,
+    schedule_headroom, workflow_current_phase_id, CompletedProcess, CompletedProcessReconciliation,
+    CompletionReconciliationPlan, DispatchNotice, DispatchNoticeSink, DispatchSelectionSource, DispatchWorkflowStart,
+    DispatchWorkflowStartSummary, EnvironmentBroker, PlannedDispatchStart, ProcessManager, TickBudget,
+    WorkflowConcurrencyCapReached, WorkflowFailureEvent, ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV,
 };
 /// v0.5.1 P2 #6.2 round-3: daemon-side reattach client surface, exposed for
 /// integration tests and out-of-tree daemons that want to call
@@ -59,6 +62,9 @@ pub use subject_dispatch::{
     discover_subject_backends, resolve_subject_dispatch, subject_plugins_disable_env_set, SubjectDispatchResolution,
     SubjectPluginDispatch, SUBJECT_PLUGINS_DISABLE_ENV,
 };
+pub use task_projection::{
+    resolve_task_projection_store, resolve_task_projection_store_for_actor, RouterTaskProjectionStore,
+};
 pub use tick::{
     default_slim_project_tick_driver, run_project_tick, run_project_tick_at, BudgetBreachEvent,
     DefaultProjectTickServices, DefaultSlimProjectTickDriver, ProjectTickContext, ProjectTickExecutionOutcome,
@@ -69,6 +75,9 @@ pub use tick::{
 #[cfg(test)]
 pub(crate) mod test_env {
     use std::sync::OnceLock;
+
+    pub type WorkflowConfigFixtureGuard =
+        orchestrator_config::workflow_config::config_source_client::test_seam::TestBaseGuard;
 
     /// Returns the per-process test home directory and pins HOME to it on
     /// first call. Tests that resolve `protocol::scoped_state_root` (or any
@@ -83,5 +92,43 @@ pub(crate) mod test_env {
             std::env::set_var("HOME", &home_dir);
             home_dir
         })
+    }
+
+    /// Add the UI metadata required for every phase referenced by a workflow
+    /// fixture. The purified kernel intentionally ships an empty catalog, so
+    /// tests must declare the phase ids they author instead of relying on the
+    /// historical built-in pipeline.
+    pub fn declare_phase_catalog(config: &mut orchestrator_core::WorkflowConfig, phase_ids: &[&str]) {
+        for phase_id in phase_ids {
+            config.phase_catalog.entry((*phase_id).to_string()).or_insert_with(|| {
+                orchestrator_core::PhaseUiDefinition {
+                    label: (*phase_id).to_string(),
+                    description: String::new(),
+                    category: "test".to_string(),
+                    icon: None,
+                    docs_url: None,
+                    tags: Vec::new(),
+                    visible: true,
+                }
+            });
+        }
+    }
+
+    /// Persist one canonical workflow fixture and expose it through the same
+    /// config-source seam production loads use. Keep the returned guard alive
+    /// for every read of the fixture.
+    pub fn write_workflow_config_fixture(
+        project_root: &std::path::Path,
+        config: &mut orchestrator_core::WorkflowConfig,
+        phase_ids: &[&str],
+    ) -> WorkflowConfigFixtureGuard {
+        declare_phase_catalog(config, phase_ids);
+        orchestrator_core::write_workflow_config(project_root, config).expect("write workflow config fixture");
+        install_yaml_config_source_fixture(project_root)
+    }
+
+    /// Expose hand-authored YAML through the config-source test seam.
+    pub fn install_yaml_config_source_fixture(project_root: &std::path::Path) -> WorkflowConfigFixtureGuard {
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root)
     }
 }

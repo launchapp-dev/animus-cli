@@ -45,9 +45,12 @@ pub use agent_state::{
 };
 pub use ensure_execution_cwd::ensure_execution_cwd;
 pub use interactions::{
-    answer_interaction, apply_interaction_answer, create_approval_interaction, create_native_question_interaction,
-    create_question_interaction, create_structured_question_interaction, expire_interaction, list_interactions,
-    load_interaction, mark_interaction_suspended, parse_sdk_questions, InteractionAnswer, InteractionKind,
+    answer_interaction, answer_interaction_for_actor, apply_interaction_answer, apply_interaction_answer_for_actor,
+    create_approval_interaction, create_approval_interaction_for_actor, create_native_question_interaction,
+    create_native_question_interaction_for_actor, create_question_interaction, create_question_interaction_for_actor,
+    create_structured_question_interaction, create_structured_question_interaction_for_actor, expire_interaction,
+    list_interactions, list_interactions_for_actor, load_interaction, load_interaction_for_actor,
+    mark_interaction_suspended, parse_sdk_questions, InteractionActorRef, InteractionAnswer, InteractionKind,
     InteractionQuestion, InteractionQuestionOption, InteractionRecord, InteractionStatus, INTERACTION_ANSWER_ALLOW,
     INTERACTION_ANSWER_DENY,
 };

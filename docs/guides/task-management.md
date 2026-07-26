@@ -25,7 +25,7 @@ animus subject get --kind task --id task:TASK-001
 Subject ids accept either the bare native id (`TASK-001`) or the
 kind-qualified form (`task:TASK-001`) wherever an `--id` or subject-id argument
 is taken — `subject get/update/status`, `queue hold/release/drop`, and
-`workflow run --task-id`. The bare form is normalized to the qualified form at
+`workflow run --subject-id`. The bare form is normalized to the qualified form at
 the CLI boundary, so both resolve the same subject. The human-readable
 `animus subject list` table prints the canonical qualified ids.
 
@@ -46,17 +46,17 @@ animus subject update --kind task --id task:TASK-001 --priority p0 --labels urge
 ## Run a Workflow for a Task
 
 ```bash
-animus workflow run --task-id TASK-001
+animus workflow run --subject-id TASK-001
 ```
 
-`animus workflow run --task-id ...` first checks the in-tree task store and
+`animus workflow run --subject-id ...` first checks the in-tree task store and
 then falls back to the active `subject_backend` resolution path. That means the
 same command works for built-in tasks and plugin-owned tasks.
 
 For terminal debugging, use synchronous execution:
 
 ```bash
-animus workflow run --task-id TASK-001 --sync
+animus workflow run --subject-id TASK-001 --sync
 ```
 
 Built-in tasks usually execute in a managed worktree. Plugin-owned task

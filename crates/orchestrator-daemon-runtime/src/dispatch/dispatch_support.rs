@@ -136,7 +136,7 @@ pub fn active_workflow_subject_ids(workflows: &[OrchestratorWorkflow]) -> HashSe
             matches!(workflow.status, WorkflowStatus::Running | WorkflowStatus::Paused | WorkflowStatus::Pending)
                 && workflow.machine_state != orchestrator_core::WorkflowMachineState::MergeConflict
         })
-        .map(|workflow| workflow.subject.id().to_string())
+        .filter_map(|workflow| workflow.subject.as_ref().map(|s| s.id().to_string()))
         .collect()
 }
 

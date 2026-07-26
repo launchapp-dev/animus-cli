@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
+use animus_actor::Actor;
 use orchestrator_config::agent_runtime_config::{
     AgentRuntimeOverrides, PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode,
     PhaseOutputContract,
@@ -29,8 +30,14 @@ pub struct RuntimeConfigContext {
 
 impl RuntimeConfigContext {
     pub fn load(project_root: &str) -> Self {
-        let agent_runtime_config = orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root));
-        let workflow_config = orchestrator_core::load_workflow_config_or_default(Path::new(project_root));
+        Self::load_for_actor(project_root, None)
+    }
+
+    pub fn load_for_actor(project_root: &str, actor: Option<&Actor>) -> Self {
+        let agent_runtime_config =
+            orchestrator_core::load_agent_runtime_config_or_default_for_actor(Path::new(project_root), actor);
+        let workflow_config =
+            orchestrator_core::load_workflow_config_or_default_for_actor(Path::new(project_root), actor);
         Self { agent_runtime_config, workflow_config }
     }
 

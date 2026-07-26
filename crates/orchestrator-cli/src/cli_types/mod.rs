@@ -5,6 +5,7 @@ mod chat_types;
 mod cost_types;
 mod daemon_types;
 mod doctor_types;
+mod environment_types;
 mod events_types;
 mod flavor_types;
 mod git_types;
@@ -36,6 +37,7 @@ pub(crate) use chat_types::*;
 pub(crate) use cost_types::*;
 pub(crate) use daemon_types::*;
 pub(crate) use doctor_types::*;
+pub(crate) use environment_types::*;
 pub(crate) use events_types::*;
 pub(crate) use flavor_types::*;
 pub(crate) use git_types::*;
@@ -251,27 +253,25 @@ mod tests {
         match cli.command {
             Command::Queue { command: QueueCommand::Enqueue(args) } => {
                 assert_eq!(args.subject_id.as_deref(), Some("blog:BLOG-001"));
-                assert!(args.task_id.is_none());
+                assert!(args.title.is_none());
             }
             other => panic!("expected queue enqueue, got {other:?}"),
         }
     }
 
     #[test]
-    fn queue_enqueue_subject_id_conflicts_with_kind_flags() {
-        for other in [["--task-id", "TASK-1"], ["--requirement-id", "REQ-1"], ["--title", "x"]] {
-            let error = Cli::try_parse_from([
-                "animus",
-                "queue",
-                "enqueue",
-                "--subject-id",
-                "blog:BLOG-001",
-                other[0],
-                other[1],
-            ])
-            .expect_err("--subject-id must be mutually exclusive with the kind flags");
-            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "flag {}: {error}", other[0]);
-        }
+    fn queue_enqueue_subject_id_conflicts_with_title() {
+        let error =
+            Cli::try_parse_from(["animus", "queue", "enqueue", "--subject-id", "blog:BLOG-001", "--title", "x"])
+                .expect_err("--subject-id must be mutually exclusive with --title");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{error}");
+    }
+
+    #[test]
+    fn queue_enqueue_rejects_removed_task_id_flag() {
+        let error = Cli::try_parse_from(["animus", "queue", "enqueue", "--task-id", "TASK-1"])
+            .expect_err("--task-id was removed");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{error}");
     }
 
     #[test]
@@ -281,20 +281,86 @@ mod tests {
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => {
                 assert_eq!(args.subject_id.as_deref(), Some("blog:BLOG-001"));
-                assert!(args.task_id.is_none());
+                assert!(args.title.is_none());
             }
             other => panic!("expected workflow run, got {other:?}"),
         }
     }
 
     #[test]
-    fn workflow_run_subject_id_conflicts_with_kind_flags() {
-        for other in [["--task-id", "TASK-1"], ["--requirement-id", "REQ-1"], ["--title", "x"]] {
-            let error =
-                Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001", other[0], other[1]])
-                    .expect_err("--subject-id must be mutually exclusive with the kind flags");
-            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "flag {}: {error}", other[0]);
+    fn workflow_run_idempotency_key_is_bounded_and_actor_subject_scoped() {
+        let actor = r#"{"user_id":"alice","tenant_id":"workspace-a","claims":[]}"#;
+        let cli = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "animus.task/standard",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor,
+            "--idempotency-key",
+            "arena.launch_1:retry-0",
+        ])
+        .expect("bounded actor+subject launch key should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Run(args) } => {
+                assert_eq!(args.idempotency_key.as_deref(), Some("arena.launch_1:retry-0"));
+            }
+            other => panic!("expected workflow run, got {other:?}"),
         }
+
+        for argv in [
+            vec!["animus", "workflow", "run", "--subject-id", "task:TASK-1", "--idempotency-key", "key"],
+            vec!["animus", "workflow", "run", "--actor-json", actor, "--idempotency-key", "key"],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(argv).expect_err("idempotency scope invariant must be clap-enforced").kind(),
+                ErrorKind::MissingRequiredArgument
+            );
+        }
+        let sync = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "--sync",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor,
+            "--idempotency-key",
+            "key",
+        ])
+        .expect_err("synchronous keyed launch must be rejected");
+        assert_eq!(sync.kind(), ErrorKind::ArgumentConflict);
+
+        let invalid = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor,
+            "--idempotency-key",
+            "not valid",
+        ])
+        .expect_err("unsafe key alphabet must fail");
+        assert_eq!(invalid.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn workflow_run_subject_id_conflicts_with_title() {
+        let error = Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001", "--title", "x"])
+            .expect_err("--subject-id must be mutually exclusive with --title");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{error}");
+    }
+
+    #[test]
+    fn workflow_run_rejects_removed_task_id_flag() {
+        let error = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1"])
+            .expect_err("--task-id was removed");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{error}");
     }
 
     #[test]
@@ -711,12 +777,13 @@ mod tests {
 
     #[test]
     fn parses_queue_enqueue_command() {
-        let cli = Cli::try_parse_from(["animus", "queue", "enqueue", "--task-id", "TASK-123", "--workflow-ref", "ops"])
-            .expect("queue enqueue command should parse");
+        let cli =
+            Cli::try_parse_from(["animus", "queue", "enqueue", "--subject-id", "TASK-123", "--workflow-ref", "ops"])
+                .expect("queue enqueue command should parse");
 
         match cli.command {
             Command::Queue { command: QueueCommand::Enqueue(args) } => {
-                assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
+                assert_eq!(args.subject_id.as_deref(), Some("TASK-123"));
                 assert_eq!(args.workflow_ref.as_deref(), Some("ops"));
             }
             _ => panic!("expected queue enqueue command"),
@@ -786,13 +853,14 @@ mod tests {
 
     #[test]
     fn parses_workflow_run_with_positional_pipeline() {
-        let cli = Cli::try_parse_from(["animus", "workflow", "run", "animus.task/standard", "--task-id", "TASK-123"])
-            .expect("workflow run should parse");
+        let cli =
+            Cli::try_parse_from(["animus", "workflow", "run", "animus.task/standard", "--subject-id", "task:TASK-123"])
+                .expect("workflow run should parse");
 
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => {
                 assert_eq!(args.pipeline.as_deref(), Some("animus.task/standard"));
-                assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
+                assert_eq!(args.subject_id.as_deref(), Some("task:TASK-123"));
             }
             _ => panic!("expected workflow run command"),
         }
@@ -962,8 +1030,16 @@ mod tests {
     #[test]
     fn workflow_run_parses_actor_json_for_transport_scoping() {
         let actor_json = r#"{"user_id":"alice","claims":["admin"],"tenant_id":"acme"}"#;
-        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1", "--actor-json", actor_json])
-            .expect("workflow run --actor-json should parse");
+        let cli = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("workflow run --actor-json should parse");
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => {
                 assert_eq!(args.actor_json.as_deref(), Some(actor_json));
@@ -971,7 +1047,7 @@ mod tests {
             other => panic!("expected workflow run, got {other:?}"),
         }
         // No flag => None => global scope.
-        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1"])
+        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "task:TASK-1"])
             .expect("bare workflow run should parse");
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => assert_eq!(args.actor_json, None),
@@ -1022,7 +1098,8 @@ mod tests {
             }
             other => panic!("expected chat send, got {other:?}"),
         }
-        // No actor flag => None (global authz scope) even with --as-user set.
+        // Clap preserves the legacy assertion shape; runtime validation rejects
+        // `--as-user` without an authenticated actor before store selection.
         let cli = Cli::try_parse_from(["animus", "chat", "send", "hello", "--as-user", "carol"])
             .expect("bare chat send should parse");
         match cli.command {
@@ -1031,6 +1108,301 @@ mod tests {
                 assert_eq!(args.as_user.as_deref(), Some("carol"));
             }
             other => panic!("expected chat send, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_send_idempotency_key_is_bounded_and_application_scoped() {
+        let actor_json = r#"{"user_id":"carol","tenant_id":"workspace-a","claims":[]}"#;
+        let cli = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--actor-json",
+            actor_json,
+            "--as-user",
+            "carol",
+            "--idempotency-key",
+            "arena.chat_1:retry-0",
+            "--require-shared-authority",
+        ])
+        .expect("bounded application chat key should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                assert_eq!(args.idempotency_key.as_deref(), Some("arena.chat_1:retry-0"));
+                assert!(args.require_shared_authority);
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+        assert_eq!(
+            Cli::try_parse_from(["animus", "chat", "send", "hello", "--require-shared-authority"])
+                .expect_err("shared authority policy requires a durable operation key")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+
+        for argv in [
+            vec!["animus", "chat", "send", "hello", "--conversation", "conv-1", "--idempotency-key", "key"],
+            vec![
+                "animus",
+                "chat",
+                "send",
+                "hello",
+                "--actor-json",
+                actor_json,
+                "--as-user",
+                "carol",
+                "--idempotency-key",
+                "key",
+            ],
+            vec![
+                "animus",
+                "chat",
+                "send",
+                "hello",
+                "--conversation",
+                "conv-1",
+                "--actor-json",
+                actor_json,
+                "--idempotency-key",
+                "key",
+            ],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(argv).expect_err("chat operation scope must be clap-enforced").kind(),
+                ErrorKind::MissingRequiredArgument
+            );
+        }
+        let invalid = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--actor-json",
+            actor_json,
+            "--as-user",
+            "carol",
+            "--idempotency-key",
+            "not valid",
+        ])
+        .expect_err("unsafe key alphabet must fail");
+        assert_eq!(invalid.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn chat_send_application_controls_are_closed_bounded_and_operator_isolated() {
+        let actor_json = r#"{"user_id":"carol","tenant_id":"workspace-a","claims":[]}"#;
+        let base = [
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--actor-json",
+            actor_json,
+            "--as-user",
+            "carol",
+            "--idempotency-key",
+            "arena.controls:1",
+            "--require-shared-authority",
+        ];
+        let controls = r#"{"schema":"animus.chat.application_controls.v1","approvals":true,"reasoning_effort":"high","permission_intent":"review","profile_ref":"research.agent-1","skill_ref":"code_review"}"#;
+        let cli = Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", controls]))
+            .expect("canonical application controls should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                let parsed = args.application_controls_json.expect("controls parsed");
+                assert_eq!(parsed.schema, ApplicationChatControlsSchema::V1);
+                assert_eq!(parsed.approvals, Some(true));
+                assert_eq!(parsed.reasoning_effort, Some(ApplicationReasoningEffort::High));
+                assert_eq!(parsed.permission_intent, Some(ApplicationPermissionIntent::Review));
+                assert_eq!(parsed.profile_ref.as_ref().map(|value| value.as_str()), Some("research.agent-1"));
+                assert_eq!(parsed.skill_ref.as_ref().map(|value| value.as_str()), Some("code_review"));
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+
+        for rejected in [
+            r#"{}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","env":{"API_KEY":"secret"}}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","argv":["--danger"]}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","profile_ref":"../../secret"}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","skill_ref":"$TOKEN"}"#,
+            r#"{"schema":"animus.chat.application_controls.v2"}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","approvals":null}"#,
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", rejected]))
+                    .expect_err("unknown, path-like, secret-like, or wrong-schema control must fail")
+                    .kind(),
+                ErrorKind::ValueValidation
+            );
+        }
+
+        for (conflicting, value) in [
+            ("--tool", "raw-value"),
+            ("--model", "raw-value"),
+            ("--cwd", "raw-value"),
+            ("--reasoning-effort", "high"),
+            ("--permission-mode", "raw-value"),
+            ("--agent", "raw-value"),
+            ("--skill", "raw-value"),
+            ("--mcp-server", "raw-value"),
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(base.into_iter().chain([
+                    "--application-controls-json",
+                    controls,
+                    conflicting,
+                    value
+                ]),)
+                .expect_err("application controls must reject raw operator controls")
+                .kind(),
+                ErrorKind::ArgumentConflict
+            );
+        }
+        for conflicting in ["--approvals", "--no-animus-mcp"] {
+            assert_eq!(
+                Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", controls, conflicting]))
+                    .expect_err("application controls must reject boolean operator controls")
+                    .kind(),
+                ErrorKind::ArgumentConflict
+            );
+        }
+
+        let missing_shared_authority = base
+            .into_iter()
+            .filter(|argument| *argument != "--require-shared-authority")
+            .chain(["--application-controls-json", controls]);
+        assert_eq!(
+            Cli::try_parse_from(missing_shared_authority)
+                .expect_err("application controls require fail-closed shared authority")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn application_chat_controls_match_vendored_shared_schema() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../contracts/animus-application-protocol/ApplicationChatControls.json"
+        ))
+        .unwrap();
+        let limits: serde_json::Value =
+            serde_json::from_str(include_str!("../../contracts/animus-application-protocol/_limits.json")).unwrap();
+        assert_eq!(limits["application_chat_controls_schema"], APPLICATION_CHAT_CONTROLS_SCHEMA);
+        assert_eq!(limits["application_chat_controls_max_utf8_bytes"], MAX_APPLICATION_CHAT_CONTROLS_BYTES);
+        assert_eq!(limits["application_chat_control_ref_max_utf8_bytes"], MAX_APPLICATION_CHAT_CONTROL_REF_BYTES);
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"], serde_json::json!(["schema"]));
+        let mut fields = schema["properties"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        fields.sort();
+        assert_eq!(
+            fields,
+            ["approvals", "permission_intent", "profile_ref", "reasoning_effort", "schema", "skill_ref"]
+        );
+
+        let reasoning =
+            [ApplicationReasoningEffort::Low, ApplicationReasoningEffort::Medium, ApplicationReasoningEffort::High];
+        assert_eq!(serde_json::to_value(reasoning).unwrap(), serde_json::json!(["low", "medium", "high"]));
+        let permissions = [
+            ApplicationPermissionIntent::Default,
+            ApplicationPermissionIntent::Review,
+            ApplicationPermissionIntent::AutoEdit,
+            ApplicationPermissionIntent::Unrestricted,
+        ];
+        assert_eq!(
+            serde_json::to_value(permissions).unwrap(),
+            serde_json::json!(["default", "review", "auto_edit", "unrestricted"])
+        );
+    }
+
+    #[test]
+    fn chat_send_parses_agent_revision_contract_and_keeps_tool_unset_for_profile_default() {
+        let cli = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--expected-revision",
+            "7",
+            "--agent",
+            "researcher",
+        ])
+        .expect("bound chat send should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                assert_eq!(args.expected_revision, Some(7));
+                assert_eq!(args.agent.as_deref(), Some("researcher"));
+                assert_eq!(args.tool, None, "omitting --tool lets the bound profile choose it");
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+
+        let error = Cli::try_parse_from(["animus", "chat", "send", "hello", "--expected-revision", "7"])
+            .expect_err("revision without an existing conversation must be rejected");
+        assert!(error.to_string().contains("--conversation"));
+    }
+
+    #[test]
+    fn chat_reads_parse_bounded_page_arguments() {
+        let list =
+            Cli::try_parse_from(["animus", "chat", "list", "--as-user", "carol", "--limit", "25", "--offset", "50"])
+                .expect("bounded chat list should parse");
+        match list.command {
+            Command::Chat { command: ChatCommand::List(args) } => {
+                assert_eq!(args.as_user.as_deref(), Some("carol"));
+                assert_eq!(args.limit, Some(25));
+                assert_eq!(args.offset, 50);
+            }
+            other => panic!("expected chat list, got {other:?}"),
+        }
+
+        let get = Cli::try_parse_from(["animus", "chat", "get", "conv-1", "--limit", "10", "--offset", "20"])
+            .expect("bounded chat get should parse");
+        match get.command {
+            Command::Chat { command: ChatCommand::Get(args) } => {
+                assert_eq!(args.id, "conv-1");
+                assert_eq!(args.limit, Some(10));
+                assert_eq!(args.offset, 20);
+            }
+            other => panic!("expected chat get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_conversation_store_verb_exposes_actor_json() {
+        let actor_json = r#"{"user_id":"alice","tenant_id":"tenant-a","claims":[]}"#;
+        let commands = [
+            vec!["animus", "chat", "new", "--actor-json", actor_json],
+            vec!["animus", "chat", "list", "--actor-json", actor_json],
+            vec!["animus", "chat", "get", "conv-1", "--actor-json", actor_json],
+            vec!["animus", "chat", "rename", "conv-1", "--title", "new", "--actor-json", actor_json],
+            vec!["animus", "chat", "delete", "conv-1", "--actor-json", actor_json],
+            vec!["animus", "chat", "export", "conv-1", "--actor-json", actor_json],
+            vec!["animus", "chat", "search", "needle", "--actor-json", actor_json],
+        ];
+        for argv in commands {
+            let cli = Cli::try_parse_from(argv).expect("chat verb should accept --actor-json");
+            let parsed = match cli.command {
+                Command::Chat { command: ChatCommand::New(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::List(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Get(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Rename(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Delete(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Export(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Search(args) } => args.actor_json,
+                other => panic!("expected conversation-store chat verb, got {other:?}"),
+            };
+            assert_eq!(parsed.as_deref(), Some(actor_json));
         }
     }
 
@@ -1067,6 +1439,110 @@ mod tests {
         Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1", "--workflow-id", "WF-1"])
             .expect_err("--run-id and --workflow-id must conflict");
         Cli::try_parse_from(["animus", "output", "read"]).expect_err("one of --run-id/--workflow-id is required");
+    }
+
+    #[test]
+    fn portal_owned_read_commands_parse_actor_json() {
+        let actor_json = r#"{"user_id":"alice","tenant_id":"tenant-a","claims":[]}"#;
+        let list = Cli::try_parse_from(["animus", "workflow", "list", "--limit", "20", "--actor-json", actor_json])
+            .expect("workflow list actor");
+        match list.command {
+            Command::Workflow { command: WorkflowCommand::List(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected workflow list, got {other:?}"),
+        }
+
+        let workflow = Cli::try_parse_from(["animus", "workflow", "get", "--id", "wf-1", "--actor-json", actor_json])
+            .expect("workflow get actor");
+        match workflow.command {
+            Command::Workflow { command: WorkflowCommand::Get(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected workflow get, got {other:?}"),
+        }
+
+        let output = Cli::try_parse_from(["animus", "output", "read", "--run-id", "run-1", "--actor-json", actor_json])
+            .expect("output read actor");
+        match output.command {
+            Command::Output { command: OutputCommand::Read(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected output read, got {other:?}"),
+        }
+
+        let phase_outputs = Cli::try_parse_from([
+            "animus",
+            "output",
+            "phase-outputs",
+            "--workflow-id",
+            "wf-1",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("phase outputs actor");
+        match phase_outputs.command {
+            Command::Output { command: OutputCommand::PhaseOutputs(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected phase outputs, got {other:?}"),
+        }
+
+        let subject = Cli::try_parse_from([
+            "animus",
+            "subject",
+            "get",
+            "--kind",
+            "task",
+            "--id",
+            "TASK-1",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("subject get actor");
+        match subject.command {
+            Command::Subject { command: SubjectCommand::Get(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected subject get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interaction_inbox_commands_parse_actor_json_separately_from_by_attribution() {
+        let actor_json = r#"{"user_id":"bob","tenant_id":"tenant-a","claims":[]}"#;
+        let list = Cli::try_parse_from(["animus", "agent", "interactions", "list", "--actor-json", actor_json])
+            .expect("interaction list actor");
+        match list.command {
+            Command::Agent {
+                command: AgentCommand::Interactions { command: AgentInteractionsCommand::List(args) },
+            } => assert_eq!(args.actor_json.as_deref(), Some(actor_json)),
+            other => panic!("expected interaction list, got {other:?}"),
+        }
+
+        let answer = Cli::try_parse_from([
+            "animus",
+            "agent",
+            "interactions",
+            "answer",
+            "interaction-1",
+            "--text",
+            "yes",
+            "--by",
+            "display-only",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("interaction answer actor");
+        match answer.command {
+            Command::Agent {
+                command: AgentCommand::Interactions { command: AgentInteractionsCommand::Answer(args) },
+            } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+                assert_eq!(args.answered_by.as_deref(), Some("display-only"));
+            }
+            other => panic!("expected interaction answer, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1437,6 +1913,24 @@ mod tests {
             chat_reference.contains("`animus chat send --title` names a freshly-created conversation or renames the"),
             "docs/reference/chat.md should explain how `animus chat send --title` behaves"
         );
+    }
+
+    #[test]
+    fn subject_update_accepts_title_flag() {
+        // TASK-192: `animus subject update --title` must parse and land in
+        // SubjectUpdateArgs so a subject can be renamed. Before the fix clap
+        // rejected `--title` as an unknown argument.
+        let cli = Cli::try_parse_from([
+            "animus", "subject", "update", "--kind", "task", "--id", "TASK-1", "--title", "New name",
+        ])
+        .expect("subject update --title should parse");
+        match cli.command {
+            Command::Subject { command: SubjectCommand::Update(args) } => {
+                assert_eq!(args.title.as_deref(), Some("New name"));
+                assert_eq!(args.id, "TASK-1");
+            }
+            other => panic!("expected subject update command, got {other:?}"),
+        }
     }
 
     #[test]

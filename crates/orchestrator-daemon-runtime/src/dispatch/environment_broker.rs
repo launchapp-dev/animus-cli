@@ -1,0 +1,842 @@
+//! Cross-phase ephemeral-environment broker (daemon side).
+//!
+//! The daemon dispatches ONE workflow-runner subprocess PER PHASE. Without a
+//! broker each runner would prepare its OWN ephemeral node (via the in-runner
+//! [`EnvironmentClient`]) and tear it down at exit, so phases of one workflow run
+//! never share a workspace. This broker moves node lifecycle into the DAEMON:
+//! ONE node per workflow RUN, shared by every phase, torn down once at run end.
+//!
+//! ## Model
+//!
+//! - The broker keeps a `run_id -> lease` map. The FIRST [`Self::acquire`] for a
+//!   run resolves a daemon-resident [`EnvironmentClient`] and prepares the node
+//!   ONCE (single-flight, per-`run_id` mutex); later acquires for the same run
+//!   return the SAME handle without re-preparing.
+//! - Because the client is resolved DAEMON-side, the process-global
+//!   resident-host registry keeps ONE plugin process alive for the whole run
+//!   (one relay = one node), pinned across prepare / exec / teardown.
+//! - [`Self::teardown`] disposes the node once, at terminal workflow state.
+//! - Durable JSON lease records under the scoped state root let a fresh daemon
+//!   reap nodes leaked by a PRIOR daemon instance (its relay is dead) on startup.
+//!
+//! ## IPC
+//!
+//! Each per-phase runner talks to the broker over a private local socket
+//! (newline-delimited JSON, [`interprocess::local_socket`]). The wire is a
+//! PRIVATE daemon<->runner contract — NOT `animus-protocol` — with two RPCs:
+//! `acquire` (one request / one response) and `exec` (one request then a stream
+//! of output frames and a terminal frame). The serde structs are defined
+//! independently here and in the runner; see `broker-wire-contract.md`.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio::sync::Mutex as AsyncMutex;
+
+use orchestrator_core::environment::{EnvironmentHandle, EnvironmentSpec, ExecStream, HarnessCommand};
+use orchestrator_core::EnvironmentClient;
+
+/// Local-socket path the per-phase runner dials to reach the broker.
+pub const ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV: &str = "ANIMUS_ENVIRONMENT_BROKER_SOCKET";
+/// Per-daemon bearer capability echoed on every broker frame.
+pub const ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV: &str = "ANIMUS_ENVIRONMENT_BROKER_TOKEN";
+/// Workflow run id this dispatch belongs to (the broker's single-flight key).
+pub const ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV: &str = "ANIMUS_ENVIRONMENT_BROKER_RUN_ID";
+/// Resolved environment plugin id (e.g. `animus-environment-railway`).
+pub const ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV: &str = "ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID";
+
+/// Environment plugin ids that materialize a LOCAL workspace on the daemon host.
+/// A run routed to one of these does NOT go through the broker — the per-phase
+/// node-sharing problem is specific to remote/ephemeral environments.
+const LOCAL_ENVIRONMENT_IDS: &[&str] = &["worktree", "local"];
+
+/// `true` when `environment_id` names a local (non-brokered) environment.
+pub fn is_local_environment(environment_id: &str) -> bool {
+    LOCAL_ENVIRONMENT_IDS.contains(&environment_id)
+}
+
+/// Metadata key the railway (and any deterministic-naming) environment plugin
+/// reads to name the node stably per workflow run. Injected by the broker into
+/// the spec before `prepare` so every phase of a run maps to the same node name.
+const ANIMUS_RUN_ID_METADATA_KEY: &str = "animus_run_id";
+
+// ---------------------------------------------------------------------------
+// Wire types (private daemon<->runner IPC — mirror broker-wire-contract.md).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum BrokerRequest {
+    Acquire {
+        token: String,
+        run_id: String,
+        environment_id: String,
+        spec: EnvironmentSpec,
+    },
+    Exec {
+        token: String,
+        run_id: String,
+        handle_id: String,
+        command: HarnessCommand,
+        #[serde(default)]
+        stdin: Option<String>,
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Durable lease record (survives a daemon restart so the reaper can cold-tear
+// down a node the prior daemon instance leaked).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum LeaseState {
+    Preparing,
+    Ready,
+    TearingDown,
+    TornDown,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeaseRecord {
+    run_id: String,
+    daemon_instance_id: String,
+    environment_id: String,
+    project_root: String,
+    state: LeaseState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handle: Option<EnvironmentHandle>,
+    created_at: String,
+    updated_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// In-memory lease.
+// ---------------------------------------------------------------------------
+
+/// A ready, prepared node for a run: the pinned daemon-resident client plus the
+/// environment handle every phase of the run execs against.
+struct ReadyLease {
+    environment_id: String,
+    project_root: String,
+    client: Arc<EnvironmentClient>,
+    handle: EnvironmentHandle,
+}
+
+/// Context the daemon registers at spawn time (it, not the runner, is the
+/// authority on `project_root`). `acquire` resolves the [`EnvironmentClient`]
+/// against this.
+#[derive(Clone)]
+struct PendingContext {
+    project_root: String,
+    environment_id: String,
+}
+
+struct Inner {
+    daemon_instance_id: String,
+    token: String,
+    socket_path: String,
+    /// Directory holding `<run_id>.json` durable lease records + the socket.
+    records_dir: PathBuf,
+    /// run_id -> ready lease. Only READY leases live here; a failed/torn-down
+    /// run is absent (a later acquire re-prepares).
+    leases: AsyncMutex<HashMap<String, ReadyLease>>,
+    /// Per-run single-flight mutex so concurrent first-acquires prepare once.
+    key_locks: StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// run_id -> spawn-time context (project_root + expected environment id).
+    pending: StdMutex<HashMap<String, PendingContext>>,
+    /// The socket acceptor task; aborted + socket unlinked on drop.
+    acceptor: StdMutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        if let Some(handle) = self.acceptor.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            handle.abort();
+        }
+        // Best-effort: unlink the socket file so a restart can rebind cleanly.
+        if looks_like_filesystem(&self.socket_path) {
+            let _ = std::fs::remove_file(&self.socket_path);
+        }
+    }
+}
+
+/// Daemon-side broker handle. Cheap to clone (`Arc`); every clone shares the one
+/// lease map + socket server.
+#[derive(Clone)]
+pub struct EnvironmentBroker {
+    inner: Arc<Inner>,
+}
+
+impl EnvironmentBroker {
+    /// Bind the broker's local socket under `project_root`'s scoped state root,
+    /// start the accept loop on the current Tokio runtime, and reap any lease
+    /// records owned by a PRIOR daemon instance (their relay is dead).
+    ///
+    /// Must be called from within the daemon's multi-threaded runtime: the
+    /// resident [`EnvironmentClient`] the broker drives spawns its warm plugin
+    /// host onto THIS runtime and is pinned there for the run's lifetime.
+    pub async fn start(project_root: &str) -> std::io::Result<Self> {
+        let records_dir = broker_records_dir(project_root);
+        std::fs::create_dir_all(&records_dir)?;
+        let socket_path = broker_socket_path(&records_dir);
+
+        ensure_socket_parent(&socket_path)?;
+        let listener = bind_listener(&socket_path)?;
+
+        let inner = Arc::new(Inner {
+            daemon_instance_id: uuid::Uuid::new_v4().simple().to_string(),
+            token: uuid::Uuid::new_v4().simple().to_string(),
+            socket_path,
+            records_dir,
+            leases: AsyncMutex::new(HashMap::new()),
+            key_locks: StdMutex::new(HashMap::new()),
+            pending: StdMutex::new(HashMap::new()),
+            acceptor: StdMutex::new(None),
+        });
+
+        let broker = Self { inner: inner.clone() };
+        let accept_broker = broker.clone();
+        let handle = tokio::spawn(async move { accept_loop(listener, accept_broker).await });
+        *inner.acceptor.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
+
+        broker.reap_prior_daemon_records().await;
+        Ok(broker)
+    }
+
+    /// Local-socket path handed to the runner via
+    /// [`ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV`].
+    pub fn socket_path(&self) -> &str {
+        &self.inner.socket_path
+    }
+
+    /// Per-daemon bearer token handed to the runner via
+    /// [`ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV`] and echoed on every frame.
+    pub fn token(&self) -> &str {
+        &self.inner.token
+    }
+
+    /// Record the spawn-time context for `run_id` so the runner's later
+    /// `acquire` resolves the [`EnvironmentClient`] against the daemon-authored
+    /// `project_root` (the wire frame never carries it). Idempotent per run.
+    pub fn register_run(&self, run_id: &str, project_root: &str, environment_id: &str) {
+        self.inner.pending.lock().unwrap_or_else(|p| p.into_inner()).insert(
+            run_id.to_string(),
+            PendingContext { project_root: project_root.to_string(), environment_id: environment_id.to_string() },
+        );
+    }
+
+    /// Idempotently dispose the node for `run_id`: `Ready -> TearingDown ->
+    /// TornDown`, delete the durable record, forget the run's pending context.
+    /// A no-op when no lease exists (already torn down, or never prepared).
+    pub async fn teardown(&self, run_id: &str) {
+        let lease = self.inner.leases.lock().await.remove(run_id);
+        if let Some(lease) = lease {
+            self.write_record(run_id, &lease.environment_id, &lease.project_root, LeaseState::TearingDown, None);
+            let client = lease.client.clone();
+            let handle = lease.handle.clone();
+            // Sync RPC against the pinned host. `teardown` bridges async→sync
+            // internally (its own `block_in_place`), so it is called directly —
+            // wrapping it in another `block_in_place` would nest and is not
+            // needed.
+            if let Err(error) = client.teardown(&handle) {
+                tracing::warn!(
+                    target: "animus.runtime.environment_broker",
+                    run_id,
+                    %error,
+                    "environment teardown failed; deleting lease record anyway (node may be reclaimed by the plugin GC sweep)"
+                );
+            }
+        }
+        self.delete_record(run_id);
+        self.forget_run(run_id);
+    }
+
+    fn forget_run(&self, run_id: &str) {
+        self.inner.pending.lock().unwrap_or_else(|p| p.into_inner()).remove(run_id);
+        self.inner.key_locks.lock().unwrap_or_else(|p| p.into_inner()).remove(run_id);
+    }
+
+    /// SINGLE-FLIGHT acquire: return the shared workspace_root + handle_id for
+    /// `run_id`, preparing the node ONCE on the first call. Rejects a different
+    /// `environment_id` for an already-bound run.
+    async fn acquire(&self, run_id: &str, environment_id: &str, spec: EnvironmentSpec) -> Result<(String, String)> {
+        let pending =
+            self.inner.pending.lock().unwrap_or_else(|p| p.into_inner()).get(run_id).cloned().ok_or_else(|| {
+                anyhow!("no pending environment context for run {run_id} (daemon did not register this run)")
+            })?;
+        if pending.environment_id != environment_id {
+            bail!("run {run_id} is bound to environment '{}', not '{environment_id}'", pending.environment_id);
+        }
+
+        let key_lock = self.key_lock(run_id);
+        let _guard = key_lock.lock().await;
+
+        // Fast path: an already-prepared lease is reused by every later phase.
+        if let Some(lease) = self.inner.leases.lock().await.get(run_id) {
+            if lease.environment_id != environment_id {
+                bail!("run {run_id} is already bound to environment '{}'", lease.environment_id);
+            }
+            return Ok((lease.handle.workspace_root.clone(), lease.handle.id.clone()));
+        }
+
+        // Slow path: prepare the node ONCE. Record BEFORE prepare so a crash
+        // mid-prepare still leaves a durable marker for the startup reaper.
+        self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None);
+
+        let mut spec = spec;
+        set_run_id_metadata(&mut spec, run_id);
+
+        let project_root = pending.project_root.clone();
+        let environment_id_owned = environment_id.to_string();
+        // `resolve` is pure discovery; `prepare` bridges async→sync internally
+        // (its own `block_in_place`), so both are called directly — the daemon
+        // worker is handed off for the duration of the prepare RPC by the client.
+        let prepared = (|| {
+            let client = EnvironmentClient::resolve(Path::new(&project_root), &environment_id_owned)
+                .with_context(|| format!("resolving environment '{environment_id_owned}' for run {run_id}"))?;
+            let client = Arc::new(client);
+            let handle = client.prepare(spec).with_context(|| format!("preparing environment for run {run_id}"))?;
+            Ok::<_, anyhow::Error>((client, handle))
+        })();
+
+        match prepared {
+            Ok((client, handle)) => {
+                self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Ready, Some(&handle));
+                let response = (handle.workspace_root.clone(), handle.id.clone());
+                self.inner.leases.lock().await.insert(
+                    run_id.to_string(),
+                    ReadyLease {
+                        environment_id: environment_id.to_string(),
+                        project_root: pending.project_root.clone(),
+                        client,
+                        handle,
+                    },
+                );
+                Ok(response)
+            }
+            Err(error) => {
+                // Mark failed + reap any partial node the plugin left behind, so
+                // a failed prepare never leaks a durable record.
+                self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Failed, None);
+                self.delete_record(run_id);
+                Err(error)
+            }
+        }
+    }
+
+    /// Look up the run's lease, assert `handle_id` matches it (a runner can
+    /// NEVER exec into another run's node), and return the pinned client +
+    /// handle to drive `exec_stream` against. The lease lock is NOT held across
+    /// the exec, so a long command does not block other broker ops.
+    async fn exec_target(&self, run_id: &str, handle_id: &str) -> Result<(Arc<EnvironmentClient>, EnvironmentHandle)> {
+        let leases = self.inner.leases.lock().await;
+        let lease =
+            leases.get(run_id).ok_or_else(|| anyhow!("no prepared environment for run {run_id} (acquire first)"))?;
+        if lease.handle.id != handle_id {
+            bail!("handle '{handle_id}' does not match the lease for run {run_id}");
+        }
+        Ok((lease.client.clone(), lease.handle.clone()))
+    }
+
+    fn key_lock(&self, run_id: &str) -> Arc<AsyncMutex<()>> {
+        self.inner
+            .key_locks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(run_id.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
+    }
+
+    // -- durable records ----------------------------------------------------
+
+    fn record_path(&self, run_id: &str) -> PathBuf {
+        self.inner.records_dir.join(format!("{}.json", protocol::sanitize_identifier(run_id, "run")))
+    }
+
+    fn write_record(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        project_root: &str,
+        state: LeaseState,
+        handle: Option<&EnvironmentHandle>,
+    ) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = LeaseRecord {
+            run_id: run_id.to_string(),
+            daemon_instance_id: self.inner.daemon_instance_id.clone(),
+            environment_id: environment_id.to_string(),
+            project_root: project_root.to_string(),
+            state,
+            handle: handle.cloned(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        let path = self.record_path(run_id);
+        if let Err(error) = write_record_atomic(&path, &record) {
+            tracing::warn!(
+                target: "animus.runtime.environment_broker",
+                run_id,
+                %error,
+                "failed to persist environment lease record (best-effort; startup reap may miss this node)"
+            );
+        }
+    }
+
+    fn delete_record(&self, run_id: &str) {
+        let _ = std::fs::remove_file(self.record_path(run_id));
+    }
+
+    /// Cold-teardown every lease record owned by a PRIOR daemon instance: its
+    /// relay died with that daemon, so a fresh `resolve` + `teardown(handle)`
+    /// (dispose-by-id on a fresh plugin process) reclaims the leaked node. Then
+    /// delete the record. Records owned by THIS instance are left untouched.
+    async fn reap_prior_daemon_records(&self) {
+        let entries = match std::fs::read_dir(&self.inner.records_dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let record: LeaseRecord =
+                match std::fs::read_to_string(&path).ok().and_then(|raw| serde_json::from_str(&raw).ok()) {
+                    Some(record) => record,
+                    None => {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                };
+            if record.daemon_instance_id == self.inner.daemon_instance_id {
+                continue;
+            }
+            if let Some(handle) = record.handle.clone() {
+                let environment_id = record.environment_id.clone();
+                let project_root = record.project_root.clone();
+                let run_id = record.run_id.clone();
+                // `resolve` + `teardown` bridge async→sync internally; call
+                // directly (no outer `block_in_place`).
+                let outcome = (|| {
+                    let client = EnvironmentClient::resolve(Path::new(&project_root), &environment_id)?;
+                    client.teardown(&handle)
+                })();
+                if let Err(error) = outcome {
+                    tracing::warn!(
+                        target: "animus.runtime.environment_broker",
+                        run_id = %run_id,
+                        %error,
+                        "startup reap: cold teardown of an orphaned node failed; deleting the record anyway"
+                    );
+                } else {
+                    tracing::info!(
+                        target: "animus.runtime.environment_broker",
+                        run_id = %run_id,
+                        "startup reap: cold tore down a node leaked by a prior daemon instance"
+                    );
+                }
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Socket server.
+// ---------------------------------------------------------------------------
+
+fn bind_listener(socket_path: &str) -> std::io::Result<interprocess::local_socket::tokio::Listener> {
+    use animus_runtime_shared::reattach::local_socket_name_for;
+    use interprocess::local_socket::ListenerOptions;
+
+    if looks_like_filesystem(socket_path) && Path::new(socket_path).exists() {
+        // Clear a corpse socket from a prior run so bind succeeds.
+        let _ = std::fs::remove_file(socket_path);
+    }
+    let name = local_socket_name_for(socket_path)?;
+    let listener = ListenerOptions::new().name(name).create_tokio()?;
+
+    #[cfg(unix)]
+    if looks_like_filesystem(socket_path) {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(socket_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(socket_path, perms);
+        }
+    }
+    Ok(listener)
+}
+
+async fn accept_loop(listener: interprocess::local_socket::tokio::Listener, broker: EnvironmentBroker) {
+    use interprocess::local_socket::traits::tokio::Listener as _;
+    loop {
+        let conn = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(error) => {
+                tracing::debug!(
+                    target: "animus.runtime.environment_broker",
+                    %error,
+                    "environment broker accept loop exiting on accept error"
+                );
+                return;
+            }
+        };
+        let conn_broker = broker.clone();
+        tokio::spawn(async move {
+            if let Err(error) = handle_connection(conn, conn_broker).await {
+                tracing::debug!(
+                    target: "animus.runtime.environment_broker",
+                    %error,
+                    "environment broker connection handler exited with error"
+                );
+            }
+        });
+    }
+}
+
+async fn handle_connection(
+    conn: interprocess::local_socket::tokio::Stream,
+    broker: EnvironmentBroker,
+) -> std::io::Result<()> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut reader = BufReader::new(&conn);
+    let mut line = String::new();
+    if reader.read_line(&mut line).await? == 0 {
+        return Ok(());
+    }
+
+    let request: BrokerRequest = match serde_json::from_str(line.trim()) {
+        Ok(request) => request,
+        Err(error) => {
+            write_json_line(&conn, &json!({ "ok": false, "error": format!("malformed broker request: {error}") }))
+                .await?;
+            return Ok(());
+        }
+    };
+
+    match request {
+        BrokerRequest::Acquire { token, run_id, environment_id, spec } => {
+            if token != broker.token() {
+                write_json_line(&conn, &json!({ "ok": false, "error": "unauthorized" })).await?;
+                return Ok(());
+            }
+            match broker.acquire(&run_id, &environment_id, spec).await {
+                Ok((workspace_root, handle_id)) => {
+                    write_json_line(
+                        &conn,
+                        &json!({ "ok": true, "workspace_root": workspace_root, "handle_id": handle_id }),
+                    )
+                    .await?;
+                }
+                Err(error) => {
+                    write_json_line(&conn, &json!({ "ok": false, "error": error.to_string() })).await?;
+                }
+            }
+        }
+        BrokerRequest::Exec { token, run_id, handle_id, command, stdin, timeout_secs } => {
+            if token != broker.token() {
+                write_json_line(&conn, &json!({ "error": "unauthorized" })).await?;
+                return Ok(());
+            }
+            handle_exec(&conn, broker, run_id, handle_id, command, stdin, timeout_secs).await?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_exec(
+    conn: &interprocess::local_socket::tokio::Stream,
+    broker: EnvironmentBroker,
+    run_id: String,
+    handle_id: String,
+    command: HarnessCommand,
+    stdin: Option<String>,
+    timeout_secs: Option<u64>,
+) -> std::io::Result<()> {
+    let (client, handle) = match broker.exec_target(&run_id, &handle_id).await {
+        Ok(target) => target,
+        Err(error) => {
+            return write_json_line(conn, &json!({ "error": error.to_string() })).await;
+        }
+    };
+
+    // Forward incremental output through a channel so the streamed exec (a
+    // blocking RPC that bridges async→sync internally) and the socket writer run
+    // concurrently: `exec_stream`'s own `block_in_place` hands off the runtime
+    // worker for the command's duration while this task's writer loop drains rx.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
+    let timeout = timeout_secs.map(Duration::from_secs);
+    let exec_task = tokio::spawn(async move {
+        client.exec_stream(
+            &handle,
+            command,
+            std::collections::BTreeMap::new(),
+            stdin,
+            timeout,
+            |stream: ExecStream, text: &str| {
+                let _ = tx.send(json!({ "out": exec_stream_str(stream), "text": text }));
+            },
+        )
+    });
+
+    while let Some(frame) = rx.recv().await {
+        write_json_line(conn, &frame).await?;
+    }
+
+    match exec_task.await {
+        Ok(Ok(response)) => {
+            let done = serde_json::to_value(&response).unwrap_or(serde_json::Value::Null);
+            write_json_line(conn, &json!({ "done": done })).await?;
+        }
+        Ok(Err(error)) => {
+            write_json_line(conn, &json!({ "error": error.to_string() })).await?;
+        }
+        Err(join_error) => {
+            write_json_line(conn, &json!({ "error": format!("exec task panicked: {join_error}") })).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn write_json_line(
+    mut conn: &interprocess::local_socket::tokio::Stream,
+    value: &serde_json::Value,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut bytes = serde_json::to_vec(value).unwrap_or_default();
+    bytes.push(b'\n');
+    conn.write_all(&bytes).await?;
+    conn.flush().await
+}
+
+fn exec_stream_str(stream: ExecStream) -> &'static str {
+    match stream {
+        ExecStream::Stdout => "stdout",
+        ExecStream::Stderr => "stderr",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers.
+// ---------------------------------------------------------------------------
+
+fn looks_like_filesystem(value: &str) -> bool {
+    value.contains(std::path::MAIN_SEPARATOR) || value.contains('/')
+}
+
+/// Inject `metadata.animus_run_id = run_id` so a deterministic-naming plugin
+/// (e.g. railway) names the node stably per run. Preserves any existing
+/// metadata object; replaces a non-object metadata value.
+fn set_run_id_metadata(spec: &mut EnvironmentSpec, run_id: &str) {
+    match spec.metadata.as_object_mut() {
+        Some(map) => {
+            map.insert(ANIMUS_RUN_ID_METADATA_KEY.to_string(), json!(run_id));
+        }
+        None => {
+            spec.metadata = json!({ ANIMUS_RUN_ID_METADATA_KEY: run_id });
+        }
+    }
+}
+
+/// Directory holding the broker's durable records and (length permitting) its
+/// socket. Scoped state root when resolvable; a `$TMPDIR` fallback otherwise
+/// (tests / non-git contexts) so the broker still works without cross-restart
+/// reaping.
+fn broker_records_dir(project_root: &str) -> PathBuf {
+    protocol::scoped_state_root(Path::new(project_root)).map(|root| root.join("workflow-environments")).unwrap_or_else(
+        || std::env::temp_dir().join("animus-workflow-environments").join(std::process::id().to_string()),
+    )
+}
+
+/// Conservative Unix-domain-socket path cap (SUN_LEN is ~104 on macOS, 108 on
+/// Linux); leave headroom for platform quirks.
+const MAX_UNIX_SOCKET_PATH_BYTES: usize = 100;
+
+/// Pick a socket path under `records_dir`, falling back to `$TMPDIR` when the
+/// canonical path would exceed the SUN_LEN budget.
+fn broker_socket_path(records_dir: &Path) -> String {
+    let canonical = records_dir.join("broker.sock");
+    if canonical.as_os_str().len() <= MAX_UNIX_SOCKET_PATH_BYTES {
+        return canonical.to_string_lossy().into_owned();
+    }
+    std::env::temp_dir()
+        .join("animus-env-broker")
+        .join(std::process::id().to_string())
+        .join("broker.sock")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Ensure a filesystem-backed local socket can be bound. The short-path
+/// fallback may live outside `records_dir`, so creating only that directory is
+/// insufficient on a clean machine.
+fn ensure_socket_parent(socket_path: &str) -> std::io::Result<()> {
+    if looks_like_filesystem(socket_path) {
+        if let Some(parent) = Path::new(socket_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_record_atomic(path: &Path, record: &LeaseRecord) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let bytes = serde_json::to_vec_pretty(record).map_err(std::io::Error::other)?;
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_environment_ids_are_recognized() {
+        assert!(is_local_environment("worktree"));
+        assert!(is_local_environment("local"));
+        assert!(!is_local_environment("railway"));
+        assert!(!is_local_environment("animus-environment-railway"));
+    }
+
+    #[test]
+    fn set_run_id_metadata_preserves_existing_object() {
+        let mut spec = EnvironmentSpec {
+            kind: "railway".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: json!({ "region": "us-west" }),
+        };
+        set_run_id_metadata(&mut spec, "wf-abc");
+        assert_eq!(spec.metadata["animus_run_id"], json!("wf-abc"));
+        assert_eq!(spec.metadata["region"], json!("us-west"));
+    }
+
+    #[test]
+    fn set_run_id_metadata_replaces_null_metadata() {
+        let mut spec = EnvironmentSpec {
+            kind: "railway".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: serde_json::Value::Null,
+        };
+        set_run_id_metadata(&mut spec, "wf-xyz");
+        assert_eq!(spec.metadata["animus_run_id"], json!("wf-xyz"));
+    }
+
+    #[test]
+    fn acquire_request_parses_from_wire() {
+        let line =
+            r#"{"op":"acquire","token":"t","run_id":"wf-1","environment_id":"railway","spec":{"kind":"railway"}}"#;
+        let request: BrokerRequest = serde_json::from_str(line).expect("parse acquire");
+        match request {
+            BrokerRequest::Acquire { token, run_id, environment_id, spec } => {
+                assert_eq!(token, "t");
+                assert_eq!(run_id, "wf-1");
+                assert_eq!(environment_id, "railway");
+                assert_eq!(spec.kind, "railway");
+            }
+            BrokerRequest::Exec { .. } => panic!("expected acquire"),
+        }
+    }
+
+    #[test]
+    fn exec_request_parses_from_wire() {
+        let line = r#"{"op":"exec","token":"t","run_id":"wf-1","handle_id":"h-1","command":{"program":"echo","args":["hi"]},"stdin":null,"timeout_secs":30}"#;
+        let request: BrokerRequest = serde_json::from_str(line).expect("parse exec");
+        match request {
+            BrokerRequest::Exec { run_id, handle_id, command, timeout_secs, .. } => {
+                assert_eq!(run_id, "wf-1");
+                assert_eq!(handle_id, "h-1");
+                assert_eq!(command.program, "echo");
+                assert_eq!(timeout_secs, Some(30));
+            }
+            BrokerRequest::Acquire { .. } => panic!("expected exec"),
+        }
+    }
+
+    #[test]
+    fn lease_record_round_trips() {
+        let record = LeaseRecord {
+            run_id: "wf-1".to_string(),
+            daemon_instance_id: "daemon-a".to_string(),
+            environment_id: "railway".to_string(),
+            project_root: "/tmp/project".to_string(),
+            state: LeaseState::Ready,
+            handle: Some(EnvironmentHandle {
+                id: "node-1".to_string(),
+                workspace_root: "/workspace".to_string(),
+                metadata: serde_json::Value::Null,
+            }),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:01Z".to_string(),
+        };
+        let json = serde_json::to_string(&record).expect("serialize");
+        let decoded: LeaseRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.run_id, "wf-1");
+        assert_eq!(decoded.state, LeaseState::Ready);
+        assert_eq!(decoded.handle.unwrap().id, "node-1");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn teardown_is_idempotent_without_a_lease() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let broker = EnvironmentBroker::start(temp.path().to_string_lossy().as_ref()).await.expect("start broker");
+        // No lease for this run: teardown must be a clean no-op.
+        broker.teardown("wf-missing").await;
+        broker.teardown("wf-missing").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acquire_rejects_unregistered_run() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let broker = EnvironmentBroker::start(temp.path().to_string_lossy().as_ref()).await.expect("start broker");
+        let spec = EnvironmentSpec {
+            kind: "railway".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: serde_json::Value::Null,
+        };
+        let err = broker.acquire("wf-unregistered", "railway", spec).await.expect_err("must reject");
+        assert!(err.to_string().contains("no pending environment context"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acquire_rejects_environment_mismatch_with_registration() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let broker = EnvironmentBroker::start(temp.path().to_string_lossy().as_ref()).await.expect("start broker");
+        broker.register_run("wf-1", temp.path().to_string_lossy().as_ref(), "railway");
+        let spec = EnvironmentSpec {
+            kind: "container".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: serde_json::Value::Null,
+        };
+        let err = broker.acquire("wf-1", "container", spec).await.expect_err("must reject mismatch");
+        assert!(err.to_string().contains("is bound to environment 'railway'"), "got: {err}");
+    }
+}

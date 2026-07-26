@@ -5,6 +5,7 @@ use orchestrator_core::services::ServiceHub;
 
 use crate::AgentCommand;
 
+mod environment_exec;
 pub(crate) mod interactions;
 mod profiles;
 pub(crate) mod provider_client;

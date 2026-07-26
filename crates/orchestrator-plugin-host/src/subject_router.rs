@@ -4,40 +4,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use animus_plugin_protocol::{EnvRequirement, RpcError};
+use animus_subject_protocol_wire::{
+    SubjectCreateRequestV2, SubjectDeleteRequestV2, SubjectFilter, SubjectGetRequestV2, SubjectId,
+    SubjectListRequestV2, SubjectRequestContext, SubjectStatusRequestV2, SubjectUpdateRequestV2,
+};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 use crate::host::{PluginNotificationRx, PluginSpawnOptions};
+use crate::resident_host_registry::{
+    binary_mtime_nanos, global_resident_host_registry, ResidentHostLease, ResidentHostRegistry,
+};
 use crate::PluginHost;
-
-/// Upper bound on the number of subject-backend plugin processes the lazy
-/// router keeps alive at once. A user can have dozens of globally-installed
-/// data-source subject plugins; spawning every one at daemon startup (the
-/// pre-v0.5 behaviour) exhausted the runtime's plugin-process cap
-/// (`RuntimeQuotas::plugin_process_max`, default 50) and starved the
-/// spawn-per-call queue / workflow_runner roles of headroom. The router now
-/// spawns a subject plugin only when a request routes to one of its kinds and
-/// evicts the least-recently-used live host once this many are open, so the
-/// live subject-host set stays well below the process cap regardless of how
-/// many subject plugins are installed.
-///
-/// Override with `ANIMUS_SUBJECT_HOST_CACHE_MAX` (a non-zero `usize`); any
-/// unset / unparseable / zero value falls back to this constant.
-const DEFAULT_SUBJECT_HOST_CACHE_MAX: usize = 8;
-
-/// Env override for [`DEFAULT_SUBJECT_HOST_CACHE_MAX`].
-const SUBJECT_HOST_CACHE_MAX_ENV: &str = "ANIMUS_SUBJECT_HOST_CACHE_MAX";
-
-fn subject_host_cache_max() -> usize {
-    match std::env::var(SUBJECT_HOST_CACHE_MAX_ENV) {
-        Ok(value) => match value.trim().parse::<usize>() {
-            Ok(0) | Err(_) => DEFAULT_SUBJECT_HOST_CACHE_MAX,
-            Ok(n) => n,
-        },
-        Err(_) => DEFAULT_SUBJECT_HOST_CACHE_MAX,
-    }
-}
 
 /// Generous upper bound for a single subject-backend RPC routed through
 /// [`SubjectRouter::route_call`]. Subject ops are CRUD against a local
@@ -220,12 +198,10 @@ pub struct SubjectPluginSpec {
 ///
 /// `Eager` holds pre-spawned hosts (tests, one-shot embeds via
 /// [`SubjectRouter::from_initialized_hosts`]). `Lazy` holds per-plugin spawn
-/// specs plus an interior-mutable cache of already-spawned hosts so the router
-/// can spawn on first route and bound the live set — see [`LazyHosts`].
+/// specs and resolves hosts on first route through the shared
+/// [`ResidentHostRegistry`] — see [`LazyHosts`].
 enum HostSource {
     Eager(HashMap<String, PluginHost>),
-    // Boxed so the small `Eager` variant doesn't inflate `HostSource`'s size
-    // to the large `LazyHosts` (which embeds two mutexes + a spec map).
     Lazy(Box<LazyHosts>),
 }
 
@@ -235,220 +211,107 @@ enum HostSource {
 /// [`SubjectRouter::register_kinds_from_specs`].
 type KindTables = (HashMap<String, String>, Vec<(KindPattern, String)>, Option<String>);
 
-/// A cached, lazily-spawned subject-backend host plus a liveness token. The
-/// token (`active`) is cloned into every [`HostLease`] handed out for the host;
-/// `Arc::strong_count` therefore reveals whether any caller is currently using
-/// the host. Eviction only reaps hosts whose token count is 1 (the cache's own
-/// reference) so an evicted host can never be shut down out from under an
-/// in-flight `route_call` or a live `subject/watch` subscription.
-#[derive(Clone)]
-struct CachedHost {
-    host: PluginHost,
-    active: Arc<()>,
-}
-
-/// A borrow of a cached host that pins it against eviction for its lifetime.
-/// `route_call` holds it across its single RPC; `start_watch` parks a copy
+/// A borrow of a subject-backend host that pins it against eviction for its
+/// lifetime. `route_call` holds it across its single RPC; `start_watch` parks it
 /// inside the watch subscription so the host stays alive for the whole watch.
 /// Dropping it lets the host become eligible for LRU eviction again.
+///
+/// Cross-role host sharing (0.7 Layer B): lazy hosts live in the process-global
+/// [`ResidentHostRegistry`] shared with `config_source` / `workflow_journal`, so
+/// a multi-role plugin binary is one shared process. The pin is the registry's
+/// own [`ResidentHostLease`]. Eager hosts (test / one-shot embeds) are
+/// router-owned and never evicted, so their pin is inert.
 pub(crate) struct HostLease {
     host: PluginHost,
-    _active: Arc<()>,
+    _pin: LeasePin,
+}
+
+enum LeasePin {
+    /// Eager, router-owned host: never evicted, so nothing to pin.
+    Eager,
+    /// Lazy host leased from the shared registry: held to pin against eviction.
+    Resident(#[allow(dead_code)] ResidentHostLease),
 }
 
 impl HostLease {
     fn host(&self) -> &PluginHost {
         &self.host
     }
+
+    /// Wrap a pre-spawned eager host (router-owned, never evicted).
+    fn eager(host: PluginHost) -> Self {
+        Self { host, _pin: LeasePin::Eager }
+    }
+
+    /// Wrap a registry lease, cloning out its host handle while holding the lease
+    /// to keep the shared process pinned against eviction.
+    fn resident(lease: ResidentHostLease) -> Self {
+        Self { host: lease.host().clone(), _pin: LeasePin::Resident(lease) }
+    }
 }
 
-/// Interior-mutable, bounded cache of lazily-spawned subject-backend hosts.
+/// Lazily-spawned subject-backend hosts, resolved through the shared
+/// [`ResidentHostRegistry`].
 ///
-/// Spawning is on-demand and at most once per plugin: the first `route_call`
-/// (or watch) that resolves to a plugin spawns + handshakes its host and caches
-/// it; later calls (routes AND watches) reuse the same cached host. The cache
-/// targets a soft cap of [`subject_host_cache_max`] live hosts via
-/// least-recently-used eviction, so the idle subject-host set stays well under
-/// the runtime plugin-process cap no matter how many subject plugins are
-/// installed. The hard ceiling is always the process-slot cap the host enforces
-/// at spawn time; the soft cap just keeps the steady-state subject subset small.
-///
-/// Eviction safety: every handed-out host is pinned by a [`HostLease`] for the
-/// duration of its use (a route's RPC, or a watch's whole subscription).
-/// Eviction skips any host with a live lease and only shuts down hosts the
-/// cache alone still references — so neither an in-flight route nor an active
-/// watch is ever torn down by cache pressure. When every cached host is leased
-/// the live set may briefly exceed the soft cap; it is still bounded by the
-/// process-slot cap, and shrinks back as leases drop.
-///
-/// Concurrency / anti-deadlock contract:
-///
-/// - `specs` is immutable after construction; lookups need no lock.
-/// - The live-host map and the LRU order live behind a single
-///   [`tokio::sync::Mutex`] (`cache`). The slow `spawn_with_options().await`
-///   runs *outside* that lock: [`Self::host_for`] uses a per-plugin spawn lock
-///   (`spawn_locks`) so only one task spawns a given plugin while every other
-///   task — for that plugin or any other — keeps making progress. The short
-///   `cache` lock is only ever held for in-memory map mutation, never across a
-///   spawn or an RPC.
+/// Spawning is on-demand and at most once per plugin BINARY: the first
+/// `route_call` (or watch) that resolves to a plugin spawns + handshakes its
+/// host in the registry and caches it there; later calls (routes AND watches,
+/// AND other roles resolving the same binary) reuse the same shared process. The
+/// registry bounds the concurrently-live set via least-recently-used eviction
+/// that skips leased hosts, so neither an in-flight route nor an active watch is
+/// ever torn down by cache pressure.
 struct LazyHosts {
     /// Spawn specs keyed by plugin name. Immutable after construction.
     specs: HashMap<String, SubjectPluginSpec>,
-    /// Live hosts + LRU order, guarded by one mutex (cheap, never held across
-    /// `.await` on a spawn / RPC).
-    cache: Mutex<HostCache>,
-    /// Per-plugin spawn serialization: holding a plugin's lock guarantees only
-    /// one task spawns it. Keyed by plugin name; entries live for the router's
-    /// lifetime (one cheap `Mutex<()>` per installed subject plugin).
-    spawn_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
-    /// Soft cap: target number of live hosts retained before LRU eviction of
-    /// UNLEASED hosts kicks in.
-    max_live: usize,
-}
-
-/// Live-host map plus an LRU recency list. `order.first()` is the
-/// least-recently-used plugin name; `order.last()` the most-recent.
-#[derive(Default)]
-struct HostCache {
-    hosts: HashMap<String, CachedHost>,
-    order: Vec<String>,
-}
-
-impl HostCache {
-    /// Mark `name` as most-recently-used.
-    fn touch(&mut self, name: &str) {
-        if let Some(pos) = self.order.iter().position(|n| n == name) {
-            let existing = self.order.remove(pos);
-            self.order.push(existing);
-        } else {
-            self.order.push(name.to_string());
-        }
-    }
-
-    /// Hand out a lease for a cached host, bumping its recency.
-    fn lease(&mut self, name: &str) -> Option<HostLease> {
-        let entry = self.hosts.get(name)?.clone();
-        self.touch(name);
-        Some(HostLease { host: entry.host, _active: entry.active })
-    }
-
-    /// Remove and return the least-recently-used host that has NO live lease
-    /// (token count 1 = only the cache holds it). Leased hosts are skipped so
-    /// eviction never tears a host down out from under an active user. Returns
-    /// `None` when every cached host is currently leased.
-    fn evict_lru_unleased(&mut self) -> Option<(String, PluginHost)> {
-        let victim_pos = self
-            .order
-            .iter()
-            .position(|name| self.hosts.get(name).is_some_and(|e| Arc::strong_count(&e.active) == 1))?;
-        let victim = self.order.remove(victim_pos);
-        let entry = self.hosts.remove(&victim)?;
-        Some((victim, entry.host))
-    }
-
-    /// Evict UNLEASED least-recently-used hosts until the live count is back to
-    /// `max_live` (or no more unleased hosts remain). Returns the evicted hosts
-    /// so the caller can shut them down outside the cache lock.
-    ///
-    /// This is the opportunistic drain that recovers from a temporary overshoot
-    /// of the soft cap: when many hosts were all leased at insertion time (e.g.
-    /// a burst of long-lived watches), eviction could not run; once those leases
-    /// drop, the next route through ANY cached host — even a fast-path cache hit
-    /// — calls this to reclaim the now-idle hosts, so the cache cannot stay
-    /// above the cap indefinitely.
-    fn drain_over_cap(&mut self, max_live: usize) -> Vec<(String, PluginHost)> {
-        let mut evicted = Vec::new();
-        while self.hosts.len() > max_live {
-            match self.evict_lru_unleased() {
-                Some(victim) => evicted.push(victim),
-                None => break,
-            }
-        }
-        evicted
-    }
+    /// The process-global resident-host registry (shared across roles). Captured
+    /// at construction so a test can install a fresh registry beforehand.
+    registry: Arc<ResidentHostRegistry>,
 }
 
 impl LazyHosts {
-    /// Get-or-spawn the host for `plugin_name`, returning a [`HostLease`] that
-    /// pins the host against eviction for the caller's use. See
-    /// [`SubjectRouter::host_for`] for the anti-deadlock contract.
+    /// Resolve a leased host for `plugin_name`, spawning + handshaking it once in
+    /// the shared registry on first use. The returned [`HostLease`] pins the host
+    /// against eviction for the caller's use. The registry's per-binary spawn
+    /// lock guarantees exactly-once spawning even under concurrent routes.
     async fn host_for(&self, plugin_name: &str) -> Result<HostLease, RpcError> {
-        // Fast path: already live. Mint a lease + bump recency, AND opportunistically
-        // drain any now-idle hosts left over the soft cap by a prior overshoot
-        // (e.g. a burst of leases that blocked eviction at insertion time). The
-        // cache lock is held only for in-memory work; victim shutdown runs after
-        // it is released.
-        {
-            let (lease, evicted) = {
-                let mut cache = self.cache.lock().await;
-                match cache.lease(plugin_name) {
-                    Some(lease) => {
-                        let evicted = cache.drain_over_cap(self.max_live);
-                        (Some(lease), evicted)
-                    }
-                    None => (None, Vec::new()),
-                }
-            };
-            Self::shutdown_evicted(evicted).await;
-            if let Some(lease) = lease {
-                return Ok(lease);
-            }
-        }
-
-        if !self.specs.contains_key(plugin_name) {
+        let Some(spec) = self.specs.get(plugin_name) else {
             return Err(RpcError {
                 code: animus_plugin_protocol::error_codes::INTERNAL_ERROR,
                 message: format!("subject backend '{plugin_name}' is not available"),
                 data: None,
             });
-        }
-
-        // Per-plugin spawn serialization: clone-out the plugin's spawn lock
-        // (creating it on first sight) so we hold the tiny `spawn_locks` map
-        // lock only momentarily, then await on the per-plugin lock.
-        let spawn_lock = {
-            let mut locks = self.spawn_locks.lock().await;
-            locks.entry(plugin_name.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
         };
-        let _spawn_guard = spawn_lock.lock().await;
-
-        // Re-check under the spawn lock: a racing task may have spawned this
-        // plugin while we waited. If so, lease its host instead of double-spawning.
-        {
-            let mut cache = self.cache.lock().await;
-            if let Some(lease) = cache.lease(plugin_name) {
-                return Ok(lease);
-            }
-        }
-
-        let spec = self.specs.get(plugin_name).expect("spec presence checked above");
-        let host = self.spawn_and_handshake(spec).await?;
-
-        // Insert + mint a lease (which bumps recency), then drain UNLEASED LRU
-        // hosts back toward the soft cap. Eviction shuts victims down OUTSIDE
-        // the cache lock so a slow plugin teardown never blocks routing. The
-        // just-inserted host is leased, so it can never be a victim.
-        let (lease, evicted) = {
-            let mut cache = self.cache.lock().await;
-            cache.hosts.insert(plugin_name.to_string(), CachedHost { host, active: Arc::new(()) });
-            let lease = cache.lease(plugin_name).expect("host just inserted");
-            let evicted = cache.drain_over_cap(self.max_live);
-            (lease, evicted)
-        };
-        Self::shutdown_evicted(evicted).await;
-
-        Ok(lease)
+        let mtime = binary_mtime_nanos(&spec.path);
+        let context = Self::spawn_context(spec);
+        let lease = self
+            .registry
+            .get_or_spawn(&spec.path, mtime, &context, || async {
+                // Retry transient spawn/handshake failures inside the registry's
+                // per-binary spawn lock so a cold DB connect / fork pressure
+                // self-heals rather than surfacing as a hard board error.
+                self.spawn_and_handshake(spec).await.map_err(|error| anyhow!(error.message))
+            })
+            .await
+            .map_err(|error| RpcError {
+                code: animus_plugin_protocol::error_codes::INTERNAL_ERROR,
+                message: format!("{error}"),
+                data: None,
+            })?;
+        Ok(HostLease::resident(lease))
     }
 
-    /// Shut down a batch of evicted hosts (best-effort), outside any cache lock.
-    async fn shutdown_evicted(evicted: Vec<(String, PluginHost)>) {
-        for (victim_name, victim_host) in evicted {
-            tracing::debug!(
-                plugin = %victim_name,
-                "evicting least-recently-used idle subject backend host to stay under the live-host soft cap",
-            );
-            let _ = victim_host.shutdown().await;
-        }
+    /// Spawn-context fingerprint for a subject spec, matching the effective spawn
+    /// options [`Self::spawn_and_handshake_once`] uses: no forwarded env (subject
+    /// plugins see only manifest-declared env — the secret trust boundary), the
+    /// spec's project-root working directory, and its notification-buffer hint.
+    /// This keeps subject hosts in their own registry slot, distinct from the
+    /// full-env `config_source` / `workflow_journal` slots.
+    fn spawn_context(spec: &SubjectPluginSpec) -> String {
+        crate::resident_host_registry::spawn_context_fingerprint(
+            &[],
+            spec.working_dir.as_deref(),
+            spec.notification_buffer_size,
+        )
     }
 
     /// Spawn + handshake a subject-backend plugin, retrying on transient
@@ -511,17 +374,31 @@ impl LazyHosts {
         Ok(host)
     }
 
-    /// Shut down every currently-cached host. Called at router/daemon
-    /// shutdown, when active leases (if any) are being torn down anyway.
+    /// Shut down every resident host in the shared registry. Called at
+    /// router/daemon shutdown. Because the registry is shared across roles, this
+    /// also reaps `config_source` / `workflow_journal` hosts — desirable at
+    /// teardown, and idempotent. There is no production caller mid-life; the
+    /// daemon reaps via the role-specific `shutdown_resident_hosts` teardown.
     async fn shutdown(&self) {
-        let hosts: Vec<(String, CachedHost)> = {
-            let mut cache = self.cache.lock().await;
-            cache.order.clear();
-            cache.hosts.drain().collect()
-        };
-        for (_, entry) in hosts {
-            let _ = entry.host.shutdown().await;
+        self.registry.shutdown_all().await;
+    }
+
+    /// Test helper: whether the shared registry currently holds a live host for
+    /// `plugin_name` (by its binary path + mtime).
+    #[cfg(test)]
+    fn is_cached(&self, plugin_name: &str) -> bool {
+        match self.specs.get(plugin_name) {
+            Some(spec) => {
+                self.registry.contains(&spec.path, binary_mtime_nanos(&spec.path), &Self::spawn_context(spec))
+            }
+            None => false,
         }
+    }
+
+    /// Test helper: number of concurrently-live hosts in the shared registry.
+    #[cfg(test)]
+    fn live_len(&self) -> usize {
+        self.registry.live_len()
     }
 }
 
@@ -658,12 +535,7 @@ impl SubjectRouter {
         let (exact_kinds, glob_kinds, catch_all) = Self::register_kinds_from_specs(&specs, &aliases)?;
         let specs_by_name: HashMap<String, SubjectPluginSpec> =
             specs.into_iter().map(|spec| (spec.name.clone(), spec)).collect();
-        let lazy = LazyHosts {
-            specs: specs_by_name,
-            cache: Mutex::new(HostCache::default()),
-            spawn_locks: Mutex::new(HashMap::new()),
-            max_live: subject_host_cache_max(),
-        };
+        let lazy = LazyHosts { specs: specs_by_name, registry: global_resident_host_registry() };
         Ok(Self { exact_kinds, glob_kinds, catch_all, hosts: HostSource::Lazy(Box::new(lazy)), aliases })
     }
 
@@ -746,15 +618,11 @@ impl SubjectRouter {
     /// inert there).
     async fn host_for(&self, plugin_name: &str) -> Result<HostLease, RpcError> {
         match &self.hosts {
-            HostSource::Eager(hosts) => {
-                hosts.get(plugin_name).cloned().map(|host| HostLease { host, _active: Arc::new(()) }).ok_or_else(|| {
-                    RpcError {
-                        code: animus_plugin_protocol::error_codes::INTERNAL_ERROR,
-                        message: format!("subject backend '{plugin_name}' is not available"),
-                        data: None,
-                    }
-                })
-            }
+            HostSource::Eager(hosts) => hosts.get(plugin_name).cloned().map(HostLease::eager).ok_or_else(|| RpcError {
+                code: animus_plugin_protocol::error_codes::INTERNAL_ERROR,
+                message: format!("subject backend '{plugin_name}' is not available"),
+                data: None,
+            }),
             HostSource::Lazy(lazy) => lazy.host_for(plugin_name).await,
         }
     }
@@ -950,6 +818,78 @@ impl SubjectRouter {
         Ok(response)
     }
 
+    /// Route an authenticated application call through the actor-scoped v2
+    /// subject protocol. This is deliberately separate from
+    /// [`Self::route_call`], the explicit legacy v1 edge.
+    pub async fn route_actor_call(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        actor: &animus_actor::Actor,
+    ) -> Result<Value, RpcError> {
+        let invalid = |message: String| RpcError {
+            code: animus_plugin_protocol::error_codes::INVALID_PARAMS,
+            message,
+            data: None,
+        };
+        let v2_actor = serde_json::from_value(serde_json::to_value(actor).map_err(|error| invalid(error.to_string()))?)
+            .map_err(|error| invalid(format!("failed to convert authenticated actor: {error}")))?;
+        let context = SubjectRequestContext::for_actor(v2_actor);
+        let (kind, verb) = method
+            .split_once('/')
+            .ok_or_else(|| invalid(format!("actor-scoped subject method must be '<kind>/<verb>', got '{method}'")))?;
+        let raw = params.unwrap_or_else(|| serde_json::json!({}));
+        let request = match verb {
+            "list" => {
+                let filter_value = raw.get("filter").cloned().unwrap_or(raw);
+                let filter: SubjectFilter = serde_json::from_value(filter_value)
+                    .map_err(|error| invalid(format!("invalid subject list filter: {error}")))?;
+                serde_json::to_value(SubjectListRequestV2 { context, filter })
+            }
+            "get" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                serde_json::to_value(SubjectGetRequestV2 { context, id })
+            }
+            "create" => {
+                serde_json::to_value(SubjectCreateRequestV2 { context, kind: Some(kind.to_string()), payload: raw })
+            }
+            "update" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                let patch = raw.get("patch").cloned().unwrap_or_else(|| {
+                    let mut patch = raw;
+                    if let Value::Object(map) = &mut patch {
+                        map.remove("id");
+                    }
+                    patch
+                });
+                serde_json::to_value(SubjectUpdateRequestV2 { context, id, patch })
+            }
+            "status" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                let status = raw
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .filter(|status| !status.trim().is_empty())
+                    .ok_or_else(|| invalid("subject status requires `status`".into()))?
+                    .to_string();
+                serde_json::to_value(SubjectStatusRequestV2 { context, id, status })
+            }
+            "delete" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                serde_json::to_value(SubjectDeleteRequestV2 { context, id })
+            }
+            other => {
+                return Err(RpcError {
+                    code: animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED,
+                    message: format!("subject actor protocol v2 does not support '{other}'"),
+                    data: None,
+                })
+            }
+        }
+        .map_err(|error| invalid(format!("failed to encode subject v2 request: {error}")))?;
+        self.route_call(&format!("{kind}/v2/{verb}"), Some(request)).await
+    }
+
     pub async fn resolve_subject(&self, subject_kind: &str, subject_id: &str) -> Result<Value, RpcError> {
         self.route_call(&format!("{subject_kind}/get"), Some(serde_json::json!({ "id": subject_id }))).await
     }
@@ -969,7 +909,15 @@ impl SubjectRouter {
             Some(kind) => self.plugin_for_kind(kind).map(|name| vec![name.to_string()]).unwrap_or_default(),
             None => {
                 let mut names: Vec<String> = Vec::new();
-                for name in self.exact_kinds.values().chain(self.glob_kinds.iter().map(|(_, n)| n)) {
+                // Include the catch-all (`*`) backend alongside the exact/glob
+                // plugins: an unscoped watch must receive events for every
+                // mounted backend, including the wildcard that serves
+                // runtime-declared dynamic kinds (e.g. a portal `declare_kind`).
+                // Omitting it dropped all catch-all-served kinds from the merged
+                // `subject/changed` stream.
+                for name in
+                    self.exact_kinds.values().chain(self.glob_kinds.iter().map(|(_, n)| n)).chain(self.catch_all.iter())
+                {
                     if !names.iter().any(|existing| existing == name) {
                         names.push(name.clone());
                     }
@@ -1091,6 +1039,16 @@ impl SubjectRouter {
     pub fn aliases_are_identity(&self) -> bool {
         self.aliases.is_empty()
     }
+}
+
+fn required_subject_id(params: &Value, verb: &str) -> std::result::Result<SubjectId, String> {
+    params
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(SubjectId::new)
+        .ok_or_else(|| format!("subject {verb} requires `id`"))
 }
 
 /// Rewrite the top-level `kind` field on known response shapes from the
@@ -1245,6 +1203,7 @@ mod tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: "subject_backend".to_string(),
+                                plugin_kinds: Vec::new(),
                                 description: None,
                             },
                             capabilities: PluginCapabilities {
@@ -1252,6 +1211,7 @@ mod tests {
                                 methods: kinds.iter().map(|kind| format!("{kind}/get")).collect(),
                                 ..PluginCapabilities::default()
                             },
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     "initialized" => continue,
@@ -1342,6 +1302,7 @@ mod tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: "subject_backend".to_string(),
+                                plugin_kinds: Vec::new(),
                                 description: None,
                             },
                             capabilities: PluginCapabilities {
@@ -1349,6 +1310,7 @@ mod tests {
                                 methods: kinds.iter().map(|kind| format!("{kind}/get")).collect(),
                                 ..PluginCapabilities::default()
                             },
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     "initialized" => continue,
@@ -1606,35 +1568,21 @@ done
             }
         }
 
-        /// Restore-on-drop guard for a single process-wide env var. Only the
-        /// bounded-cap test reads `ANIMUS_SUBJECT_HOST_CACHE_MAX`, so a plain
-        /// set/restore is sufficient — no other concurrent test observes it.
-        struct EnvGuard {
-            key: &'static str,
-            prior: Option<String>,
-        }
-
-        impl EnvGuard {
-            fn set(key: &'static str, value: &str) -> Self {
-                let prior = std::env::var(key).ok();
-                std::env::set_var(key, value);
-                Self { key, prior }
-            }
-        }
-
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                match self.prior.as_deref() {
-                    Some(v) => std::env::set_var(self.key, v),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-
         /// Serialize against the process-global slot factory (shared with the
         /// host cap tests), since each lazy test spawns real plugin children.
+        /// The same lock also serializes access to the process-global resident
+        /// host registry these tests install via [`fresh_registry`].
         fn slot_guard() -> std::sync::MutexGuard<'static, ()> {
             crate::TEST_SLOT_FACTORY_GUARD.lock().unwrap_or_else(|p| p.into_inner())
+        }
+
+        /// Install a fresh process-global resident-host registry with the given
+        /// soft cap, isolating this test from any hosts a prior test left behind.
+        /// Cross-role host sharing (0.7 Layer B) moved the lazy host cache out of
+        /// the per-router `LazyHosts` into this shared registry, so a per-test
+        /// reset (under `slot_guard`) replaces the old per-router env-cap knob.
+        fn fresh_registry(max_live: usize) {
+            crate::resident_host_registry::install_resident_host_registry_for_test(max_live);
         }
 
         #[test]
@@ -1658,6 +1606,42 @@ done
         }
 
         #[test]
+        fn unscoped_watch_includes_catch_all_backend() {
+            // An unscoped (`kind = None`) watch must ask every mounted backend
+            // to watch — including the `*` catch-all that serves runtime dynamic
+            // kinds — so the merged `subject/changed` stream does not silently
+            // drop catch-all-served kinds.
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("spawns.log");
+            let specs = vec![spec(dir.path(), "tasks", "task", &log), spec(dir.path(), "baas", "*", &log)];
+            let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
+
+            let mut names = router.watch_plugin_names(None);
+            names.sort();
+            assert_eq!(
+                names,
+                vec!["baas".to_string(), "tasks".to_string()],
+                "unscoped watch must include the catch-all"
+            );
+
+            // A scoped watch is unchanged: it resolves the single owning plugin.
+            assert_eq!(router.watch_plugin_names(Some("task")), vec!["tasks".to_string()]);
+        }
+
+        #[test]
+        fn unscoped_watch_dedupes_multi_kind_backend() {
+            // A backend claiming several kinds is watched only once, and the
+            // catch-all is not double-counted when it is the same plugin name.
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("spawns.log");
+            let specs = vec![spec(dir.path(), "tasks", "task", &log), spec(dir.path(), "reqs", "requirement", &log)];
+            let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
+            let mut names = router.watch_plugin_names(None);
+            names.sort();
+            assert_eq!(names, vec!["reqs".to_string(), "tasks".to_string()]);
+        }
+
+        #[test]
         fn duplicate_catch_all_is_rejected() {
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
@@ -1671,6 +1655,7 @@ done
             let _slot = slot_guard();
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
+            fresh_registry(8);
             let specs = vec![spec(dir.path(), "tasks", "task", &log), spec(dir.path(), "issues", "issue", &log)];
             let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
 
@@ -1694,6 +1679,7 @@ done
             let _slot = slot_guard();
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
+            fresh_registry(8);
             let specs = vec![
                 spec(dir.path(), "tasks", "task", &log),
                 spec(dir.path(), "issues", "issue", &log),
@@ -1721,6 +1707,7 @@ done
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
             // Plugin natively serves `task`, installed under `archive`.
+            fresh_registry(8);
             let specs = vec![spec(dir.path(), "archive", "task", &log)];
             let mut aliases = KindAliasMap::default();
             aliases.insert("archive", "archive", "task");
@@ -1744,6 +1731,7 @@ done
             let _slot = slot_guard();
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
+            fresh_registry(8);
             let specs = vec![spec(dir.path(), "any-task", "task.*", &log)];
             let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
 
@@ -1762,10 +1750,10 @@ done
         #[allow(clippy::await_holding_lock)] // intentional: serializes real-spawn tests across awaits
         async fn active_watch_host_is_pinned_against_lru_eviction() {
             let _slot = slot_guard();
-            // Cap the soft cache at 1 so route LRU pressure is maximal; a watch
-            // on `wk` must NOT be evicted by routing to other kinds, because the
-            // watch holds a lease that pins its cached host against eviction.
-            let _env = EnvGuard::set(SUBJECT_HOST_CACHE_MAX_ENV, "1");
+            // Cap the shared registry at 1 so route LRU pressure is maximal; a
+            // watch on `wk` must NOT be evicted by routing to other kinds, because
+            // the watch holds a lease that pins its cached host against eviction.
+            fresh_registry(1);
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
             let specs = vec![
@@ -1779,17 +1767,14 @@ done
             // a lease pinning it.
             let sub = router.start_watch("watcher", Some("wk"), None).await.expect("watch starts");
             let HostSource::Lazy(lazy) = &router.hosts else { panic!("expected lazy") };
-            assert!(lazy.cache.lock().await.hosts.contains_key("watcher"), "watch host is cached and shared");
+            assert!(lazy.is_cached("watcher"), "watch host is cached and shared");
 
             // Drive route LRU churn well past the soft cap of 1; the leased
             // watch host must survive because eviction skips leased hosts.
             router.route_call("oa/list", None).await.expect("route oa");
             router.route_call("ob/list", None).await.expect("route ob");
 
-            assert!(
-                lazy.cache.lock().await.hosts.contains_key("watcher"),
-                "leased watch host must survive route-driven eviction pressure",
-            );
+            assert!(lazy.is_cached("watcher"), "leased watch host must survive route-driven eviction pressure");
             // The watcher spawned exactly once and was never re-spawned.
             let watcher_spawns = spawn_log_lines(&log).iter().filter(|n| *n == "watcher").count();
             assert_eq!(watcher_spawns, 1, "watch host spawned once and survived eviction");
@@ -1802,10 +1787,7 @@ done
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let result = router.route_call("oa/list", None).await.expect("route oa again (fast-path drain)");
             assert_eq!(result["routed"], "other-a");
-            assert!(
-                lazy.cache.lock().await.hosts.len() <= 1,
-                "once all leases drop, a single route drains the cache back to the soft cap",
-            );
+            assert!(lazy.live_len() <= 1, "once all leases drop, a single route drains the cache back to the soft cap");
 
             router.shutdown().await;
         }
@@ -1819,7 +1801,7 @@ done
             // cache hit — must drain the cache back to the cap rather than leave
             // idle hosts alive forever.
             let _slot = slot_guard();
-            let _env = EnvGuard::set(SUBJECT_HOST_CACHE_MAX_ENV, "1");
+            fresh_registry(1);
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
             let specs = vec![
@@ -1835,20 +1817,16 @@ done
             let l1 = lazy.host_for("a").await.expect("lease a");
             let l2 = lazy.host_for("b").await.expect("lease b");
             let l3 = lazy.host_for("c").await.expect("lease c");
-            assert_eq!(lazy.cache.lock().await.hosts.len(), 3, "all three leased hosts are cached, over the cap");
+            assert_eq!(lazy.live_len(), 3, "all three leased hosts are cached, over the cap");
 
             // Drop the leases: the hosts are now idle but still cached.
             drop((l1, l2, l3));
-            assert_eq!(lazy.cache.lock().await.hosts.len(), 3, "dropping leases alone does not evict");
+            assert_eq!(lazy.live_len(), 3, "dropping leases alone does not evict");
 
             // A single fast-path route to an already-cached plugin drains the
             // overshoot back to the soft cap of 1.
             router.route_call("ka/list", None).await.expect("route ka (fast-path)");
-            assert_eq!(
-                lazy.cache.lock().await.hosts.len(),
-                1,
-                "fast-path drain reclaims idle over-cap hosts down to the soft cap",
-            );
+            assert_eq!(lazy.live_len(), 1, "fast-path drain reclaims idle over-cap hosts down to the soft cap");
 
             router.shutdown().await;
         }
@@ -1857,9 +1835,9 @@ done
         #[allow(clippy::await_holding_lock)] // intentional: serializes real-spawn tests across awaits
         async fn live_host_set_stays_bounded_under_the_cap() {
             let _slot = slot_guard();
-            // Force a cache cap of 2 via the env override; route to three
-            // distinct kinds and assert the live host count never exceeds 2.
-            let _env = EnvGuard::set(SUBJECT_HOST_CACHE_MAX_ENV, "2");
+            // Force a shared-registry cap of 2; route to three distinct kinds and
+            // assert the live host count never exceeds 2.
+            fresh_registry(2);
             let dir = tempfile::tempdir().unwrap();
             let log = dir.path().join("spawns.log");
             let specs = vec![
@@ -1877,10 +1855,7 @@ done
             let HostSource::Lazy(lazy) = &router.hosts else {
                 panic!("expected lazy host source");
             };
-            let live = {
-                let cache = lazy.cache.lock().await;
-                cache.hosts.len()
-            };
+            let live = lazy.live_len();
             assert!(live <= 2, "live host count {live} must stay within the cap of 2");
             // All three were spawned over time; the cap bounds CONCURRENT live
             // hosts, not the cumulative spawn count.

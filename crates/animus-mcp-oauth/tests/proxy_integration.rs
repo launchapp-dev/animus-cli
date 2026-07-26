@@ -44,9 +44,13 @@ struct MockState {
     /// Set once the `/token` refresh endpoint has been called.
     refreshed: Arc<Mutex<bool>>,
     token_calls: Arc<Mutex<usize>>,
+    /// Count of OAuth Authorization-Server discovery (`.well-known`) hits, used
+    /// to prove the discovery-metadata cache avoids re-discovery per spawn.
+    well_known_calls: Arc<Mutex<usize>>,
 }
 
 async fn well_known(State(state): State<MockState>) -> impl IntoResponse {
+    *state.well_known_calls.lock().await += 1;
     let base = state.base_url.lock().await.clone();
     (
         StatusCode::OK,
@@ -169,6 +173,7 @@ async fn spawn_mock(require_refresh: bool) -> (String, MockState) {
         require_refresh,
         refreshed: Arc::new(Mutex::new(false)),
         token_calls: Arc::new(Mutex::new(0)),
+        well_known_calls: Arc::new(Mutex::new(0)),
     };
     let app = Router::new()
         .route("/.well-known/oauth-authorization-server", get(well_known))
@@ -247,7 +252,7 @@ async fn tools_list_passes_bearer_through_to_upstream() {
     // Fresh token, long expiry → no refresh needed.
     let secrets = seed_token("github", "local", &url, ACCESS_TOKEN_FRESH, 3600, true);
 
-    let proxy = animus_mcp_oauth::proxy::McpProxy::connect_with_store("github", &url, secrets, "local")
+    let proxy = animus_mcp_oauth::proxy::McpProxy::connect_with_store("github", &url, secrets, "local", None)
         .await
         .expect("proxy connects with stored token");
 
@@ -280,7 +285,7 @@ async fn upstream_401_triggers_refresh_and_retry() {
     // upstream additionally 401s until the refresh lands.
     let secrets = seed_token("linear", "local", &url, "stale-token", 1, false);
 
-    let proxy = animus_mcp_oauth::proxy::McpProxy::connect_with_store("linear", &url, secrets, "local")
+    let proxy = animus_mcp_oauth::proxy::McpProxy::connect_with_store("linear", &url, secrets, "local", None)
         .await
         .expect("proxy connects");
 
@@ -297,5 +302,71 @@ async fn upstream_401_triggers_refresh_and_retry() {
     assert!(
         headers.iter().any(|h| h == &format!("Bearer {ACCESS_TOKEN_REFRESHED}")),
         "a request must carry the refreshed bearer, saw: {headers:?}"
+    );
+}
+
+/// TASK-326 (fix a): with a discovery-metadata cache directory supplied, the
+/// SECOND proxy connect for the same `(server, url)` must reuse the cached
+/// `.well-known` OAuth metadata instead of re-running discovery against the
+/// (throttle-prone) upstream. We assert the discovery endpoint is hit exactly
+/// ONCE across two connects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovery_metadata_cache_skips_rediscovery() {
+    let (base, state) = spawn_mock(false).await;
+    let url = format!("{base}/mcp");
+    // Ignore discovery hits from the readiness probe in `spawn_mock`.
+    *state.well_known_calls.lock().await = 0;
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    // First connect: cache miss → one live discovery, then cached.
+    let secrets1 = seed_token("krisp", "local", &url, ACCESS_TOKEN_FRESH, 3600, true);
+    let proxy1 =
+        animus_mcp_oauth::proxy::McpProxy::connect_with_store("krisp", &url, secrets1, "local", Some(cache.path()))
+            .await
+            .expect("first proxy connect");
+    proxy1.forward_request_for_test(tools_list_request()).await.expect("tools/list on first connect");
+    assert_eq!(*state.well_known_calls.lock().await, 1, "first connect must discover exactly once");
+
+    // Second connect (same server+url+cache): cache hit → NO further discovery.
+    let secrets2 = seed_token("krisp", "local", &url, ACCESS_TOKEN_FRESH, 3600, true);
+    let proxy2 =
+        animus_mcp_oauth::proxy::McpProxy::connect_with_store("krisp", &url, secrets2, "local", Some(cache.path()))
+            .await
+            .expect("second proxy connect");
+    proxy2.forward_request_for_test(tools_list_request()).await.expect("tools/list on second connect");
+
+    assert_eq!(
+        *state.well_known_calls.lock().await,
+        1,
+        "second connect must reuse cached discovery metadata, not re-hit the upstream .well-known endpoint"
+    );
+}
+
+/// TASK-326 (fix a, unauthenticated gate): with NO stored token for the server,
+/// connecting must fail fast WITHOUT running discovery priming. Priming a live
+/// `.well-known` discovery for an unauthenticated server would regress the
+/// fast-fail startup path into a needless network round-trip. We assert the
+/// connect errors and the discovery endpoint is never hit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unauthenticated_server_skips_discovery_priming() {
+    let (base, state) = spawn_mock(false).await;
+    let url = format!("{base}/mcp");
+    // Ignore discovery hits from the readiness probe in `spawn_mock`.
+    *state.well_known_calls.lock().await = 0;
+
+    let cache = tempfile::tempdir().expect("cache tempdir");
+
+    // Empty secret store: no token stored for this server.
+    let secrets: Arc<dyn SecretStore> = Arc::new(MockSecretStore::new());
+    let result =
+        animus_mcp_oauth::proxy::McpProxy::connect_with_store("unauthed", &url, secrets, "local", Some(cache.path()))
+            .await;
+
+    assert!(result.is_err(), "connect must fail when no token is stored");
+    assert_eq!(
+        *state.well_known_calls.lock().await,
+        0,
+        "an unauthenticated server (no stored token) must skip discovery priming and fast-fail"
     );
 }

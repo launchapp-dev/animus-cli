@@ -52,6 +52,7 @@ pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
             RequiredRole::Queue => summaries.iter().any(|s| s.is_queue()),
             RequiredRole::ConfigSource => summaries.iter().any(|s| s.is_config_source()),
             RequiredRole::WorkflowJournal => summaries.iter().any(|s| s.is_workflow_journal()),
+            RequiredRole::Environment => summaries.iter().any(|s| s.is_environment()),
         };
         if !satisfied {
             missing_roles.push(label);

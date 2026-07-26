@@ -154,6 +154,15 @@ pub trait TaskServiceApi: Send + Sync {
 #[async_trait]
 pub trait WorkflowServiceApi: Send + Sync {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>>;
+    /// Lightweight no-blob run summaries — the daemon's stale-in-progress
+    /// reconcile uses this instead of [`Self::list`] so its heartbeat sweep never
+    /// fetches + deserializes every run's opaque blob.
+    async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>>;
+    /// Only the NON-terminal runs (pending/running/paused), with full blobs. The
+    /// daemon's per-tick reconciliation legs (orphan recovery, journal-resume,
+    /// manual-timeout) act only on active runs, so this avoids the all-runs
+    /// full-blob scan (`list`) that ran every heartbeat.
+    async fn list_active(&self) -> Result<Vec<OrchestratorWorkflow>>;
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>>;
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>>;
@@ -166,6 +175,16 @@ pub trait WorkflowServiceApi: Send + Sync {
     /// runs, local CLI). The actor is NEVER synthesized from workflow YAML, agent
     /// output, or subject content.
     async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow>;
+    /// Bootstrap a workflow with a kernel-selected stable id. This is reserved
+    /// for durable caller-idempotency: the id is persisted in the reservation
+    /// before any enqueue/spawn, allowing a restarted process to reconcile the
+    /// exact run without a subject scan or a second launch.
+    async fn run_with_id(
+        &self,
+        id: String,
+        input: WorkflowRunInput,
+        actor: Option<&Actor>,
+    ) -> Result<OrchestratorWorkflow>;
     async fn resume(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn pause(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn cancel(&self, id: &str) -> Result<OrchestratorWorkflow>;

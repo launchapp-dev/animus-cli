@@ -41,7 +41,7 @@ use anyhow::{Context, Result};
 use futures_core::Stream;
 use futures_util::StreamExt;
 use orchestrator_plugin_host::{
-    discover_plugins, DiscoveredPlugin, KindAliasMap, PluginLockfile, SubjectPluginSpec, SubjectRouter,
+    discover_by_kind, DiscoveredPlugin, KindAliasMap, PluginLockfile, SubjectPluginSpec, SubjectRouter,
 };
 use serde_json::Value;
 
@@ -125,6 +125,24 @@ impl SubjectPluginDispatch {
             None => Err(RpcError {
                 code: animus_plugin_protocol::error_codes::METHOD_NOT_FOUND,
                 message: format!("no subject backend mounted for kind '{kind}'"),
+                data: None,
+            }),
+        }
+    }
+
+    /// Route through the non-downgradable actor-scoped subject v2 wire.
+    pub async fn route_actor_call(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        actor: &animus_actor::Actor,
+    ) -> Result<Value, RpcError> {
+        let kind = method.split('/').next().unwrap_or_default();
+        match self.router.as_deref() {
+            Some(router) => router.route_actor_call(method, params, actor).await,
+            None => Err(RpcError {
+                code: animus_plugin_protocol::error_codes::METHOD_NOT_FOUND,
+                message: format!("no actor-aware subject backend mounted for kind '{kind}'"),
                 data: None,
             }),
         }
@@ -478,9 +496,12 @@ pub fn subject_plugins_disable_env_set() -> bool {
 }
 
 /// Filter the project's installed plugins down to subject backends.
+///
+/// v0.7 multi-kind: matches a plugin's primary `plugin_kind` OR any of its
+/// additional `plugin_kinds` via [`discover_by_kind`], so a consolidated
+/// plugin that serves `subject_backend` as a secondary role is still routed.
 pub fn discover_subject_backends(project_root: &Path) -> Result<Vec<DiscoveredPlugin>> {
-    let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == PLUGIN_KIND_SUBJECT_BACKEND).collect())
+    discover_by_kind(project_root, PLUGIN_KIND_SUBJECT_BACKEND)
 }
 
 /// Outcome of [`resolve_subject_dispatch`].
@@ -671,11 +692,13 @@ mod tests {
                 name: name.to_string(),
                 version: "0.1.0".to_string(),
                 plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                plugin_kinds: vec![],
                 description: "fake".to_string(),
                 protocol_version: "1.0.0".to_string(),
                 capabilities: vec![],
                 env_required: vec![],
                 notification_buffer_size: None,
+                supports_mcp: None,
             },
             source: DiscoverySource::ProjectLocal,
         }
@@ -707,6 +730,7 @@ mod tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                plugin_kinds: vec![],
                                 description: None,
                             },
                             capabilities: PluginCapabilities {
@@ -714,6 +738,7 @@ mod tests {
                                 methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
                                 ..PluginCapabilities::default()
                             },
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     "initialized" => continue,
@@ -756,6 +781,7 @@ mod tests {
                                     name: name_for_task.clone(),
                                     version: "0.1.0".to_string(),
                                     plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                    plugin_kinds: vec![],
                                     description: None,
                                 },
                                 capabilities: PluginCapabilities {
@@ -763,6 +789,7 @@ mod tests {
                                     methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
                                     ..PluginCapabilities::default()
                                 },
+                                kind_capabilities: std::collections::HashMap::new(),
                             }),
                         );
                         let mut encoded = serde_json::to_string(&response).expect("encode");
@@ -868,6 +895,7 @@ mod tests {
                                     name: name_for_task.clone(),
                                     version: "0.1.0".to_string(),
                                     plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                    plugin_kinds: vec![],
                                     description: None,
                                 },
                                 capabilities: PluginCapabilities {
@@ -875,6 +903,7 @@ mod tests {
                                     methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
                                     ..PluginCapabilities::default()
                                 },
+                                kind_capabilities: std::collections::HashMap::new(),
                             }),
                         );
                         let mut encoded = serde_json::to_string(&response).expect("encode");

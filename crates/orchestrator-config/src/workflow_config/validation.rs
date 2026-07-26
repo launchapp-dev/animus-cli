@@ -427,13 +427,13 @@ fn validate_oauth_config(server_name: &str, transport: Option<&str>, oauth: &Oau
             }
         }
         OauthFlow::AuthorizationCode => {
-            // Discovery + DCR fill in the token/authorization endpoints, so
-            // none of the machine-to-machine `*_env` fields apply. Reject
-            // them so a misplaced credential pointer surfaces at validation
-            // time rather than being silently ignored.
+            // Discovery + DCR fill in the token/authorization endpoints, so the
+            // machine-to-machine `*_env` fields don't apply — EXCEPT
+            // `client_secret_env`, which pins the secret of a CONFIDENTIAL
+            // pre-registered app (handled below). Reject the rest so a misplaced
+            // credential pointer surfaces at validation time.
             for (value, name) in [
                 (&oauth.client_id_env, "client_id_env"),
-                (&oauth.client_secret_env, "client_secret_env"),
                 (&oauth.refresh_token_env, "refresh_token_env"),
                 (&oauth.bearer_env, "bearer_env"),
                 (&oauth.token_url, "token_url"),
@@ -447,8 +447,29 @@ fn validate_oauth_config(server_name: &str, transport: Option<&str>, oauth: &Oau
             // skip Dynamic Client Registration with an empty id, failing later
             // at the browser/token-exchange step. Reject it here. Omit the key
             // entirely to use DCR.
+            let has_pinned_client_id = oauth.client_id.as_ref().is_some_and(|id| !id.trim().is_empty());
             if oauth.client_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
                 errors.push(format!("{} must not be blank for flow=\"authorization_code\"", field("client_id")));
+            }
+            // `client_secret_env` names the keychain/env entry holding the secret
+            // of a CONFIDENTIAL pre-registered app (providers like HubSpot that
+            // require a `client_secret` at token exchange). It only makes sense
+            // alongside a pinned `client_id` — there is no client to attach a
+            // secret to under DCR — and the name itself must be non-blank.
+            if let Some(secret_env) = oauth.client_secret_env.as_ref() {
+                if secret_env.trim().is_empty() {
+                    errors.push(format!(
+                        "{} must not be blank for flow=\"authorization_code\"",
+                        field("client_secret_env")
+                    ));
+                }
+                if !has_pinned_client_id {
+                    errors.push(format!(
+                        "{} requires a pinned {} for flow=\"authorization_code\"",
+                        field("client_secret_env"),
+                        field("client_id")
+                    ));
+                }
             }
         }
     }

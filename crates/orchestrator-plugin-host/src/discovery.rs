@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use animus_plugin_protocol::PluginManifest;
@@ -8,6 +9,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
 
+use crate::db_registry::PluginRegistrySource;
 use crate::host::PLUGIN_BASE_ENV_ALLOWLIST;
 use crate::lockfile::PluginLockfile;
 use crate::manifest_cache::ManifestCache;
@@ -29,6 +31,38 @@ pub enum DiscoverySource {
     ProjectLocal,
     PluginPath,
     SystemPath,
+    /// The desired plugin set read from the Postgres `plugin_registry` served
+    /// by the animus-postgres BaaS. Opt-in — only active once the daemon wires
+    /// a [`PluginRegistrySource`] AFTER the bootstrap DB-backend plugin is up
+    /// (see [`crate::db_registry`]).
+    DbRegistry,
+}
+
+impl DiscoverySource {
+    /// `true` when a candidate from this source can be committed into a
+    /// cloned repository, and is therefore attacker-controlled on a server
+    /// that clones untrusted repos.
+    ///
+    /// Only [`DiscoverySource::ProjectLocal`] is repo-shippable — it covers
+    /// BOTH the project-local `<project>/.animus/plugins/` directory scan AND
+    /// the project-local `<project>/.animus/plugins.yaml` registry (whose
+    /// `binary:` entries the repo author controls). Every other source is
+    /// operator-installed into the user/global registry
+    /// (`ExplicitConfig` → `~/.animus/plugins.yaml`), the global install dir
+    /// (`PluginPath`), or the operator's `$PATH` (`SystemPath`), and is
+    /// trusted.
+    ///
+    /// UNTRUSTED candidates are pre-probe gated by the scope's filename slug
+    /// ([`PluginScope::may_probe`]) and, one layer up, are only enumerated at
+    /// all when the caller opts into project-local probing
+    /// ([`PluginDiscovery::probe_project_local_plugins`]). TRUSTED candidates
+    /// are always probed so the post-probe manifest-name fallback
+    /// ([`crate::scope::PluginScope::admits`]) can still admit a plugin
+    /// installed under a `--name <NAME>` override whose filename slug is not
+    /// in the flavor admit set.
+    pub fn is_untrusted(self) -> bool {
+        matches!(self, DiscoverySource::ProjectLocal)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,12 +118,29 @@ struct PluginsConfig {
     providers: BTreeMap<String, PluginConfigEntry>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct PluginDiscovery {
     project_root: Option<PathBuf>,
     config_path: Option<PathBuf>,
     include_system_path: bool,
+    probe_project_local_plugins: bool,
     scope: Option<PluginScope>,
+    db_registry: Option<Arc<dyn PluginRegistrySource>>,
+}
+
+// Manual Debug: `dyn PluginRegistrySource` is not `Debug`, so the derive can't
+// apply. The source is rendered as an opaque presence marker.
+impl std::fmt::Debug for PluginDiscovery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginDiscovery")
+            .field("project_root", &self.project_root)
+            .field("config_path", &self.config_path)
+            .field("include_system_path", &self.include_system_path)
+            .field("probe_project_local_plugins", &self.probe_project_local_plugins)
+            .field("scope", &self.scope)
+            .field("db_registry", &self.db_registry.as_ref().map(|_| "<PluginRegistrySource>"))
+            .finish()
+    }
 }
 
 /// A binary the discovery walker found and now needs a manifest for.
@@ -102,6 +153,11 @@ struct ProbeCandidate {
 enum ProbeOutcome {
     Hit(PluginManifest),
     Probed(Result<PluginManifest>),
+    /// The candidate was NOT executed because the active plugin scope
+    /// could not admit it (its filename-derived slug is outside the
+    /// admit set). Carries the human-facing reason for the surfaced
+    /// [`DiscoveryWarning`].
+    SkippedOutOfScope(String),
 }
 
 fn cap_parallelism() -> usize {
@@ -173,8 +229,56 @@ fn resolve_manifests(
     candidates: &[ProbeCandidate],
     cache: &ManifestCache,
     lockfile: Option<&PluginLockfile>,
+    scope: Option<&PluginScope>,
 ) -> Vec<ProbeOutcome> {
     let mut outcomes: Vec<Option<ProbeOutcome>> = (0..candidates.len()).map(|_| None).collect();
+
+    // SECURITY: gate the `--manifest` probe (which EXECUTES the candidate
+    // binary) on TRUST + scope BEFORE any hashing or spawning.
+    //
+    // The pre-probe skip fires ONLY for UNTRUSTED (repo-shippable)
+    // candidates — `DiscoverySource::ProjectLocal`, covering both the
+    // project-local `.animus/plugins/` dir scan and the project-local
+    // `.animus/plugins.yaml` registry — whose filename-derived slug the
+    // active scope cannot admit ([`PluginScope::may_probe`]). This is the
+    // load-bearing defense against a cloned hostile repo shipping an
+    // attacker binary (or a `plugins.yaml` `binary:` entry pointing at one)
+    // and getting it executed during discovery. Because the attacker
+    // controls the file name, only the path/filename gate is authoritative
+    // for these sources — a logical-name escape is NOT offered, or a hostile
+    // repo could pair an admitted logical key (`animus-provider-claude`)
+    // with `binary: .animus/plugins/evil` and get the evil binary run.
+    //
+    // TRUSTED candidates (global registry, global install dir, `$PATH`) are
+    // never pre-probe skipped: they are operator-installed, not
+    // repo-shippable, so we always probe them and let the post-probe
+    // [`crate::scope::PluginScope::admits`] predicate filter — which
+    // additionally consults the manifest-declared name so a plugin installed
+    // under a `--name <NAME>` override (whose filename slug is outside the
+    // flavor admit set) is still discovered.
+    //
+    // Unrestricted (mode=all) scopes admit everything, so local-dev behavior
+    // is unchanged.
+    let mut gated: Vec<bool> = vec![false; candidates.len()];
+    if let Some(scope) = scope {
+        if !scope.admits_everything() {
+            for (idx, cand) in candidates.iter().enumerate() {
+                if !cand.source.is_untrusted() {
+                    continue;
+                }
+                if !scope.may_probe(&cand.path) {
+                    gated[idx] = true;
+                    outcomes[idx] = Some(ProbeOutcome::SkippedOutOfScope(format!(
+                        "skipped --manifest probe: `{}` is not admitted by the active plugin scope ({}); \
+                         binary was NOT executed",
+                        cand.name,
+                        scope.mode.as_wire(),
+                    )));
+                }
+            }
+        }
+    }
+
     let cache_enabled = cache.is_enabled();
     // When the cache is disabled (kill switch), skip every hash — we
     // cannot use the digest for lookup OR insert, so paying the I/O is
@@ -182,12 +286,18 @@ fn resolve_manifests(
     let mut shas: Vec<Option<String>> = vec![None; candidates.len()];
     if cache_enabled {
         for (idx, cand) in candidates.iter().enumerate() {
+            if gated[idx] {
+                continue;
+            }
             shas[idx] = resolve_sha_for_binary(lockfile, &cand.name, &cand.path);
         }
     }
 
     let mut probe_indices: Vec<usize> = Vec::new();
     for (idx, cand) in candidates.iter().enumerate() {
+        if gated[idx] {
+            continue;
+        }
         if !cache_enabled || !is_executable(&cand.path) {
             probe_indices.push(idx);
             continue;
@@ -309,16 +419,63 @@ impl PluginDiscovery {
         self
     }
 
-    /// Apply a [`PluginScope`] filter to the discovered set. Plugins
-    /// outside the scope are removed from the returned `discovered`
-    /// list AFTER the manifest probe completes — warnings for failed
-    /// probes still surface so operators retain diagnostic info on
-    /// out-of-scope plugins whose manifest is broken.
+    /// Opt in to the project-local (repo-shippable) discovery tier:
+    /// the `<project_root>/.animus/plugins/` directory scan AND the
+    /// `<project_root>/.animus/plugins.yaml` project registry.
+    ///
+    /// Defaults to `false`. This is the hostile-repo defense: BOTH sources
+    /// EXECUTE a binary the repo author controls (the dir scan runs every
+    /// matching `animus-plugin-*` / `animus-provider-*` file with
+    /// `--manifest`; the registry runs whatever its `binary:` entries point
+    /// at), so a cloud daemon that clones a repo shipping
+    /// `.animus/plugins/animus-provider-evil` — or a `.animus/plugins.yaml`
+    /// with `binary: ./.animus/plugins/evil` — would otherwise run that
+    /// attacker binary during discovery. Cloud daemons / servers therefore
+    /// leave this OFF (see [`discover_plugins`]); explicit local-dev flows
+    /// that intentionally support project-scoped installs opt in (see
+    /// [`discover_plugins_including_project_local`]).
+    ///
+    /// When opted in, probes from these sources remain subject to the
+    /// pre-probe [`PluginScope::may_probe`] gate (defense in depth for a
+    /// local dev with a restricted flavor/allowlist scope). Every other tier
+    /// (global registry, global install dir, `$ANIMUS_PLUGIN_PATH`, `$PATH`)
+    /// is unaffected by this flag.
+    pub fn probe_project_local_plugins(mut self, probe_project_local_plugins: bool) -> Self {
+        self.probe_project_local_plugins = probe_project_local_plugins;
+        self
+    }
+
+    /// Apply a [`PluginScope`] filter to discovery.
+    ///
+    /// The scope is resolved BEFORE any `--manifest` probe and gates which
+    /// candidates are executed at all: a candidate whose filename-derived
+    /// slug the scope cannot admit is never spawned (see
+    /// [`PluginScope::may_probe`]) and surfaces as a "skipped, out of
+    /// scope" [`DiscoveryWarning`] instead. Candidates that clear the
+    /// pre-probe gate are still filtered by the post-probe
+    /// [`PluginScope::admits`] predicate (which additionally consults the
+    /// manifest-declared name for `--name` overrides).
     ///
     /// When this builder method is not called, [`PluginScopeMode::All`]
-    /// semantics apply (the v0.5.8 behavior).
+    /// semantics apply (the v0.5.8 behavior) and every candidate is
+    /// probeable.
     pub fn with_scope(mut self, scope: PluginScope) -> Self {
         self.scope = Some(scope);
+        self
+    }
+
+    /// Wire the DB-backed plugin registry ([`PluginRegistrySource`]) as an
+    /// additional discovery tier. The tier resolves the desired plugin set
+    /// recorded in the Postgres `plugin_registry` against the binaries present
+    /// on the volume.
+    ///
+    /// Bootstrap paradox: the daemon must call this ONLY after the bootstrap
+    /// DB-backend plugin is up (the plugin that serves the registry can't be
+    /// gated on the registry). When this builder is not called, discovery runs
+    /// the file/dir tiers alone and the DB tier is a no-op. See
+    /// [`crate::db_registry`].
+    pub fn with_db_registry(mut self, source: Arc<dyn PluginRegistrySource>) -> Self {
+        self.db_registry = Some(source);
         self
     }
 
@@ -343,7 +500,12 @@ impl PluginDiscovery {
     ///    registry (`<project_root>/.animus/plugins.yaml`) — the
     ///    highest-priority tier so a project-scoped install
     ///    (`animus plugin install --project`) shadows BOTH a hand-pinned
-    ///    global registry entry and a global install of the same name.
+    ///    global registry entry and a global install of the same name. Both
+    ///    of these sources are repo-shippable (UNTRUSTED) and are only walked
+    ///    when the caller opts into
+    ///    [`PluginDiscovery::probe_project_local_plugins`]; the server-safe
+    ///    default ([`discover_plugins`]) skips the entire tier so a cloned
+    ///    hostile repo's binaries are never executed during discovery.
     /// 2. Explicit registry config (`~/.animus/plugins.yaml`, or the path
     ///    supplied to [`PluginDiscovery::with_config_path`]). Every global
     ///    `animus plugin install` records its entry here, so this tier is
@@ -368,35 +530,103 @@ impl PluginDiscovery {
         let cache = ManifestCache::from_default();
         let lockfile = PluginLockfile::load_default(self.project_root.as_deref()).ok();
 
+        // SECURITY: resolve the effective scope FIRST — before any
+        // `scan_dir` / `--manifest` probe. The probe EXECUTES the candidate
+        // binary, so it MUST be gated by the scope's admit set up front,
+        // not filtered afterwards. Previously scope resolution ran last and
+        // every candidate (including project-local binaries shipped inside a
+        // cloned hostile repo) was executed before the filter applied.
+        //
+        // Auto-load the project scope when a `project_root` is set but no
+        // explicit `with_scope(...)` override has been supplied, so the
+        // dozen-or-so direct PluginDiscovery callers honor
+        // `.animus/plugin-scope.yaml` without wiring the loader manually.
+        // Builders wanting unrestricted discovery pass
+        // `PluginScope::unrestricted()` explicitly.
+        let effective_scope: Option<PluginScope> = match &self.scope {
+            Some(s) => Some(s.clone()),
+            None => self.project_root.as_ref().map(|root| {
+                PluginScope::load_for_project(root).unwrap_or_else(|err| {
+                    tracing::warn!(
+                        error = %err,
+                        "failed to auto-load plugin scope; falling back to unrestricted discovery"
+                    );
+                    PluginScope::unrestricted()
+                })
+            }),
+        };
+        let scope_ref = effective_scope.as_ref();
+
         // Project-local installs scan FIRST: the explicit registry yaml is
         // written by every global `animus plugin install`, so letting it win
         // would silently invert the documented "project shadows global" rule
         // for any name that was ever installed globally.
         if let Some(project_root) = &self.project_root {
-            scan_dir(
-                &project_root.join(".animus/plugins"),
-                DiscoverySource::ProjectLocal,
-                &mut discovered,
-                &mut warnings,
-                &mut seen,
-                &cache,
-                lockfile.as_ref(),
-            );
-            // The dir scan only matches `animus-plugin-*` /
-            // `animus-provider-*` file names; the project registry tier
-            // resolves project-scoped installs of every other official
-            // plugin name (`animus-subject-*`, `animus-queue-*`, ...).
-            self.discover_project_registry(
-                project_root,
-                &mut discovered,
-                &mut warnings,
-                &mut seen,
-                &cache,
-                lockfile.as_ref(),
-            );
+            // The raw project-local directory scan EXECUTES any
+            // `animus-plugin-*` / `animus-provider-*` binary it finds. A
+            // cloned repo can ship such a binary, so this scan is opt-in
+            // (default OFF) and is only enabled for explicit local-dev
+            // flows — cloud daemons never probe binaries shipped inside a
+            // cloned repo. See [`PluginDiscovery::probe_project_local_plugins`].
+            // Both project-local sources are repo-shippable (UNTRUSTED) and
+            // EXECUTE binaries the repo author controls:
+            //   * the `.animus/plugins/` directory scan runs any
+            //     `animus-plugin-*` / `animus-provider-*` binary it finds;
+            //   * the `.animus/plugins.yaml` registry runs whatever its
+            //     `binary:` entries point at.
+            // A cloned hostile repo can ship EITHER, so BOTH are gated behind
+            // the same opt-in — cloud daemons / servers leave it OFF and never
+            // execute a repo-shipped binary during discovery (see
+            // [`PluginDiscovery::probe_project_local_plugins`] and the
+            // server-safe [`discover_plugins`]). Explicit local-dev flows opt
+            // in via [`discover_plugins_including_project_local`].
+            if self.probe_project_local_plugins {
+                scan_dir(
+                    &project_root.join(".animus/plugins"),
+                    DiscoverySource::ProjectLocal,
+                    &mut discovered,
+                    &mut warnings,
+                    &mut seen,
+                    &cache,
+                    lockfile.as_ref(),
+                    scope_ref,
+                );
+                // The dir scan only matches `animus-plugin-*` /
+                // `animus-provider-*` file names; the project registry tier
+                // resolves project-scoped installs of every other official
+                // plugin name (`animus-subject-*`, `animus-queue-*`, ...).
+                self.discover_project_registry(
+                    project_root,
+                    &mut discovered,
+                    &mut warnings,
+                    &mut seen,
+                    &cache,
+                    lockfile.as_ref(),
+                    scope_ref,
+                );
+            }
         }
 
-        self.discover_configured(&mut discovered, &mut warnings, &mut seen, &cache, lockfile.as_ref())?;
+        self.discover_configured(&mut discovered, &mut warnings, &mut seen, &cache, lockfile.as_ref(), scope_ref)?;
+
+        // DB-registry tier: the desired plugin set recorded in the Postgres
+        // `plugin_registry`, resolved against binaries on the volume. Opt-in
+        // and gated on the bootstrap paradox — only active once the daemon has
+        // wired a source (i.e. after the bootstrap DB-backend plugin is up).
+        // Runs after the explicit/project registry tiers (so a hand-pinned
+        // config entry still wins) and before the unconditional global-dir
+        // scan.
+        if let Some(source) = self.db_registry.clone() {
+            self.discover_db_registry(
+                source.as_ref(),
+                &mut discovered,
+                &mut warnings,
+                &mut seen,
+                &cache,
+                lockfile.as_ref(),
+                scope_ref,
+            );
+        }
 
         // Scan the global plugin install dir unconditionally. This is the
         // canonical destination for `animus plugin install` and the
@@ -412,6 +642,7 @@ impl PluginDiscovery {
             &mut seen,
             &cache,
             lockfile.as_ref(),
+            scope_ref,
         );
 
         if let Ok(plugin_path) = std::env::var("ANIMUS_PLUGIN_PATH") {
@@ -425,6 +656,7 @@ impl PluginDiscovery {
                         &mut seen,
                         &cache,
                         lockfile.as_ref(),
+                        scope_ref,
                     );
                 }
             }
@@ -441,36 +673,13 @@ impl PluginDiscovery {
                         &mut seen,
                         &cache,
                         lockfile.as_ref(),
+                        scope_ref,
                     );
                 }
             }
         }
 
-        // Auto-load the project scope when a `project_root` is set but
-        // no explicit `with_scope(...)` override has been supplied. This
-        // keeps the dozen-or-so direct PluginDiscovery callers in the
-        // workspace honoring `.animus/plugin-scope.yaml` without each
-        // having to wire the scope loader manually. Builders that want
-        // unrestricted discovery can still pass
-        // `PluginScope::unrestricted()` explicitly.
-        let scope_owned;
-        let effective_scope: Option<&PluginScope> = match &self.scope {
-            Some(s) => Some(s),
-            None => match &self.project_root {
-                Some(root) => {
-                    scope_owned = PluginScope::load_for_project(root).unwrap_or_else(|err| {
-                        tracing::warn!(
-                            error = %err,
-                            "failed to auto-load plugin scope; falling back to unrestricted discovery"
-                        );
-                        PluginScope::unrestricted()
-                    });
-                    Some(&scope_owned)
-                }
-                None => None,
-            },
-        };
-        if let Some(scope) = effective_scope {
+        if let Some(scope) = scope_ref {
             // A flavor manifest that exists but failed to parse leaves the
             // scope fail-closed (flavor-only with an EMPTY admit set).
             // Surface that as a DiscoveryWarning so `animus plugin list`
@@ -528,6 +737,7 @@ impl PluginDiscovery {
         seen: &mut HashSet<String>,
         cache: &ManifestCache,
         lockfile: Option<&PluginLockfile>,
+        scope: Option<&PluginScope>,
     ) -> Result<()> {
         let config_path = self.config_path.clone().unwrap_or_else(default_config_path);
         if !config_path.exists() {
@@ -536,7 +746,16 @@ impl PluginDiscovery {
 
         let config = load_plugins_config(&config_path)
             .with_context(|| format!("failed to read plugin config at {}", config_path.display()))?;
-        self.discover_from_config(config, DiscoverySource::ExplicitConfig, discovered, warnings, seen, cache, lockfile);
+        self.discover_from_config(
+            config,
+            DiscoverySource::ExplicitConfig,
+            discovered,
+            warnings,
+            seen,
+            cache,
+            lockfile,
+            scope,
+        );
         Ok(())
     }
 
@@ -557,6 +776,7 @@ impl PluginDiscovery {
         seen: &mut HashSet<String>,
         cache: &ManifestCache,
         lockfile: Option<&PluginLockfile>,
+        scope: Option<&PluginScope>,
     ) {
         let config_path = project_plugins_registry_path(project_root);
         if !config_path.exists() {
@@ -578,7 +798,117 @@ impl PluginDiscovery {
                 return;
             }
         };
-        self.discover_from_config(config, DiscoverySource::ProjectLocal, discovered, warnings, seen, cache, lockfile);
+        self.discover_from_config(
+            config,
+            DiscoverySource::ProjectLocal,
+            discovered,
+            warnings,
+            seen,
+            cache,
+            lockfile,
+            scope,
+        );
+    }
+
+    /// DB-registry tier: resolve the desired plugin set from a
+    /// [`PluginRegistrySource`] against binaries present in the plugin install
+    /// dir. Enabled rows whose binary is missing surface a
+    /// [`DiscoveryWarning`] (and reserve the name) so operators see the gap
+    /// instead of silently losing a plugin the DB said should be present.
+    /// A read error from the source degrades to a single warning — the daemon
+    /// must not lose every plugin because the registry read failed.
+    fn discover_db_registry(
+        &self,
+        source: &dyn PluginRegistrySource,
+        discovered: &mut Vec<DiscoveredPlugin>,
+        warnings: &mut Vec<DiscoveryWarning>,
+        seen: &mut HashSet<String>,
+        cache: &ManifestCache,
+        lockfile: Option<&PluginLockfile>,
+        scope: Option<&PluginScope>,
+    ) {
+        let install_dir = plugin_install_dir();
+        let entries = match source.desired_plugins() {
+            Ok(entries) => entries,
+            Err(err) => {
+                let reason = format!("failed to read DB plugin registry: {err:#}");
+                tracing::warn!("plugin DB-registry discovery skipped: {reason}");
+                warnings.push(DiscoveryWarning {
+                    name: "plugin_registry".to_string(),
+                    path: install_dir,
+                    source: DiscoverySource::DbRegistry,
+                    reason,
+                });
+                return;
+            }
+        };
+
+        let mut candidates: Vec<ProbeCandidate> = Vec::new();
+        for entry in entries {
+            // Disabled rows are skipped entirely (not name-reserved) so a
+            // lower-precedence dir scan can still pick the binary up if it
+            // matches the scanned prefixes and the operator wants it.
+            if !entry.enabled {
+                continue;
+            }
+            let name = entry.name.trim().to_string();
+            if name.is_empty() || seen.contains(&name) {
+                continue;
+            }
+            // The installer places the correct per-target (or noarch) binary at
+            // `<install_dir>/<name>`, so resolution keys off the name; the
+            // row's `target` is advisory and only enriches the missing-binary
+            // warning.
+            let path = install_dir.join(&name);
+            if !path.exists() {
+                seen.insert(name.clone());
+                let target_note = entry.target.as_deref().map(|t| format!(" (target {t})")).unwrap_or_default();
+                let reason = format!(
+                    "DB registry lists plugin '{name}'{target_note} but no binary is present at {}",
+                    path.display()
+                );
+                tracing::warn!("plugin DB-registry discovery: {reason}");
+                warnings.push(DiscoveryWarning { name, path, source: DiscoverySource::DbRegistry, reason });
+                continue;
+            }
+            seen.insert(name.clone());
+            candidates.push(ProbeCandidate { name, path, source: DiscoverySource::DbRegistry });
+        }
+
+        let outcomes = resolve_manifests(&candidates, cache, lockfile, scope);
+        for (cand, outcome) in candidates.into_iter().zip(outcomes) {
+            let ProbeCandidate { name, path, source } = cand;
+            match outcome {
+                ProbeOutcome::Hit(manifest) | ProbeOutcome::Probed(Ok(manifest)) => {
+                    seen.insert(name.clone());
+                    discovered.push(DiscoveredPlugin { name, path, manifest, source });
+                }
+                ProbeOutcome::Probed(Err(error)) => {
+                    seen.insert(name.clone());
+                    let reason = format!("{error:#}");
+                    tracing::warn!(
+                        plugin = %name,
+                        path = %path.display(),
+                        "DB-registry plugin manifest probe failed: {reason}"
+                    );
+                    warnings.push(DiscoveryWarning { name, path, source, reason });
+                }
+                ProbeOutcome::SkippedOutOfScope(reason) => {
+                    // Reserve the name so a lower-precedence source can't
+                    // silently shadow this (equally out-of-scope) entry, and
+                    // surface a warning so operators understand the plugin was
+                    // located but deliberately NOT executed.
+                    seen.insert(name.clone());
+                    tracing::debug!(
+                        plugin = %name,
+                        path = %path.display(),
+                        source = ?source,
+                        "{reason}"
+                    );
+                    warnings.push(DiscoveryWarning { name, path, source, reason });
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -591,6 +921,7 @@ impl PluginDiscovery {
         seen: &mut HashSet<String>,
         cache: &ManifestCache,
         lockfile: Option<&PluginLockfile>,
+        scope: Option<&PluginScope>,
     ) {
         let mut candidates: Vec<ProbeCandidate> = Vec::new();
         for (logical_name, entry) in config.plugins.iter().chain(config.providers.iter()) {
@@ -642,7 +973,7 @@ impl PluginDiscovery {
             candidates.push(ProbeCandidate { name, path, source });
         }
 
-        let outcomes = resolve_manifests(&candidates, cache, lockfile);
+        let outcomes = resolve_manifests(&candidates, cache, lockfile, scope);
         for (cand, outcome) in candidates.into_iter().zip(outcomes) {
             let ProbeCandidate { name, path, source } = cand;
             match outcome {
@@ -665,12 +996,58 @@ impl PluginDiscovery {
                     );
                     warnings.push(DiscoveryWarning { name, path, source, reason });
                 }
+                ProbeOutcome::SkippedOutOfScope(reason) => {
+                    // Reserve the name so a lower-precedence source can't
+                    // silently shadow this (equally out-of-scope) entry, and
+                    // surface a warning so operators understand the plugin was
+                    // located but deliberately NOT executed.
+                    seen.insert(name.clone());
+                    tracing::debug!(
+                        plugin = %name,
+                        path = %path.display(),
+                        source = ?source,
+                        "{reason}"
+                    );
+                    warnings.push(DiscoveryWarning { name, path, source, reason });
+                }
             }
         }
     }
 }
 
+/// Server-safe plugin discovery: the default entry used by the daemon and
+/// every runtime resolution path.
+///
+/// The entire repo-shippable project-local tier is left OFF — BOTH the
+/// `<project_root>/.animus/plugins/` directory scan AND the
+/// `<project_root>/.animus/plugins.yaml` project registry — so a cloud
+/// daemon that clones a hostile repo never executes a binary the repo
+/// author controls (whether shipped as a file under `.animus/plugins/` or
+/// pointed at by a `plugins.yaml` `binary:` entry) during discovery.
+/// Legitimately installed plugins in `~/.animus/plugins/` (the global
+/// install dir) and the `~/.animus/plugins.yaml` global registry are all
+/// still discovered, so this does not stop a server from finding its real
+/// (operator-installed) plugins. Local-dev flows that intentionally support
+/// project-scoped installs should call
+/// [`discover_plugins_including_project_local`] instead.
 pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<DiscoveredPlugin>> {
+    discover_plugins_inner(project_root, false)
+}
+
+/// Like [`discover_plugins`], but also scans the project-local
+/// `<project_root>/.animus/plugins/` directory (executing any
+/// `animus-plugin-*` / `animus-provider-*` binary it finds via
+/// `--manifest`). Use ONLY from explicit local-dev surfaces where the
+/// operator trusts the working tree — never from a daemon/server that may
+/// run against a cloned, untrusted repo.
+pub fn discover_plugins_including_project_local(project_root: impl Into<PathBuf>) -> Result<Vec<DiscoveredPlugin>> {
+    discover_plugins_inner(project_root, true)
+}
+
+fn discover_plugins_inner(
+    project_root: impl Into<PathBuf>,
+    probe_project_local: bool,
+) -> Result<Vec<DiscoveredPlugin>> {
     let root: PathBuf = project_root.into();
     let scope = PluginScope::load_for_project(&root).unwrap_or_else(|err| {
         tracing::warn!(
@@ -679,7 +1056,11 @@ pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<Discover
         );
         PluginScope::unrestricted()
     });
-    PluginDiscovery::new().with_project_root(root).with_scope(scope).discover()
+    PluginDiscovery::new()
+        .with_project_root(root)
+        .with_scope(scope)
+        .probe_project_local_plugins(probe_project_local)
+        .discover()
 }
 
 /// Discover all installed plugins whose manifest `plugin_kind` equals
@@ -692,7 +1073,10 @@ pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<Discover
 /// An empty `Vec` means "no plugins of that kind installed".
 pub fn discover_by_kind(project_root: impl Into<PathBuf>, kind: &str) -> Result<Vec<DiscoveredPlugin>> {
     let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == kind).collect())
+    // v0.7 multi-kind: match a plugin's primary `plugin_kind` OR any of its
+    // additional `plugin_kinds`, so one plugin can be discovered for several
+    // roles.
+    Ok(plugins.into_iter().filter(|p| p.manifest.serves_kind(kind)).collect())
 }
 
 /// Probe a plugin binary's `--manifest` output.
@@ -844,6 +1228,7 @@ async fn fetch_manifest_inner(path: &Path) -> Result<PluginManifest> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_dir(
     dir: &Path,
     source: DiscoverySource,
@@ -852,6 +1237,7 @@ fn scan_dir(
     seen: &mut HashSet<String>,
     cache: &ManifestCache,
     lockfile: Option<&PluginLockfile>,
+    scope: Option<&PluginScope>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -876,7 +1262,7 @@ fn scan_dir(
         candidates.push(ProbeCandidate { name: file_name.to_string(), path, source });
     }
 
-    let outcomes = resolve_manifests(&candidates, cache, lockfile);
+    let outcomes = resolve_manifests(&candidates, cache, lockfile, scope);
     for (cand, outcome) in candidates.into_iter().zip(outcomes) {
         let ProbeCandidate { name, path, source } = cand;
         match outcome {
@@ -897,6 +1283,21 @@ fn scan_dir(
                     path = %path.display(),
                     source = ?source,
                     "plugin manifest probe failed: {reason}"
+                );
+                warnings.push(DiscoveryWarning { name, path, source, reason });
+            }
+            ProbeOutcome::SkippedOutOfScope(reason) => {
+                // The binary was located but NOT executed because the
+                // active scope could not admit its filename-derived slug.
+                // Reserve the name and surface a warning so the plugin is
+                // not silently absent AND is never probed by a
+                // lower-precedence source.
+                seen.insert(name.clone());
+                tracing::debug!(
+                    plugin = %name,
+                    path = %path.display(),
+                    source = ?source,
+                    "{reason}"
                 );
                 warnings.push(DiscoveryWarning { name, path, source, reason });
             }
@@ -1147,6 +1548,84 @@ mod tests {
         assert_eq!(by_kind[0].name, "a-workflow-runner-default");
     }
 
+    /// v0.7 multi-kind regression: a consolidated plugin whose PRIMARY
+    /// `plugin_kind` is `subject_backend` but which ALSO declares
+    /// `log_storage_backend` as a NON-primary `plugin_kinds` entry MUST be
+    /// resolved by [`discover_by_kind`] for that secondary role. This is the
+    /// property TASK-275 exists to guarantee: role resolution keys off
+    /// `PluginManifest::serves_kind`, not the single primary field.
+    ///
+    /// Drives the real `discover_by_kind` entry point (not a hand-rolled
+    /// `serves_kind` filter) so a regression that reverted it to
+    /// `plugin_kind ==` matching would fail here.
+    #[cfg(unix)]
+    #[test]
+    fn discover_by_kind_resolves_non_primary_declared_role() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        // Install the plugin into a scanned $ANIMUS_PLUGIN_DIR so the real
+        // `discover_by_kind` -> `discover_plugins` pipeline picks it up. Clear
+        // $ANIMUS_PLUGIN_PATH so a developer/CI environment pointing at extra
+        // plugin dirs can't leak unrelated plugins into the `len() == 1` and
+        // `provider`-is-empty assertions below (keeps the test hermetic).
+        let install_dir = temp.path().join("install-dir");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        // Consolidated plugin: primary kind subject_backend, additional kinds
+        // include log_storage_backend + queue (served as NON-primary roles).
+        let name = "animus-plugin-consolidated-backend";
+        let path = install_dir.join(name);
+        let manifest = serde_json::json!({
+            "name": name,
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "plugin_kinds": ["log_storage_backend", "queue"],
+            "description": "test",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        fs::write(&path, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod");
+
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).expect("mkdir project root");
+
+        // Resolved via the REAL helper for the NON-primary declared role.
+        let as_log_storage = discover_by_kind(&project_root, "log_storage_backend").expect("discover log_storage");
+        assert_eq!(
+            as_log_storage.len(),
+            1,
+            "discover_by_kind must resolve the consolidated plugin for its non-primary log_storage_backend role"
+        );
+        assert_eq!(as_log_storage[0].name, name);
+
+        // Still resolved for its PRIMARY role too.
+        assert_eq!(
+            discover_by_kind(&project_root, "subject_backend").expect("discover subject_backend").len(),
+            1,
+            "discover_by_kind must still resolve the plugin for its primary subject_backend role"
+        );
+        // And for its other secondary role.
+        assert_eq!(
+            discover_by_kind(&project_root, "queue").expect("discover queue").len(),
+            1,
+            "discover_by_kind must resolve the plugin for its second non-primary queue role"
+        );
+        // NOT resolved for a role it does not declare.
+        assert!(
+            discover_by_kind(&project_root, "provider").expect("discover provider").is_empty(),
+            "discover_by_kind must not resolve the plugin for an undeclared role"
+        );
+    }
+
     #[test]
     fn configured_plugin_can_use_non_prefixed_binary() {
         let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1314,6 +1793,7 @@ mod tests {
         let (discovered, warnings) = PluginDiscovery::new()
             .with_project_root(temp.path())
             .with_config_path(empty_config)
+            .probe_project_local_plugins(true)
             .discover_with_warnings()
             .expect("discover");
 
@@ -1624,6 +2104,7 @@ mod tests {
         let (discovered, warnings) = PluginDiscovery::new()
             .with_project_root(&project_root)
             .with_config_path(&empty_config)
+            .probe_project_local_plugins(true)
             .discover_with_warnings()
             .expect("discover");
 
@@ -1668,6 +2149,7 @@ mod tests {
         let (discovered, warnings) = PluginDiscovery::new()
             .with_project_root(&project_root)
             .with_config_path(&config)
+            .probe_project_local_plugins(true)
             .discover_with_warnings()
             .expect("discover");
 
@@ -1708,6 +2190,7 @@ mod tests {
         let (discovered, warnings) = PluginDiscovery::new()
             .with_project_root(&project_root)
             .with_config_path(&empty_config)
+            .probe_project_local_plugins(true)
             .discover_with_warnings()
             .expect("discover");
 
@@ -1761,6 +2244,7 @@ mod tests {
         let (discovered, warnings) = PluginDiscovery::new()
             .with_project_root(&project_root)
             .with_config_path(&empty_config)
+            .probe_project_local_plugins(true)
             .discover_with_warnings()
             .expect("discover");
 
@@ -1846,9 +2330,22 @@ mod tests {
         assert_eq!(discovered.len(), 2, "mode=all must return every discovered plugin");
     }
 
+    /// SECURITY: an out-of-scope binary must be skipped BEFORE the
+    /// `--manifest` probe — it is never executed. The plugin here is a
+    /// `exit 2` script that, if probed, would fail with a manifest error;
+    /// under a scope that excludes it we must instead see a "skipped, out
+    /// of scope" warning proving the binary was never run.
+    #[cfg(unix)]
+    /// A TRUSTED, operator-installed plugin in the global install dir that
+    /// falls outside a restricted scope is PROBED (the operator installed it,
+    /// so executing it for a `--manifest` probe is safe) and then filtered
+    /// out post-probe by [`PluginScope::admits`]. It must NOT be pre-probe
+    /// skipped — otherwise a `--name` renamed install whose filename slug is
+    /// outside the flavor admit set would vanish before its manifest name can
+    /// be matched (the P2 regression). The spy binary proves it ran.
     #[cfg(unix)]
     #[test]
-    fn scope_filter_preserves_warnings_for_out_of_scope_failed_plugin() {
+    fn out_of_scope_trusted_plugin_is_probed_then_filtered_post_probe() {
         use crate::scope::{PluginScope, PluginScopeMode};
         use std::os::unix::fs::PermissionsExt;
 
@@ -1862,29 +2359,507 @@ mod tests {
         let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
         let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
 
-        let broken = install_dir.join("animus-provider-broken");
-        fs::write(&broken, "#!/bin/sh\nexit 2\n").expect("write broken");
-        let mut perms = fs::metadata(&broken).expect("metadata").permissions();
+        // Spy: records every execution. The binary prints a VALID manifest so
+        // its absence from the discovered set is attributable to the
+        // post-probe scope filter, not a broken probe.
+        let ran_marker = temp.path().join("trusted-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let installed = install_dir.join("animus-provider-installed");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-installed",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "operator-installed",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&installed, script).expect("write installed plugin");
+        let mut perms = fs::metadata(&installed).expect("metadata").permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&broken, perms).expect("chmod");
+        fs::set_permissions(&installed, perms).expect("chmod");
 
         let empty_config = temp.path().join("empty-plugins.yaml");
         fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
 
-        // Allowlist that does NOT include the broken plugin — but discovery
-        // must still emit a warning so operators see the failed probe.
+        // Allowlist that does NOT include the installed plugin.
         let mut scope = PluginScope { mode: PluginScopeMode::Allowlist, ..PluginScope::default() };
         scope.allow.insert("animus-provider-default".to_string());
 
-        let (discovered, warnings) = PluginDiscovery::new()
+        let (discovered, _warnings) = PluginDiscovery::new()
             .with_config_path(&empty_config)
             .with_scope(scope)
             .discover_with_warnings()
             .expect("discover");
 
-        assert!(discovered.is_empty(), "broken plugin must not appear in discovered set");
-        assert_eq!(warnings.len(), 1, "warning must survive scope filter, got {warnings:?}");
-        assert_eq!(warnings[0].name, "animus-provider-broken");
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "1",
+            "a TRUSTED installed plugin must be probed even when out of scope"
+        );
+        assert!(
+            discovered.iter().all(|p| p.name != "animus-provider-installed"),
+            "out-of-scope plugin must be filtered from the discovered set post-probe, got {discovered:?}"
+        );
+    }
+
+    /// SECURITY (hostile-repo sim): a project-local
+    /// `.animus/plugins/animus-provider-evil` shipped inside a cloned repo
+    /// must NOT be executed during discovery when a restricted (flavor-only)
+    /// scope is active — EVEN when project-local probing is opted in. The
+    /// binary is a spy: it increments a counter file every time it runs, so
+    /// we can prove `fetch_manifest` never spawned it.
+    #[cfg(unix)]
+    #[test]
+    fn hostile_repo_project_local_binary_not_executed_under_flavor_only_scope() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+        use std::collections::BTreeSet;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let project_root = temp.path().join("cloned-hostile-repo");
+        let project_plugins = project_root.join(".animus/plugins");
+        fs::create_dir_all(&project_plugins).expect("mkdir project plugins");
+
+        // Spy: the attacker binary records every execution. If discovery
+        // probes it, this counter advances past 0. It prints a perfectly
+        // valid manifest so any failure to discover is attributable to the
+        // scope gate, NOT a broken binary.
+        let ran_marker = temp.path().join("attacker-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let evil = project_plugins.join("animus-provider-evil");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-evil",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "pwned",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&evil, script).expect("write attacker plugin");
+        let mut perms = fs::metadata(&evil).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&evil, perms).expect("chmod");
+
+        let empty_config = temp.path().join("plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // Flavor-only scope whose admit set does NOT contain the attacker.
+        let mut flavor: BTreeSet<String> = BTreeSet::new();
+        flavor.insert("animus-provider-claude".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
+
+        // Note: project-local probing is EXPLICITLY opted in here — the
+        // scope gate alone must still prevent execution.
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_config_path(&empty_config)
+            .with_scope(scope)
+            .probe_project_local_plugins(true)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(fs::read_to_string(&ran_marker).unwrap().trim(), "0", "attacker binary MUST NOT be executed");
+        assert!(discovered.is_empty(), "attacker plugin must not be discovered, got {discovered:?}");
+        let evil_warning = warnings
+            .iter()
+            .find(|w| w.name == "animus-provider-evil")
+            .unwrap_or_else(|| panic!("expected a scope-skip warning for the attacker plugin, got {warnings:?}"));
+        assert!(
+            evil_warning.reason.contains("NOT executed"),
+            "warning must state the binary was not executed, got: {}",
+            evil_warning.reason
+        );
+    }
+
+    /// A scoped configured registry entry whose `binary:` points at an
+    /// arbitrarily-named wrapper must still be probed when its LOGICAL name
+    /// is admitted — the pre-probe gate keys on the logical name for config
+    /// entries, not just the binary basename. Codex round 1 P2.
+    #[cfg(unix)]
+    #[test]
+    fn scoped_configured_entry_with_wrapper_binary_is_probed_by_logical_name() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        // Binary basename (`claude-wrapper`) does NOT match the admitted
+        // slug; the operator-declared logical name (`animus-provider-claude`)
+        // does. The manifest declares the canonical name.
+        let wrapper = temp.path().join("claude-wrapper");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-claude",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "wrapped",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        fs::write(&wrapper, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write wrapper");
+        let mut perms = fs::metadata(&wrapper).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&wrapper, perms).expect("chmod");
+
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!("plugins:\n  animus-provider-claude:\n    binary: {}\n", wrapper.to_string_lossy()),
+        )
+        .expect("write config");
+
+        let mut scope = PluginScope { mode: PluginScopeMode::Allowlist, ..PluginScope::default() };
+        scope.allow.insert("animus-provider-claude".to_string());
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&config_path)
+            .with_scope(scope)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(warnings.is_empty(), "admitted logical name must not be gated out, got {warnings:?}");
+        assert_eq!(discovered.len(), 1, "scoped configured wrapper entry must be discovered, got {discovered:?}");
+        assert_eq!(discovered[0].name, "animus-provider-claude");
+    }
+
+    /// SECURITY: a hostile PROJECT registry (`<project>/.animus/plugins.yaml`,
+    /// shipped in a cloned repo) must NOT be able to get an out-of-scope
+    /// binary executed — even when project-local probing is EXPLICITLY opted
+    /// in AND the registry declares an admitted logical key pointing at a
+    /// repo-shipped wrapper. Because the project registry is an UNTRUSTED
+    /// source, the repo-controlled binary must fail the path/filename
+    /// [`PluginScope::may_probe`] gate and never run (no logical-name escape
+    /// for untrusted sources).
+    #[cfg(unix)]
+    #[test]
+    fn hostile_project_registry_cannot_probe_via_logical_name_escape() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+        use std::collections::BTreeSet;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let project_root = temp.path().join("cloned-hostile-repo");
+        let animus_dir = project_root.join(".animus");
+        let evil_dir = animus_dir.join("plugins");
+        fs::create_dir_all(&evil_dir).expect("mkdir");
+
+        // Spy: the wrapper records every execution.
+        let ran_marker = temp.path().join("evil-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let evil = evil_dir.join("evil-wrapper");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-claude",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "trojan",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&evil, script).expect("write evil wrapper");
+        let mut perms = fs::metadata(&evil).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&evil, perms).expect("chmod");
+
+        // Hostile PROJECT registry: admitted logical key, evil binary path.
+        fs::write(
+            animus_dir.join("plugins.yaml"),
+            format!("plugins:\n  animus-provider-claude:\n    binary: {}\n", evil.to_string_lossy()),
+        )
+        .expect("write project registry");
+
+        // Empty global registry so only the project registry is in play.
+        let empty_config = temp.path().join("plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // Flavor-only scope that ADMITS `animus-provider-claude`.
+        let mut flavor: BTreeSet<String> = BTreeSet::new();
+        flavor.insert("animus-provider-claude".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
+
+        // project-local probing is EXPLICITLY opted in — the untrusted-source
+        // filename gate must still refuse the repo-shipped wrapper.
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_config_path(&empty_config)
+            .with_scope(scope)
+            .probe_project_local_plugins(true)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(fs::read_to_string(&ran_marker).unwrap().trim(), "0", "evil wrapper MUST NOT be executed");
+        assert!(discovered.is_empty(), "hostile project-registry entry must not be discovered, got {discovered:?}");
+        let evil_warn = warnings
+            .iter()
+            .find(|w| w.name == "animus-provider-claude")
+            .unwrap_or_else(|| panic!("expected a scope-skip warning, got {warnings:?}"));
+        assert!(evil_warn.reason.contains("NOT executed"), "reason: {}", evil_warn.reason);
+    }
+
+    /// SECURITY (P1 regression guard): a hostile PROJECT registry
+    /// (`<project>/.animus/plugins.yaml`, shipped in a cloned repo) with a
+    /// `binary:` pointing at a repo-shipped attacker binary must NOT be
+    /// executed on the SERVER-SAFE discovery path — even under the default
+    /// unrestricted (`all`) scope, where the pre-probe scope gate admits
+    /// everything. The project registry is an UNTRUSTED source, so it is only
+    /// walked when project-local probing is opted in; the server-safe default
+    /// leaves it OFF, closing the "effective scope is `all`, so the registry
+    /// still probes" hole. The spy binary proves it never ran.
+    #[cfg(unix)]
+    #[test]
+    fn hostile_project_registry_binary_not_executed_on_server_safe_path_under_all_scope() {
+        use crate::scope::PluginScope;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let project_root = temp.path().join("cloned-hostile-repo");
+        let animus_dir = project_root.join(".animus");
+        let evil_dir = animus_dir.join("plugins");
+        fs::create_dir_all(&evil_dir).expect("mkdir");
+
+        // Spy: the attacker binary records every execution.
+        let ran_marker = temp.path().join("evil-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let evil = evil_dir.join("evil");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-evil",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "pwned",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&evil, script).expect("write attacker binary");
+        let mut perms = fs::metadata(&evil).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&evil, perms).expect("chmod");
+
+        // Hostile project registry committed into the cloned repo, pointing at
+        // the repo-shipped attacker binary.
+        fs::write(
+            animus_dir.join("plugins.yaml"),
+            format!("plugins:\n  animus-provider-evil:\n    binary: {}\n", evil.to_string_lossy()),
+        )
+        .expect("write project registry");
+
+        // Server-safe posture: no project-local probing, unrestricted (`all`)
+        // scope (the effective scope when the repo ships no restrictive
+        // flavor). This is precisely the P1 hole.
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_scope(PluginScope::unrestricted())
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "0",
+            "server-safe discovery MUST NOT execute a repo-shipped project-registry binary"
+        );
+        assert!(discovered.is_empty(), "hostile project-registry entry must not be discovered, got {discovered:?}");
+        assert!(
+            warnings.iter().all(|w| w.name != "animus-provider-evil"),
+            "an un-walked untrusted registry emits no warning for its entries, got {warnings:?}"
+        );
+
+        // The public server-safe helper agrees (it also defaults to `all`
+        // scope for a repo with no flavor manifest).
+        let via_helper = discover_plugins(&project_root).expect("discover_plugins");
+        assert!(via_helper.iter().all(|p| p.name != "animus-provider-evil"), "got {via_helper:?}");
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "0",
+            "still not executed via the server-safe discover_plugins helper"
+        );
+    }
+
+    /// P2 regression guard: a plugin installed under `--name <NAME>` (recorded
+    /// as a `name_override` in the TRUSTED global registry) whose MANIFEST
+    /// name is a flavor-required slug must STILL be probed and admitted under
+    /// a flavor-only scope. Its filename/override slug (`custom-task`) is NOT
+    /// in the flavor admit set, so a pre-probe filename gate would skip it
+    /// before the post-probe manifest-name fallback could match — trusted
+    /// installed candidates must therefore never be pre-probe gated.
+    #[cfg(unix)]
+    #[test]
+    fn renamed_trusted_install_still_probed_and_admitted_under_flavor_only_scope() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+        use std::collections::BTreeSet;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        // Operator-installed binary whose on-disk name matches the `--name`
+        // override (`custom-task`) but whose MANIFEST declares the canonical
+        // flavor-required slug `animus-subject-default`.
+        let ran_marker = temp.path().join("renamed-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let binary = temp.path().join("custom-task");
+        let manifest = serde_json::json!({
+            "name": "animus-subject-default",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "installed as custom-task",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&binary, script).expect("write renamed plugin");
+        let mut perms = fs::metadata(&binary).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&binary, perms).expect("chmod");
+
+        // TRUSTED global registry entry recording the `--name` override.
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "plugins:\n  animus-subject-default:\n    binary: {}\n    name_override: custom-task\n",
+                binary.to_string_lossy()
+            ),
+        )
+        .expect("write config");
+
+        // Flavor-only scope requiring the canonical manifest slug.
+        let mut flavor: BTreeSet<String> = BTreeSet::new();
+        flavor.insert("animus-subject-default".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&config_path)
+            .with_scope(scope)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "1",
+            "renamed trusted install must be probed (not pre-probe skipped on its filename slug)"
+        );
+        assert_eq!(
+            discovered.len(),
+            1,
+            "renamed required plugin must be discovered, got {discovered:?} / {warnings:?}"
+        );
+        assert_eq!(discovered[0].name, "custom-task", "discovery keeps the --name override as the logical name");
+        assert_eq!(discovered[0].manifest.name, "animus-subject-default");
+    }
+
+    /// SECURITY (belt): the default (daemon/server) discovery path does NOT
+    /// scan the project-local `.animus/plugins/` directory at all, so a
+    /// cloned repo's binaries are never probed regardless of scope. The spy
+    /// binary proves it is never executed.
+    #[cfg(unix)]
+    #[test]
+    fn default_discovery_does_not_probe_project_local_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let project_root = temp.path().join("cloned-repo");
+        let project_plugins = project_root.join(".animus/plugins");
+        fs::create_dir_all(&project_plugins).expect("mkdir project plugins");
+
+        let ran_marker = temp.path().join("ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let plugin = project_plugins.join("animus-provider-shipped");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-shipped",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "shipped in repo",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&plugin, script).expect("write plugin");
+        let mut perms = fs::metadata(&plugin).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&plugin, perms).expect("chmod");
+
+        let empty_config = temp.path().join("plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // No .probe_project_local_plugins(true) — this is the daemon/server
+        // default. `discover_plugins` uses the same posture.
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_config_path(&empty_config)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(fs::read_to_string(&ran_marker).unwrap().trim(), "0", "project-local binary MUST NOT be executed");
+        assert!(discovered.is_empty(), "project-local dir must not be scanned by default, got {discovered:?}");
+        assert!(warnings.is_empty(), "an un-scanned dir emits no warnings, got {warnings:?}");
+
+        // And the public server-safe helper agrees.
+        let via_helper = discover_plugins(&project_root).expect("discover_plugins");
+        assert!(via_helper.is_empty(), "discover_plugins must not scan project-local dir, got {via_helper:?}");
+        assert_eq!(fs::read_to_string(&ran_marker).unwrap().trim(), "0", "still not executed via discover_plugins");
+
+        // The explicit local-dev opt-in DOES scan it (and executes it once).
+        let via_local = discover_plugins_including_project_local(&project_root).expect("local discover");
+        assert_eq!(via_local.len(), 1, "local-dev helper must scan project-local dir, got {via_local:?}");
+        assert_eq!(via_local[0].name, "animus-provider-shipped");
     }
 
     /// A flavor manifest that exists but fails to parse must not silently
@@ -2287,5 +3262,171 @@ mod tests {
                 "manifest must match its candidate, no cross-talk between parallel probes"
             );
         }
+    }
+
+    // ---- DB-registry discovery tier (TASK-194) -------------------------
+
+    use crate::db_registry::{DbRegistryEntry, StaticRegistrySource};
+    use std::sync::Arc;
+
+    /// A subject-backend plugin name (`animus-subject-*`) is NOT matched by the
+    /// directory-scan tiers, so without the DB tier it is invisible; with a
+    /// wired registry source it is discovered and tagged `DbRegistry`.
+    #[cfg(unix)]
+    #[test]
+    fn db_registry_tier_discovers_enabled_plugin_from_volume() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let plugin_path = install_dir.join("animus-subject-default");
+        write_executable_plugin(&plugin_path, "animus-subject-default");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // Without a wired source the plugin is invisible (bootstrap paradox:
+        // the DB tier is off until the daemon opts in).
+        let (without_db, _) =
+            PluginDiscovery::new().with_config_path(&empty_config).discover_with_warnings().expect("discover");
+        assert!(
+            without_db.iter().all(|p| p.name != "animus-subject-default"),
+            "subject plugin must not be discovered without the DB tier, got {without_db:?}"
+        );
+
+        let source = Arc::new(StaticRegistrySource::new(vec![DbRegistryEntry::enabled("animus-subject-default")]));
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
+        let row = discovered
+            .iter()
+            .find(|p| p.name == "animus-subject-default")
+            .expect("DB-registry tier must discover the enabled plugin");
+        assert_eq!(row.source, DiscoverySource::DbRegistry);
+        assert_eq!(row.path, plugin_path);
+    }
+
+    /// Disabled rows are skipped; enabled rows whose binary is absent from the
+    /// volume surface a warning instead of being silently dropped.
+    #[cfg(unix)]
+    #[test]
+    fn db_registry_tier_skips_disabled_and_warns_on_missing_binary() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let disabled = DbRegistryEntry { enabled: false, ..DbRegistryEntry::enabled("animus-subject-disabled") };
+        let missing =
+            DbRegistryEntry { target: Some("noarch".to_string()), ..DbRegistryEntry::enabled("animus-postgres") };
+        let source = Arc::new(StaticRegistrySource::new(vec![disabled, missing]));
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(discovered.is_empty(), "no binaries on the volume, nothing to discover, got {discovered:?}");
+        assert_eq!(warnings.len(), 1, "only the enabled-but-missing row warns, got {warnings:?}");
+        assert_eq!(warnings[0].name, "animus-postgres");
+        assert_eq!(warnings[0].source, DiscoverySource::DbRegistry);
+        assert!(warnings[0].reason.contains("noarch"), "warning should carry the target, got {}", warnings[0].reason);
+        assert!(warnings[0].reason.contains("no binary is present"));
+    }
+
+    /// A read failure from the registry source degrades to a single warning —
+    /// the other tiers (here, the global-dir scan) still resolve.
+    #[cfg(unix)]
+    #[test]
+    fn db_registry_read_error_degrades_to_warning_without_sinking_discovery() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        // A prefixed plugin that the unconditional global-dir scan still finds.
+        let scanned = install_dir.join("animus-provider-scanned");
+        write_executable_plugin(&scanned, "animus-provider-scanned");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let source = Arc::new(StaticRegistrySource::failing("connection refused"));
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(
+            discovered.iter().any(|p| p.name == "animus-provider-scanned"),
+            "file/dir tiers must still resolve when the DB read fails, got {discovered:?}"
+        );
+        let db_warning = warnings
+            .iter()
+            .find(|w| w.source == DiscoverySource::DbRegistry)
+            .expect("DB read error must surface a warning");
+        assert!(db_warning.reason.contains("connection refused"), "unexpected reason: {}", db_warning.reason);
+    }
+
+    /// A hand-pinned explicit config entry outranks the DB tier: the DB row's
+    /// name is already reserved by the higher-precedence tier, so it does not
+    /// re-add or shadow it.
+    #[cfg(unix)]
+    #[test]
+    fn explicit_config_takes_precedence_over_db_registry() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let plugin = temp.path().join("configured-subject");
+        write_executable_plugin(&plugin, "animus-subject-default");
+
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!("plugins:\n  animus-subject-default:\n    binary: {}\n", plugin.to_string_lossy()),
+        )
+        .expect("write config");
+
+        let source = Arc::new(StaticRegistrySource::new(vec![DbRegistryEntry::enabled("animus-subject-default")]));
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&config_path)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
+        let rows: Vec<&DiscoveredPlugin> = discovered.iter().filter(|p| p.name == "animus-subject-default").collect();
+        assert_eq!(rows.len(), 1, "name must dedupe to a single entry across tiers, got {rows:?}");
+        assert_eq!(rows[0].source, DiscoverySource::ExplicitConfig, "explicit config must outrank the DB tier");
+        assert_eq!(rows[0].path, plugin);
     }
 }

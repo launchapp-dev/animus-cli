@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AllowedApplicationChatControls",
+  "description": "Allowed application control values projected by an authenticated portal.\n\nThis is a transport shape only. The portal decides which values appear.",
+  "type": "object",
+  "properties": {
+    "approvals": {
+      "description": "Allowed approval selections.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "boolean"
+      }
+    },
+    "permission_intent": {
+      "description": "Allowed permission intent selections.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ApplicationPermissionIntent"
+      }
+    },
+    "profile_ref": {
+      "description": "Allowed canonical profile assertion.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ApplicationConfiguredRef"
+      }
+    },
+    "reasoning_effort": {
+      "description": "Allowed reasoning effort selections.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ApplicationReasoningEffort"
+      }
+    },
+    "schema": {
+      "description": "Exact controls schema discriminator.",
+      "$ref": "#/$defs/ApplicationChatControlsSchema"
+    },
+    "skill_ref": {
+      "description": "Allowed configured skill references.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ApplicationConfiguredRef"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema"
+  ],
+  "$defs": {
+    "ApplicationChatControlsSchema": {
+      "description": "Stable schema discriminator for [`ApplicationChatControls`].",
+      "oneOf": [
+        {
+          "description": "`animus.chat.application_controls.v1`.",
+          "type": "string",
+          "const": "animus.chat.application_controls.v1"
+        }
+      ]
+    },
+    "ApplicationConfiguredRef": {
+      "description": "A bounded reference to a server-configured agent profile or skill.",
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ApplicationPermissionIntent": {
+      "description": "Provider-neutral permission intent selected by an application.",
+      "oneOf": [
+        {
+          "description": "Inherit safe provider defaults.",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "Review without broad edit permission.",
+          "type": "string",
+          "const": "review"
+        },
+        {
+          "description": "Permit ordinary automated edits.",
+          "type": "string",
+          "const": "auto_edit"
+        },
+        {
+          "description": "Request the profile's explicitly authorized unrestricted mode.",
+          "type": "string",
+          "const": "unrestricted"
+        }
+      ]
+    },
+    "ApplicationReasoningEffort": {
+      "description": "Application-safe reasoning effort requested from an authorized profile.",
+      "oneOf": [
+        {
+          "description": "Low reasoning effort.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Medium reasoning effort.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "High reasoning effort.",
+          "type": "string",
+          "const": "high"
+        }
+      ]
+    }
+  }
+}

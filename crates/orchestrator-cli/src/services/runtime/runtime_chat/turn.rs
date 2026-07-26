@@ -46,8 +46,11 @@ use serde_json::{json, Value};
 
 use crate::services::runtime::runtime_agent::provider_client::{graft_skill_launch_contract, skill_has_launch_extras};
 
+#[cfg(test)]
+use super::idempotency::ChatOperationAuthority;
+use super::idempotency::ChatTurnOperation;
 use super::sink::{ChatStreamEvent, ChatStreamSink};
-use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationStore, TurnBlock};
+use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationMeta, ConversationStore, TurnBlock};
 
 /// Outcome of draining one provider session.
 struct TurnOutput {
@@ -157,6 +160,13 @@ impl TurnProducer for ResolverTurnProducer {
 /// Inputs for a single turn.
 pub(crate) struct TurnContext<'a> {
     pub conversation_id: &'a str,
+    /// Canonical configured profile this operation expects. `None` means the
+    /// conversation must still be unbound when the turn lock is acquired.
+    pub agent_id: Option<&'a str>,
+    /// Optimistic-concurrency token observed by the application preflight.
+    pub expected_revision: Option<u64>,
+    /// Optional title mutation applied under the same revision check and lock.
+    pub title_update: Option<&'a str>,
     pub tool: &'a str,
     pub model: &'a str,
     pub user_message: &'a str,
@@ -174,6 +184,11 @@ pub(crate) struct TurnContext<'a> {
     /// every turn's session request so the transport routes permission
     /// decisions through `animus.agent.request_approval`.
     pub approvals: bool,
+    /// Bound profile persona, applied to fresh, resumed, and replay-fallback
+    /// attempts (and composed before any explicit skill fragments).
+    pub agent_system_prompt: Option<&'a str>,
+    /// Provider-specific named profile from the bound agent config.
+    pub agent_tool_profile: Option<&'a str>,
     /// Per-agent MCP runtime contract for this conversation, threaded into
     /// `extras.runtime_contract` so the provider wires the profile/skill-
     /// scoped MCP servers. `None` when the tool cannot speak MCP.
@@ -195,6 +210,11 @@ pub(crate) struct TurnContext<'a> {
     /// runtime contract's `cli.launch` block. `None` when no `--skill` is
     /// selected or the skill application is empty.
     pub skill: Option<&'a SkillApplicationResult>,
+    /// Durable application-operation claim. Local interactive sends omit it.
+    pub operation: Option<&'a mut ChatTurnOperation>,
+    /// Fully resolved provider/profile execution snapshot for a keyed send.
+    /// It is bound to the durable operation under the conversation lock.
+    pub execution_hash: Option<&'a str>,
 }
 
 /// Run a single conversation turn.
@@ -212,7 +232,39 @@ pub(crate) async fn run_turn(
     producer: &dyn TurnProducer,
     store: &dyn ConversationStore,
     sink: &mut dyn ChatStreamSink,
+    mut ctx: TurnContext<'_>,
+) -> Result<u64> {
+    let operation = ctx.operation.take();
+    let user_message = ctx.user_message.to_string();
+    let Some(operation) = operation else {
+        return run_turn_inner(producer, store, sink, ctx, None).await;
+    };
+
+    let result = run_turn_inner(producer, store, sink, ctx, Some(&mut *operation)).await;
+    match result {
+        Ok(assistant_seq) => Ok(assistant_seq),
+        Err(turn_error) => {
+            // Admission happens before every other keyed-send preparation and
+            // turn effect. Reconcile every early-return path, including CAS,
+            // append, acceptance, sink, and provider-start failures. Pending
+            // operations with no canonical user are released immediately;
+            // once the user row exists the operation becomes terminal and its
+            // conversation reservation is cleared.
+            match reconcile_pre_execution_failure(store, operation, &user_message).await {
+                Ok(_) => Err(turn_error),
+                Err(reconcile_error) => Err(turn_error
+                    .context(format!("chat operation failure reconciliation also failed: {reconcile_error:#}"))),
+            }
+        }
+    }
+}
+
+async fn run_turn_inner(
+    producer: &dyn TurnProducer,
+    store: &dyn ConversationStore,
+    sink: &mut dyn ChatStreamSink,
     ctx: TurnContext<'_>,
+    mut operation: Option<&mut ChatTurnOperation>,
 ) -> Result<u64> {
     // Cross-process lock held for the WHOLE turn (read meta → append user →
     // run provider → append assistant → save meta). Two simultaneous sends to
@@ -223,42 +275,321 @@ pub(crate) async fn run_turn(
     // other lock files and proceed in parallel. Acquisition is a non-blocking
     // try + async sleep so a contended lock never parks a runtime worker
     // while the holder is itself awaiting provider events.
-    let _lock = loop {
-        if let Some(lock) = store.try_lock_conversation(ctx.conversation_id)? {
-            break lock;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    };
+    let _lock = acquire_conversation_lock(store, ctx.conversation_id).await?;
 
     let mut meta = store
         .load_meta(ctx.conversation_id)?
         .ok_or_else(|| anyhow!("conversation '{}' not found", ctx.conversation_id))?;
 
+    // Repair a crash between append_message and save_meta before assigning a
+    // new sequence. This is also what makes an idempotency retry safe after
+    // the process stopped at that exact filesystem boundary.
+    let existing = store.load_messages(ctx.conversation_id)?;
+    let canonical_count = existing.iter().map(|message| message.seq.saturating_add(1)).max().unwrap_or(0);
+    let operation_id = operation.as_ref().map(|op| op.claim().operation_id.clone());
+    let user_message_id = operation
+        .as_ref()
+        .map(|op| op.user_message_id().to_string())
+        .unwrap_or_else(|| format!("msg-{}", uuid::Uuid::new_v4()));
+
+    let operation_reserved = match (meta.active_operation_id.as_deref(), operation_id.as_deref()) {
+        (Some(active), Some(current)) if active == current => true,
+        (Some(active), Some(current)) => {
+            return Err(crate::conflict_error(format!(
+                "idempotency_in_progress: conversation is reserved by operation '{active}', not '{current}'"
+            )));
+        }
+        (Some(active), None) => {
+            return Err(crate::conflict_error(format!(
+                "idempotency_in_progress: conversation is reserved by application operation '{active}'"
+            )));
+        }
+        (None, _) => false,
+    };
+
+    // A recovered pending claim may have crashed after appending the user row
+    // but before advancing the SQLite journal. Stable ids are authoritative.
+    // The staged external protocol omits message ids, so under this exact
+    // operation reservation the pre-append message_count is also a canonical
+    // seq/role locator; content is validated below before any provider runs.
+    let allow_seq_fallback = operation.as_ref().is_some_and(|op| op.claim().recovered) && operation_reserved;
+    let recovered_user = existing.iter().find(|message| {
+        message.id.as_deref() == Some(&user_message_id)
+            || (allow_seq_fallback
+                && message.id.is_none()
+                && message.seq == meta.message_count
+                && message.role == ChatRole::User)
+    });
+
+    if let Some(op) = operation.as_mut() {
+        let execution_hash = ctx
+            .execution_hash
+            .ok_or_else(|| anyhow!("internal: keyed chat operation is missing its resolved execution hash"))?;
+        if matches!(op.bind_execution_hash(execution_hash)?, super::idempotency::ExecutionHashBinding::Drifted) {
+            if !op.claim().recovered {
+                return Err(crate::conflict_error(
+                    "idempotency_conflict: a live chat operation changed its resolved execution snapshot",
+                ));
+            }
+            if let Some(message) = recovered_user {
+                if message.role != ChatRole::User || message.content != ctx.user_message {
+                    return Err(crate::conflict_error(
+                        "idempotency_conflict: recovered user message does not match the effective chat request",
+                    ));
+                }
+                let receipt = op.interrupt_recovered_user(
+                    message.seq,
+                    "resolved execution changed after the user message was accepted; provider execution was not repeated",
+                )?;
+                clear_operation_reservation_locked(store, ctx.conversation_id, &receipt.operation_id)?;
+                sink.emit(&ChatStreamEvent::TurnFailed {
+                    status: receipt.status,
+                    conversation_id: ctx.conversation_id.to_string(),
+                    user_seq: receipt.user_seq.unwrap_or(message.seq),
+                    user_message_id: receipt.user_message_id,
+                    operation_id: Some(receipt.operation_id),
+                    error_code: receipt.error_code.unwrap_or_else(|| "assistant_interrupted".to_string()),
+                    error_message: receipt
+                        .error_message
+                        .unwrap_or_else(|| "assistant execution was interrupted".to_string()),
+                })?;
+                return Err(anyhow!(
+                    "assistant_interrupted: resolved execution changed after canonical user-message acceptance"
+                ));
+            }
+
+            // No canonical user row means no provider could have started. The
+            // recovered lease and conversation lock exclude the old process,
+            // so rebinding and continuing this same operation is safe.
+            op.rebind_recovered_execution_hash(execution_hash)?;
+        }
+    }
+
+    if let Some(expected) = ctx.expected_revision {
+        // The persisted operation id is durable proof that this exact retry
+        // consumed the original revision reservation—even if the process died
+        // before appending its user row.
+        if meta.revision != expected && !operation_reserved {
+            return Err(crate::conflict_error(format!(
+                "chat_precondition_failed:revision_conflict: conversation '{}' expected revision {}, found {}",
+                ctx.conversation_id, expected, meta.revision
+            )));
+        }
+    }
+
+    // Re-check identity while holding the same lock that protects message
+    // persistence. This prevents a local bind/rebind race between the CLI's
+    // preflight and provider execution. The plugin contract carries the same
+    // field; multi-host backends must make save_meta conditional/serialized.
+    let mut meta_changed = false;
+    if let Some(current) = operation_id.as_deref() {
+        if !operation_reserved {
+            meta.active_operation_id = Some(current.to_string());
+            meta_changed = true;
+        }
+    }
+    if meta.message_count < canonical_count {
+        meta.message_count = canonical_count;
+        meta_changed = true;
+    }
+    match (meta.agent_id.as_deref(), ctx.agent_id) {
+        (Some(stored), Some(expected)) if stored == expected => {}
+        (None, Some(expected)) => {
+            meta.agent_id = Some(expected.to_string());
+            meta_changed = true;
+        }
+        (None, None) => {}
+        (Some(stored), Some(expected)) => {
+            return Err(crate::conflict_error(format!(
+                "chat_precondition_failed:binding_conflict: conversation agent binding changed before send (expected '{expected}', found '{stored}')"
+            )));
+        }
+        (Some(stored), None) => {
+            return Err(crate::conflict_error(format!(
+                "chat_precondition_failed:binding_conflict: conversation became bound to agent '{stored}' before send"
+            )));
+        }
+    }
+    if let Some(title) = ctx.title_update {
+        let title = super::normalize_title_update(Some(title)).expect("turn context supplied a title update");
+        if meta.title != title {
+            meta.title = title;
+            meta_changed = true;
+        }
+    }
+    // An application-supplied revision also reserves this operation with a
+    // backend CAS before the first message append. Merely comparing the token
+    // after load would leave a multi-host gap between that read and mutation.
+    // Binding/title updates serve as the reservation when present; otherwise
+    // advance the revision alone.
+    if meta_changed || (ctx.expected_revision.is_some() && !operation_reserved) {
+        meta.updated_at = now_rfc3339();
+        save_meta_update(store, &mut meta)?;
+        let persisted = store
+            .load_meta(ctx.conversation_id)?
+            .ok_or_else(|| anyhow!("conversation '{}' disappeared while binding", ctx.conversation_id))?;
+        if persisted.agent_id != meta.agent_id
+            || persisted.revision != meta.revision
+            || persisted.active_operation_id != meta.active_operation_id
+        {
+            return Err(crate::conflict_error(format!(
+                "chat_precondition_failed:reservation_lost: conversation store did not preserve canonical binding/revision/operation reservation for '{}'",
+                ctx.conversation_id
+            )));
+        }
+        meta = persisted;
+    }
+
     // (1) Persist the user message FIRST — before the provider call — so a
-    // crash mid-turn never loses the user's input.
-    let user_seq = meta.message_count;
-    store.append_message(
-        ctx.conversation_id,
-        &ChatMessage {
-            seq: user_seq,
-            role: ChatRole::User,
-            content: ctx.user_message.to_string(),
-            recorded_at: now_rfc3339(),
-            tool: None,
-            model: None,
-            usage: None,
-            cost_usd: None,
-            blocks: Vec::new(),
-        },
-    )?;
-    meta.message_count += 1;
+    // crash mid-turn never loses the user's input. Recovered operations reuse
+    // the preallocated id and canonical sequence instead of appending again.
+    let user_seq = if let Some(message) = recovered_user {
+        if message.role != ChatRole::User || message.content != ctx.user_message {
+            return Err(crate::conflict_error(
+                "idempotency_conflict: recovered user message does not match the effective chat request",
+            ));
+        }
+        message.seq
+    } else {
+        let seq = meta.message_count;
+        store.append_message(
+            ctx.conversation_id,
+            &ChatMessage {
+                id: Some(user_message_id.clone()),
+                seq,
+                role: ChatRole::User,
+                content: ctx.user_message.to_string(),
+                recorded_at: now_rfc3339(),
+                tool: None,
+                model: None,
+                usage: None,
+                cost_usd: None,
+                blocks: Vec::new(),
+            },
+        )?;
+        seq
+    };
+
+    if let Some(op) = operation.as_mut() {
+        op.mark_user_accepted(user_seq)?;
+    }
+    meta.message_count = meta.message_count.max(user_seq.saturating_add(1));
     // Persist the bumped count BEFORE the provider call. If the provider
     // fails or the process crashes mid-turn, the user message and the count
     // stay consistent, so the next turn assigns a fresh seq instead of
     // colliding with — and the replay filter dropping — the prior user turn.
     meta.updated_at = now_rfc3339();
-    store.save_meta(&meta)?;
+    save_meta_update(store, &mut meta)?;
+    sink.emit(&ChatStreamEvent::UserMessageAccepted {
+        status: orchestrator_core::ChatOperationStatus::UserAccepted,
+        conversation_id: ctx.conversation_id.to_string(),
+        seq: user_seq,
+        message_id: user_message_id.clone(),
+        operation_id: operation_id.clone(),
+    })?;
 
+    let assistant_message_id = operation
+        .as_ref()
+        .map(|op| op.assistant_message_id().to_string())
+        .unwrap_or_else(|| format!("msg-{}", uuid::Uuid::new_v4()));
+    let assistant_append_fence = operation.as_ref().map(|op| op.assistant_append_fence());
+    let turn = finish_turn(
+        producer,
+        store,
+        sink,
+        &ctx,
+        meta,
+        user_seq,
+        &assistant_message_id,
+        operation_id.as_deref(),
+        assistant_append_fence.as_ref(),
+    )
+    .await;
+
+    match turn {
+        Ok((assistant_seq, session_id)) => {
+            if let Some(op) = operation.as_mut() {
+                op.complete(assistant_seq)?;
+            }
+            // Application-keyed replays come from the durable receipt, which
+            // intentionally does not expose the provider continuity token.
+            // Keep the first keyed response wire-identical; continuity remains
+            // persisted in conversation metadata for the next turn.
+            let response_session_id = operation_id.is_none().then_some(session_id).flatten();
+            sink.emit(&ChatStreamEvent::TurnCompleted {
+                status: orchestrator_core::ChatOperationStatus::Completed,
+                conversation_id: ctx.conversation_id.to_string(),
+                seq: assistant_seq,
+                message_id: assistant_message_id,
+                user_seq,
+                user_message_id,
+                operation_id,
+                session_id: response_session_id,
+            })?;
+            Ok(assistant_seq)
+        }
+        Err(error) => {
+            // append_message and metadata persistence are separate operations
+            // for both the filesystem and plugin stores. If the assistant row
+            // is already canonical, a later metadata/CAS error must not turn a
+            // durable answer into a permanently replayed failure. Stable IDs
+            // are preferred; current external stores can be reconciled by the
+            // serialized canonical next sequence and assistant role.
+            let canonical_assistant_seq = user_seq.checked_add(1);
+            let persisted_assistant = store.load_messages(ctx.conversation_id)?.into_iter().find(|message| {
+                message.id.as_deref() == Some(assistant_message_id.as_str())
+                    || (message.id.is_none()
+                        && Some(message.seq) == canonical_assistant_seq
+                        && message.role == ChatRole::Assistant)
+            });
+            if let Some(message) = persisted_assistant {
+                if let Some(op) = operation.as_mut() {
+                    op.complete(message.seq)?;
+                }
+                if let Some(id) = operation_id.as_deref() {
+                    clear_operation_reservation_locked(store, ctx.conversation_id, id)?;
+                }
+                sink.emit(&ChatStreamEvent::TurnCompleted {
+                    status: orchestrator_core::ChatOperationStatus::Completed,
+                    conversation_id: ctx.conversation_id.to_string(),
+                    seq: message.seq,
+                    message_id: assistant_message_id,
+                    user_seq,
+                    user_message_id,
+                    operation_id,
+                    session_id: None,
+                })?;
+                return Ok(message.seq);
+            }
+            if let Some(op) = operation.as_mut() {
+                let receipt = op.fail("provider_failed", &error.to_string())?;
+                clear_operation_reservation_locked(store, ctx.conversation_id, &receipt.operation_id)?;
+                sink.emit(&ChatStreamEvent::TurnFailed {
+                    status: receipt.status,
+                    conversation_id: ctx.conversation_id.to_string(),
+                    user_seq: receipt.user_seq.unwrap_or(user_seq),
+                    user_message_id: receipt.user_message_id,
+                    operation_id: Some(receipt.operation_id),
+                    error_code: receipt.error_code.unwrap_or_else(|| "provider_failed".to_string()),
+                    error_message: receipt.error_message.unwrap_or_else(|| "assistant failed".to_string()),
+                })?;
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn finish_turn(
+    producer: &dyn TurnProducer,
+    store: &dyn ConversationStore,
+    sink: &mut dyn ChatStreamSink,
+    ctx: &TurnContext<'_>,
+    mut meta: super::store::ConversationMeta,
+    user_seq: u64,
+    assistant_message_id: &str,
+    operation_id: Option<&str>,
+    operation_fence: Option<&animus_plugin_protocol::conversation_store::ConversationOperationAppendFence>,
+) -> Result<(u64, Option<String>)> {
     // (2) Resume-vs-replay decision. A stored session_id is only valid for
     // the tool that issued it — a tool change forces replay. A backend that
     // does not advertise native resume must ALSO replay: handing it a
@@ -302,7 +633,7 @@ pub(crate) async fn run_turn(
         resumed,
     })?;
 
-    let mut output = drive_once(producer, sink, &ctx, &prior_history, resume_session_id.as_deref(), resumed).await?;
+    let mut output = drive_once(producer, sink, ctx, &prior_history, resume_session_id.as_deref(), resumed).await?;
 
     // (5) Stale-session fallback: if a resume attempt reports the session is
     // gone/invalid, retry ONCE with the full-history replay and no
@@ -318,7 +649,7 @@ pub(crate) async fn run_turn(
             model: ctx.model.to_string(),
             resumed,
         })?;
-        output = drive_once(producer, sink, &ctx, &prior_history, None, resumed).await?;
+        output = drive_once(producer, sink, ctx, &prior_history, None, resumed).await?;
         if output.stale_session {
             return Err(anyhow!(
                 "provider reported a stale session even after a full-history replay for conversation '{}'",
@@ -344,9 +675,10 @@ pub(crate) async fn run_turn(
 
     // (4) Persist the assistant message and capture continuity pointer.
     let assistant_seq = meta.message_count;
-    store.append_message(
+    store.append_assistant_message(
         ctx.conversation_id,
         &ChatMessage {
+            id: Some(assistant_message_id.to_string()),
             seq: assistant_seq,
             role: ChatRole::Assistant,
             content: output.text.clone(),
@@ -357,6 +689,7 @@ pub(crate) async fn run_turn(
             cost_usd: output.cost_usd,
             blocks: output.blocks.clone(),
         },
+        operation_fence,
     )?;
     meta.message_count += 1;
 
@@ -366,16 +699,186 @@ pub(crate) async fn run_turn(
     meta.session_id = output.session_id.clone();
     meta.tool = Some(ctx.tool.to_string());
     meta.model = Some(ctx.model.to_string());
+    if meta.active_operation_id.as_deref() == operation_id {
+        meta.active_operation_id = None;
+    }
     meta.updated_at = now_rfc3339();
-    store.save_meta(&meta)?;
+    save_meta_update(store, &mut meta)?;
 
-    sink.emit(&ChatStreamEvent::TurnCompleted {
-        conversation_id: ctx.conversation_id.to_string(),
-        seq: assistant_seq,
-        session_id: output.session_id.clone(),
-    })?;
+    Ok((assistant_seq, output.session_id))
+}
 
-    Ok(assistant_seq)
+async fn acquire_conversation_lock(
+    store: &dyn ConversationStore,
+    conversation_id: &str,
+) -> Result<super::store::ConversationLock> {
+    loop {
+        if let Some(lock) = store.try_lock_conversation(conversation_id)? {
+            return Ok(lock);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+pub(crate) async fn reconcile_recovered_accepted(
+    store: &dyn ConversationStore,
+    operation: &mut ChatTurnOperation,
+) -> Result<orchestrator_core::ChatOperationReceipt> {
+    let claim = operation.claim();
+    let conversation_id = &claim.request().conversation_id;
+    let _lock = acquire_conversation_lock(store, conversation_id).await?;
+    if !operation.renew_authority()? {
+        let receipt = operation.receipt()?;
+        if !receipt.status.is_terminal() {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: recovered chat operation authority moved while waiting for the conversation lock",
+            ));
+        }
+        clear_operation_reservation_locked(store, conversation_id, &receipt.operation_id)?;
+        return Ok(receipt);
+    }
+    let canonical_assistant_seq = claim.user_seq.and_then(|seq| seq.checked_add(1));
+    let assistant_seq = store
+        .load_messages(conversation_id)?
+        .into_iter()
+        .find(|message| {
+            message.id.as_deref() == Some(&claim.assistant_message_id)
+                || (message.id.is_none()
+                    && Some(message.seq) == canonical_assistant_seq
+                    && message.role == ChatRole::Assistant)
+        })
+        .map(|message| message.seq);
+    let receipt = operation.reconcile_recovered_accepted(assistant_seq)?;
+    if !receipt.status.is_terminal() {
+        return Err(crate::conflict_error(
+            "idempotency_in_progress: recovered chat operation authority moved before terminal reconciliation",
+        ));
+    }
+    clear_operation_reservation_locked(store, conversation_id, &receipt.operation_id)?;
+    Ok(receipt)
+}
+
+/// Resolve an error that occurred after a pending keyed admission but before
+/// `run_turn` could bind/execute it. This prevents a deleted profile, invalid
+/// MCP config, or other preparation failure from stranding the conversation.
+pub(crate) async fn reconcile_pre_execution_failure(
+    store: &dyn ConversationStore,
+    operation: &mut ChatTurnOperation,
+    user_message: &str,
+) -> Result<Option<orchestrator_core::ChatOperationReceipt>> {
+    let conversation_id = operation.claim().request().conversation_id.clone();
+    let operation_id = operation.claim().operation_id.clone();
+    let user_message_id = operation.user_message_id().to_string();
+    let _lock = acquire_conversation_lock(store, &conversation_id).await?;
+
+    if !operation.renew_authority()? {
+        let receipt = operation.receipt()?;
+        if !receipt.status.is_terminal() {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: pending chat operation authority moved during preparation failure reconciliation",
+            ));
+        }
+        clear_operation_reservation_locked(store, &conversation_id, &operation_id)?;
+        return Ok(Some(receipt));
+    }
+
+    let meta = store
+        .load_meta(&conversation_id)?
+        .ok_or_else(|| anyhow!("conversation '{conversation_id}' disappeared during operation reconciliation"))?;
+    let allow_seq_fallback =
+        operation.claim().recovered && meta.active_operation_id.as_deref() == Some(operation_id.as_str());
+    let messages = store.load_messages(&conversation_id)?;
+    let user = messages.iter().find(|message| {
+        message.id.as_deref() == Some(user_message_id.as_str())
+            || (allow_seq_fallback
+                && message.id.is_none()
+                && message.seq == meta.message_count
+                && message.role == ChatRole::User)
+    });
+
+    if let Some(message) = user {
+        if message.role != ChatRole::User || message.content != user_message {
+            return Err(crate::conflict_error(
+                "idempotency_conflict: recovered user message does not match the failed chat preparation",
+            ));
+        }
+        let canonical_assistant_seq = message.seq.checked_add(1);
+        let assistant_seq = messages
+            .iter()
+            .find(|candidate| {
+                candidate.id.as_deref() == Some(operation.assistant_message_id())
+                    || (candidate.id.is_none()
+                        && Some(candidate.seq) == canonical_assistant_seq
+                        && candidate.role == ChatRole::Assistant)
+            })
+            .map(|candidate| candidate.seq);
+        let receipt = operation.reconcile_durable_user(
+            message.seq,
+            assistant_seq,
+            "chat preparation failed after the user message was accepted; provider execution was not repeated",
+        )?;
+        if !receipt.status.is_terminal() {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: preparation failure could not record a terminal chat outcome",
+            ));
+        }
+        clear_operation_reservation_locked(store, &conversation_id, &operation_id)?;
+        return Ok(Some(receipt));
+    }
+
+    // No canonical user row means this admission has no externally visible
+    // effect. Clear its conversation reservation first, then delete the
+    // lease-owned pending journal row so the same caller key can retry after
+    // the configuration problem is repaired.
+    clear_operation_reservation_locked(store, &conversation_id, &operation_id)?;
+    operation.release_pending()?;
+    Ok(None)
+}
+
+pub(crate) async fn clear_operation_reservation(
+    store: &dyn ConversationStore,
+    conversation_id: &str,
+    operation_id: &str,
+) -> Result<()> {
+    let _lock = acquire_conversation_lock(store, conversation_id).await?;
+    clear_operation_reservation_locked(store, conversation_id, operation_id)
+}
+
+fn clear_operation_reservation_locked(
+    store: &dyn ConversationStore,
+    conversation_id: &str,
+    operation_id: &str,
+) -> Result<()> {
+    let Some(mut meta) = store.load_meta(conversation_id)? else {
+        return Ok(());
+    };
+    let canonical_count = store
+        .load_messages(conversation_id)?
+        .into_iter()
+        .map(|message| message.seq.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    let mut changed = false;
+    if meta.active_operation_id.as_deref() == Some(operation_id) {
+        meta.active_operation_id = None;
+        changed = true;
+    }
+    if meta.message_count < canonical_count {
+        meta.message_count = canonical_count;
+        changed = true;
+    }
+    if !changed {
+        return Ok(());
+    }
+    meta.updated_at = now_rfc3339();
+    save_meta_update(store, &mut meta)
+}
+
+fn save_meta_update(store: &dyn ConversationStore, meta: &mut ConversationMeta) -> Result<()> {
+    let expected = meta.revision;
+    meta.revision =
+        meta.revision.checked_add(1).ok_or_else(|| anyhow!("conversation '{}' revision exhausted", meta.id))?;
+    store.save_meta_if_revision(meta, Some(expected))
 }
 
 /// Build the request, start the session, and drain it once. The `resumed`
@@ -409,13 +912,18 @@ async fn drive_once(
         None => prompt,
     };
 
-    // Skill system-prompt fragments ride `extras.system_prompt` on every
-    // turn (chat has no explicit system-prompt flag to merge with).
-    if let Some(skill) = ctx.skill {
-        if let Value::Object(map) = &mut extras {
-            if let Some(merged) = animus_runtime_shared::merge_skill_system_prompt(None, skill) {
-                map.insert("system_prompt".to_string(), Value::String(merged));
-            }
+    // The bound profile persona rides every attempt. Explicit skill fragments
+    // compose after it using the same merge helper as ad-hoc agent runs.
+    if let Value::Object(map) = &mut extras {
+        let system_prompt = match ctx.skill {
+            Some(skill) => animus_runtime_shared::merge_skill_system_prompt(ctx.agent_system_prompt, skill),
+            None => ctx.agent_system_prompt.map(ToOwned::to_owned),
+        };
+        if let Some(system_prompt) = system_prompt {
+            map.insert("system_prompt".to_string(), Value::String(system_prompt));
+        }
+        if let Some(tool_profile) = ctx.agent_tool_profile {
+            map.insert("claude_profile".to_string(), Value::String(tool_profile.to_string()));
         }
     }
 
@@ -752,7 +1260,8 @@ fn now_rfc3339() -> String {
 mod tests {
     use super::*;
     use crate::services::runtime::runtime_chat::sink::CapturingSink;
-    use crate::services::runtime::runtime_chat::store::FileConversationStore;
+    use crate::services::runtime::runtime_chat::store::{ConversationLock, ConversationSummary, FileConversationStore};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     use tokio::sync::mpsc;
 
@@ -843,9 +1352,106 @@ mod tests {
         FileConversationStore::with_root_for_test(tmp.path().join("chat"))
     }
 
+    struct FailMetaSaveStore {
+        inner: FileConversationStore,
+        save_calls: AtomicUsize,
+        fail_on_call: usize,
+    }
+
+    impl ConversationStore for FailMetaSaveStore {
+        fn try_lock_conversation(&self, id: &str) -> Result<Option<ConversationLock>> {
+            self.inner.try_lock_conversation(id)
+        }
+
+        fn create(&self, id: Option<String>) -> Result<ConversationMeta> {
+            self.inner.create(id)
+        }
+
+        fn load_meta(&self, id: &str) -> Result<Option<ConversationMeta>> {
+            self.inner.load_meta(id)
+        }
+
+        fn save_meta(&self, meta: &ConversationMeta) -> Result<()> {
+            self.inner.save_meta(meta)
+        }
+
+        fn save_meta_if_revision(&self, meta: &ConversationMeta, expected: Option<u64>) -> Result<()> {
+            let call = self.save_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == self.fail_on_call {
+                return Err(anyhow!("injected metadata persistence failure"));
+            }
+            self.inner.save_meta_if_revision(meta, expected)
+        }
+
+        fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()> {
+            self.inner.append_message(id, message)
+        }
+
+        fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>> {
+            self.inner.load_messages(id)
+        }
+
+        fn list(&self) -> Result<Vec<ConversationSummary>> {
+            self.inner.list()
+        }
+
+        fn delete(&self, id: &str) -> Result<()> {
+            self.inner.delete(id)
+        }
+    }
+
+    struct FailAppendOnceStore {
+        inner: FileConversationStore,
+        append_calls: AtomicUsize,
+    }
+
+    impl ConversationStore for FailAppendOnceStore {
+        fn try_lock_conversation(&self, id: &str) -> Result<Option<ConversationLock>> {
+            self.inner.try_lock_conversation(id)
+        }
+
+        fn create(&self, id: Option<String>) -> Result<ConversationMeta> {
+            self.inner.create(id)
+        }
+
+        fn load_meta(&self, id: &str) -> Result<Option<ConversationMeta>> {
+            self.inner.load_meta(id)
+        }
+
+        fn save_meta(&self, meta: &ConversationMeta) -> Result<()> {
+            self.inner.save_meta(meta)
+        }
+
+        fn save_meta_if_revision(&self, meta: &ConversationMeta, expected: Option<u64>) -> Result<()> {
+            self.inner.save_meta_if_revision(meta, expected)
+        }
+
+        fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()> {
+            if self.append_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(anyhow!("injected user append failure"));
+            }
+            self.inner.append_message(id, message)
+        }
+
+        fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>> {
+            self.inner.load_messages(id)
+        }
+
+        fn list(&self) -> Result<Vec<ConversationSummary>> {
+            self.inner.list()
+        }
+
+        fn delete(&self, id: &str) -> Result<()> {
+            self.inner.delete(id)
+        }
+    }
+
     fn ctx<'a>(id: &'a str, tool: &'a str, msg: &'a str, tmp: &tempfile::TempDir) -> TurnContext<'a> {
         TurnContext {
             conversation_id: id,
+            agent_id: None,
+            expected_revision: None,
+            title_update: None,
             tool,
             model: "claude-sonnet-4-6",
             user_message: msg,
@@ -854,9 +1460,13 @@ mod tests {
             reasoning_effort: None,
             permission_mode: None,
             approvals: false,
+            agent_system_prompt: None,
+            agent_tool_profile: None,
             mcp_contract: None,
             isolated_mcp_config_path: None,
             skill: None,
+            operation: None,
+            execution_hash: None,
         }
     }
 
@@ -897,6 +1507,391 @@ mod tests {
             _ => None,
         });
         assert_eq!(started, Some(false));
+    }
+
+    #[tokio::test]
+    async fn canonical_agent_binding_and_persona_are_persisted_before_provider_execution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("hi", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let turn = TurnContext {
+            agent_id: Some("researcher"),
+            agent_system_prompt: Some("You are the research agent."),
+            agent_tool_profile: Some("research-profile"),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+
+        run_turn(&producer, &store, &mut sink, turn).await.unwrap();
+
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.agent_id.as_deref(), Some("researcher"));
+        assert_eq!(meta.revision, 3, "bind + user acceptance + assistant completion each advance revision");
+        let request = &producer.requests()[0];
+        assert_eq!(request.extras.get("system_prompt").and_then(Value::as_str), Some("You are the research agent."));
+        assert_eq!(request.extras.get("claude_profile").and_then(Value::as_str), Some("research-profile"));
+    }
+
+    #[tokio::test]
+    async fn conflicting_binding_and_stale_revision_fail_before_message_or_provider() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        meta.revision = 1;
+        store.save_meta(&meta).unwrap();
+        let producer = MockProducer::new(vec![text_turn("unused", "sess-1")]);
+
+        let mut sink = CapturingSink::new();
+        let conflict = TurnContext { agent_id: Some("writer"), ..ctx("c1", "claude", "hello", &tmp) };
+        let error = run_turn(&producer, &store, &mut sink, conflict).await.unwrap_err();
+        assert!(error.to_string().contains("binding changed"), "unexpected error: {error}");
+
+        let mut sink = CapturingSink::new();
+        let stale = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(0),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+        let error = run_turn(&producer, &store, &mut sink, stale).await.unwrap_err();
+        assert!(error.to_string().contains("chat_precondition_failed:revision_conflict:"), "unexpected error: {error}");
+        assert!(store.load_messages("c1").unwrap().is_empty());
+        assert!(producer.requests().is_empty(), "failed preconditions must not reach the provider");
+    }
+
+    #[tokio::test]
+    async fn expected_revision_reserves_the_operation_before_message_append() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        meta.revision = 4;
+        store.save_meta(&meta).unwrap();
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let turn = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(4),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+
+        run_turn(&producer, &store, &mut sink, turn).await.unwrap();
+
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.revision, 7, "reservation + user acceptance + assistant completion");
+        assert_eq!(store.load_messages("c1").unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn recovered_idempotent_user_row_reuses_consumed_revision_reservation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-recovered", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(mut claim) =
+            operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        claim.recovered = true;
+        // Simulate the first process having consumed expected revision 4,
+        // durably reserved it for this exact operation, then appended the
+        // preallocated user row before its journal update.
+        meta.revision = 5;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+        store
+            .append_message(
+                "c1",
+                &ChatMessage {
+                    // Simulate the staged external conversation-store
+                    // protocol, which round-trips canonical seq/role/content
+                    // but not the additive message id.
+                    id: None,
+                    seq: 0,
+                    role: ChatRole::User,
+                    content: "hello".into(),
+                    recorded_at: now_rfc3339(),
+                    tool: None,
+                    model: None,
+                    usage: None,
+                    cost_usd: None,
+                    blocks: Vec::new(),
+                },
+            )
+            .unwrap();
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(4),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        assert_eq!(run_turn(&producer, &store, &mut sink, context).await.unwrap(), 1);
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 2, "recovery must not append the user row twice");
+        assert_eq!(messages[0].id, None);
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("recovered operation should complete");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn recovered_operation_resumes_after_revision_reservation_before_user_append() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-before-user", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+
+        // This is the exact crash boundary: expected revision 4 has already
+        // been consumed and tied to the operation, but no transcript row or
+        // user_accepted journal transition exists yet.
+        meta.revision = 5;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(4),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        assert_eq!(run_turn(&producer, &store, &mut sink, context).await.unwrap(), 1);
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "hello");
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("recovered operation should complete");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn recovered_pending_operation_rebinds_changed_execution_when_no_user_was_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-drift-empty", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(mut claim) =
+            operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        assert!(operation_store.bind_execution_hash(&mut claim, "old-execution").unwrap());
+        claim.recovered = true;
+        meta.revision = 5;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(4),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("new-execution");
+
+        assert_eq!(run_turn(&producer, &store, &mut sink, context).await.unwrap(), 1);
+        assert_eq!(producer.requests().len(), 1);
+        assert_eq!(store.load_messages("c1").unwrap().len(), 2);
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("rebound recovered operation should complete");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn recovered_execution_drift_interrupts_a_durable_user_without_running_provider() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-drift-user", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(mut claim) =
+            operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        assert!(operation_store.bind_execution_hash(&mut claim, "old-execution").unwrap());
+        claim.recovered = true;
+        meta.revision = 5;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+        store
+            .append_message(
+                "c1",
+                &ChatMessage {
+                    id: Some(claim.user_message_id.clone()),
+                    seq: 0,
+                    role: ChatRole::User,
+                    content: "hello".into(),
+                    recorded_at: now_rfc3339(),
+                    tool: None,
+                    model: None,
+                    usage: None,
+                    cost_usd: None,
+                    blocks: Vec::new(),
+                },
+            )
+            .unwrap();
+
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(4),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("new-execution");
+
+        assert!(run_turn(&producer, &store, &mut sink, context).await.is_err());
+        assert!(producer.requests().is_empty(), "execution drift must not repeat provider effects");
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.active_operation_id, None);
+        assert_eq!(meta.message_count, 1);
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("interrupted recovered operation should replay");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantInterrupted);
+        assert_eq!(receipt.user_seq, Some(0));
+        assert!(sink.events.iter().any(|event| matches!(
+            event,
+            ChatStreamEvent::TurnFailed { status: orchestrator_core::ChatOperationStatus::AssistantInterrupted, .. }
+        )));
+    }
+
+    #[tokio::test]
+    async fn recovered_user_accepted_reconciliation_waits_for_the_conversation_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-lock", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(mut claim) = operation_store.begin(request).unwrap() else {
+            panic!("first operation should acquire");
+        };
+        assert!(operation_store.mark_user_accepted(&mut claim, 0).unwrap());
+        claim.recovered = true;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+
+        let held = store.try_lock_conversation("c1").unwrap().expect("test owns conversation lock");
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store), claim);
+        let mut reconciliation = Box::pin(reconcile_recovered_accepted(&store, &mut operation));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(40), &mut reconciliation).await.is_err(),
+            "recovery must not inspect or terminalize while another turn owns the lock"
+        );
+        drop(held);
+        let receipt = tokio::time::timeout(std::time::Duration::from_secs(1), reconciliation)
+            .await
+            .expect("reconciliation should continue after lock release")
+            .unwrap();
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantInterrupted);
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+    }
+
+    #[tokio::test]
+    async fn failed_preparation_releases_a_recovered_pending_operation_with_no_user() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-prep-empty", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(mut claim) =
+            operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        claim.recovered = true;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+
+        assert!(reconcile_pre_execution_failure(&store, &mut operation, "hello").await.unwrap().is_none());
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        assert!(matches!(operation_store.begin(request).unwrap(), orchestrator_core::ChatOperationBegin::Acquired(_)));
+    }
+
+    #[tokio::test]
+    async fn failed_preparation_interrupts_an_external_user_row_without_message_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-prep-user", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(mut claim) =
+            operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        claim.recovered = true;
+        meta.active_operation_id = Some(claim.operation_id.clone());
+        store.save_meta(&meta).unwrap();
+        store
+            .append_message(
+                "c1",
+                &ChatMessage {
+                    id: None,
+                    seq: 0,
+                    role: ChatRole::User,
+                    content: "hello".into(),
+                    recorded_at: now_rfc3339(),
+                    tool: None,
+                    model: None,
+                    usage: None,
+                    cost_usd: None,
+                    blocks: Vec::new(),
+                },
+            )
+            .unwrap();
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+
+        let receipt = reconcile_pre_execution_failure(&store, &mut operation, "hello")
+            .await
+            .unwrap()
+            .expect("durable user acceptance must become terminal");
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantInterrupted);
+        assert_eq!(receipt.user_seq, Some(0));
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.active_operation_id, None);
+        assert_eq!(meta.message_count, 1);
+        assert!(matches!(operation_store.begin(request).unwrap(), orchestrator_core::ChatOperationBegin::Replay(_)));
     }
 
     #[tokio::test]
@@ -1041,9 +2036,14 @@ mod tests {
         let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), text_turn("a2", "sess-1")]);
         let mut sink = CapturingSink::new();
 
-        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "q1", &tmp)).await.unwrap();
+        let bound = |message| TurnContext {
+            agent_id: Some("researcher"),
+            agent_system_prompt: Some("You are the research agent."),
+            ..ctx("c1", "claude", message, &tmp)
+        };
+        run_turn(&producer, &store, &mut sink, bound("q1")).await.unwrap();
         let mut sink2 = CapturingSink::new();
-        run_turn(&producer, &store, &mut sink2, ctx("c1", "claude", "q2", &tmp)).await.unwrap();
+        run_turn(&producer, &store, &mut sink2, bound("q2")).await.unwrap();
 
         let reqs = producer.requests();
         assert_eq!(reqs.len(), 2);
@@ -1132,9 +2132,14 @@ mod tests {
         let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), stale, text_turn("a2", "sess-2")]);
         let mut sink = CapturingSink::new();
 
-        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "q1", &tmp)).await.unwrap();
+        let bound = |message| TurnContext {
+            agent_id: Some("researcher"),
+            agent_system_prompt: Some("You are the research agent."),
+            ..ctx("c1", "claude", message, &tmp)
+        };
+        run_turn(&producer, &store, &mut sink, bound("q1")).await.unwrap();
         let mut sink2 = CapturingSink::new();
-        run_turn(&producer, &store, &mut sink2, ctx("c1", "claude", "q2", &tmp)).await.unwrap();
+        run_turn(&producer, &store, &mut sink2, bound("q2")).await.unwrap();
 
         let reqs = producer.requests();
         assert_eq!(reqs.len(), 3, "expected establish + failed-resume + retry");
@@ -1151,6 +2156,12 @@ mod tests {
         assert!(reqs[2].prompt.contains("User: q1"), "retry must replay prior user turn");
         assert!(reqs[2].prompt.contains("Assistant: a1"), "retry must replay prior assistant turn");
         assert!(reqs[2].prompt.trim_end().ends_with("User: q2"));
+        assert!(
+            reqs.iter().all(|request| {
+                request.extras.get("system_prompt").and_then(Value::as_str) == Some("You are the research agent.")
+            }),
+            "bound persona must survive start, native resume, and resume-loss replay fallback"
+        );
         // After the successful retry, meta points at the new session.
         let meta = store.load_meta("c1").unwrap().unwrap();
         assert_eq!(meta.session_id.as_deref(), Some("sess-2"));
@@ -1231,6 +2242,219 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idempotent_turn_persists_canonical_receipt_and_message_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-1", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        assert_eq!(run_turn(&producer, &store, &mut sink, context).await.unwrap(), 1);
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message.id.is_some()));
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("exact retry should replay");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::Completed);
+        assert_eq!(receipt.user_seq, Some(0));
+        assert_eq!(receipt.assistant_seq, Some(1));
+        assert_eq!(messages[0].id.as_deref(), Some(receipt.user_message_id.as_str()));
+        assert_eq!(messages[1].id.as_deref(), Some(receipt.assistant_message_id.as_str()));
+        assert!(sink.events.iter().any(|event| matches!(event, ChatStreamEvent::UserMessageAccepted { seq: 0, .. })));
+        assert!(sink.events.iter().any(|event| matches!(
+            event,
+            ChatStreamEvent::TurnCompleted {
+                status: orchestrator_core::ChatOperationStatus::Completed,
+                user_seq: 0,
+                seq: 1,
+                session_id: None,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn durable_assistant_row_wins_over_later_metadata_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FailMetaSaveStore {
+            inner: store_for(&tmp),
+            save_calls: AtomicUsize::new(0),
+            // The operation reservation and user-count saves succeed; the
+            // assistant metadata save fails after its row has been appended.
+            fail_on_call: 3,
+        };
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-meta-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        assert_eq!(run_turn(&producer, &store, &mut sink, context).await.unwrap(), 1);
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 2, "both canonical rows survive the metadata failure");
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("the durable assistant must reconcile as completed");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::Completed);
+        assert_eq!(receipt.assistant_seq, Some(1));
+        assert!(sink.events.iter().any(|event| matches!(
+            event,
+            ChatStreamEvent::TurnCompleted { status: orchestrator_core::ChatOperationStatus::Completed, seq: 1, .. }
+        )));
+        assert!(!sink.events.iter().any(|event| matches!(event, ChatStreamEvent::TurnFailed { .. })));
+    }
+
+    #[tokio::test]
+    async fn reservation_cas_failure_releases_pending_authority_immediately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FailMetaSaveStore { inner: store_for(&tmp), save_calls: AtomicUsize::new(0), fail_on_call: 1 };
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-cas-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        let error = run_turn(&producer, &store, &mut sink, context).await.unwrap_err();
+        assert!(error.to_string().contains("injected metadata persistence failure"));
+        assert!(producer.requests().is_empty());
+        assert!(store.load_messages("c1").unwrap().is_empty());
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        assert!(matches!(operation_store.begin(request).unwrap(), orchestrator_core::ChatOperationBegin::Acquired(_)));
+    }
+
+    #[tokio::test]
+    async fn user_append_failure_clears_reservation_and_releases_pending_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FailAppendOnceStore { inner: store_for(&tmp), append_calls: AtomicUsize::new(0) };
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-append-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        let error = run_turn(&producer, &store, &mut sink, context).await.unwrap_err();
+        assert!(error.to_string().contains("injected user append failure"));
+        assert!(producer.requests().is_empty());
+        assert!(store.load_messages("c1").unwrap().is_empty());
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        assert!(matches!(operation_store.begin(request).unwrap(), orchestrator_core::ChatOperationBegin::Acquired(_)));
+    }
+
+    #[tokio::test]
+    async fn lost_accept_response_terminalizes_durable_user_without_provider_repetition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-accept-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        operation.inject_lost_user_accept_response();
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        let error = run_turn(&producer, &store, &mut sink, context).await.unwrap_err();
+        assert!(error.to_string().contains("injected lost user-accept response"));
+        assert!(producer.requests().is_empty(), "ambiguous acceptance must not start the provider");
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ChatRole::User);
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("accepted user must have a terminal receipt");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantInterrupted);
+        assert_eq!(receipt.user_seq, Some(0));
+    }
+
+    #[tokio::test]
+    async fn idempotent_provider_failure_is_terminal_partial_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![(
+            vec![SessionEvent::Error { message: "provider exploded".into(), recoverable: false }],
+            None,
+        )]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        assert!(run_turn(&producer, &store, &mut sink, context).await.is_err());
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 1, "the accepted user row remains canonical");
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("failed operation should replay its terminal receipt");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantFailed);
+        assert_eq!(receipt.user_seq, Some(0));
+        assert_eq!(receipt.assistant_seq, None);
+        assert!(sink.events.iter().any(|event| matches!(
+            event,
+            ChatStreamEvent::TurnFailed {
+                status: orchestrator_core::ChatOperationStatus::AssistantFailed,
+                user_seq: 0,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
     async fn stale_session_error_on_fresh_turn_fails_instead_of_persisting_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store_for(&tmp);
@@ -1277,6 +2501,9 @@ mod tests {
                             &mut sink,
                             TurnContext {
                                 conversation_id: "c1",
+                                agent_id: None,
+                                expected_revision: None,
+                                title_update: None,
                                 tool: "claude",
                                 model: "claude-sonnet-4-6",
                                 user_message: &message,
@@ -1285,9 +2512,13 @@ mod tests {
                                 reasoning_effort: None,
                                 permission_mode: None,
                                 approvals: false,
+                                agent_system_prompt: None,
+                                agent_tool_profile: None,
                                 mcp_contract: None,
                                 isolated_mcp_config_path: None,
                                 skill: None,
+                                operation: None,
+                                execution_hash: None,
                             },
                         ))
                         .expect("concurrent send turn")

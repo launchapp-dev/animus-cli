@@ -344,7 +344,7 @@ v0.4.4 — `animus task` and `animus requirements` are gone):
 ```bash
 animus subject next --kind task
 animus subject status --kind task --id task:TASK-XXX --status in-progress
-animus workflow run --task-id TASK-XXX
+animus workflow run --subject-id task:TASK-XXX
 animus queue list
 animus daemon health
 ```

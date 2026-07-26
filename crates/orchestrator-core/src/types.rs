@@ -129,6 +129,7 @@ mod tests {
             guardrail_violations: vec![],
             commit_message: Some("test: validate phase decision contract".to_string()),
             target_phase: None,
+            verdict_key: None,
         };
 
         let serialized = serde_json::to_value(&decision).expect("phase decision should serialize successfully");
@@ -160,6 +161,7 @@ mod tests {
             guardrail_violations: vec![],
             commit_message: None,
             target_phase: None,
+            verdict_key: None,
         };
 
         let serialized = serde_json::to_value(&decision).expect("phase decision should serialize successfully");

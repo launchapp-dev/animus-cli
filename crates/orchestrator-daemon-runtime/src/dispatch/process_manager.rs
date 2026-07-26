@@ -14,6 +14,10 @@ use tokio::task::JoinHandle;
 
 #[cfg(unix)]
 use crate::control::WorkflowEventBroadcaster;
+use crate::dispatch::environment_broker::{
+    is_local_environment, EnvironmentBroker, ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV,
+};
 #[cfg(unix)]
 use crate::dispatch::event_pipe::SubprocessEventPipe;
 use crate::{build_runner_command_with_resume, CompletedProcess, RunnerEvent};
@@ -66,6 +70,10 @@ const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] = &[
     "ANIMUS_WORKFLOW_REATTACH_SOCKET",
     "ANIMUS_WORKFLOW_EVENT_PIPE",
     animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
 ];
 
 /// Upper bound on the serialized phase-skills payload the daemon will put on
@@ -167,6 +175,11 @@ struct WorkflowProcess {
     /// TARGETED run rather than leaving it Running — which would otherwise let
     /// the resume sweep re-dispatch it every tick in an endless loop.
     resume_workflow_id: Option<String>,
+    /// REQ-048 cross-phase environment broker: the broker `run_id` this spawn
+    /// was bound to (the workflow run id), set ONLY when the dispatch routes to
+    /// a non-local environment and a broker is wired. The daemon tears the run's
+    /// shared node down by this id once the workflow reaches a terminal state.
+    environment_run_id: Option<String>,
 }
 
 pub struct ProcessManager {
@@ -188,6 +201,22 @@ pub struct ProcessManager {
     /// spawn requests beyond this point are rejected; the dispatcher then
     /// leaves the entry in the ready queue for the next tick.
     workflow_concurrency_max: Option<usize>,
+    /// REQ-048: config-level environment routing (kind/harness rules + default).
+    /// Drives the daemon-side decision of whether a dispatch routes to a
+    /// non-local environment (and thus through the [`EnvironmentBroker`]).
+    pub environment_routing: Option<animus_config_protocol::workflow_types::EnvironmentRouting>,
+    /// Per-workflow `environment:` overrides (workflow id -> environment plugin
+    /// id, lowercased keys). The broker gate resolves the dispatch's workflow to
+    /// its `environment:` and feeds it to `resolve_environment` as `workflow_env`
+    /// — without this a workflow-level environment (the only environment config
+    /// on many deployments) was invisible to the daemon, so the broker never
+    /// engaged and each phase prepared its OWN node. See TASK-431 / REQ-051.
+    pub workflow_environments: std::collections::HashMap<String, String>,
+    /// REQ-048: the cross-phase ephemeral-environment broker. When wired AND the
+    /// dispatch routes to a non-local environment, the daemon sets the four
+    /// `ANIMUS_ENVIRONMENT_BROKER_*` env vars on the runner so it acquires the
+    /// run's shared node from the daemon instead of preparing its own.
+    environment_broker: Option<EnvironmentBroker>,
 }
 
 impl Default for ProcessManager {
@@ -222,6 +251,9 @@ impl ProcessManager {
             #[cfg(unix)]
             pipe_root: None,
             workflow_concurrency_max,
+            environment_routing: None,
+            workflow_environments: std::collections::HashMap::new(),
+            environment_broker: None,
         }
     }
 
@@ -256,6 +288,16 @@ impl ProcessManager {
     /// dispatchers.
     pub fn with_workflow_concurrency_max(mut self, max: Option<usize>) -> Self {
         self.workflow_concurrency_max = max;
+        self
+    }
+
+    /// REQ-048: wire the cross-phase ephemeral-environment broker. Once set,
+    /// [`Self::spawn_workflow_runner`] routes dispatches bound to a non-local
+    /// environment through the broker (four `ANIMUS_ENVIRONMENT_BROKER_*` env
+    /// vars on the runner), and [`Self::check_running`] tears the run's shared
+    /// node down when the workflow reaches a terminal state.
+    pub fn with_environment_broker(mut self, broker: EnvironmentBroker) -> Self {
+        self.environment_broker = Some(broker);
         self
     }
 
@@ -399,6 +441,14 @@ impl ProcessManager {
             command.env(animus_runtime_shared::reattach::ANIMUS_WORKFLOW_REATTACH_SOCKET_ENV, path.as_os_str());
         }
 
+        // REQ-048 cross-phase environment broker: when this dispatch routes to a
+        // non-local environment and a broker is wired, register the run and set
+        // the four `ANIMUS_ENVIRONMENT_BROKER_*` env vars so the runner acquires
+        // the run's SHARED node from the daemon instead of preparing its own.
+        // Returns the broker run_id so the completion path can tear it down.
+        let environment_run_id =
+            self.configure_environment_broker(dispatch, project_root, resume_workflow_id, &mut command);
+
         // Bind the subprocess workflow_events back-channel before fork so the
         // env var we set on the child points to a listener that's already
         // accepting. Best-effort: if bind fails (eg no Unix DS support in a
@@ -467,9 +517,9 @@ impl ProcessManager {
         });
 
         self.processes.push(WorkflowProcess {
-            subject_key: dispatch.subject_key(),
-            subject_id: dispatch.subject_id().to_string(),
-            subject_kind: dispatch.subject_kind().to_string(),
+            subject_key: dispatch.subject_key().unwrap_or_default(),
+            subject_id: dispatch.subject_id().unwrap_or_default().to_string(),
+            subject_kind: dispatch.subject_kind().unwrap_or_default().to_string(),
             task_id,
             workflow_ref,
             schedule_id,
@@ -482,9 +532,71 @@ impl ProcessManager {
             agent_session_id,
             project_root: Some(project_root_path),
             resume_workflow_id: resume_workflow_id.map(String::from),
+            environment_run_id,
         });
 
         Ok(())
+    }
+
+    /// REQ-048: decide whether this dispatch routes to a non-local environment
+    /// and, if so, register the run with the broker + set the four
+    /// `ANIMUS_ENVIRONMENT_BROKER_*` env vars on the runner command. Returns the
+    /// broker `run_id` (the workflow run id) when brokered, else `None` (the
+    /// runner then uses its legacy owned-environment path).
+    ///
+    /// The run_id must be STABLE across every phase of a workflow run so all
+    /// phases acquire the SAME node. It is keyed on the SUBJECT: every phase is a
+    /// separate dispatch for the same subject, so `subject_id()` is identical
+    /// across phases and known before phase 1. Keying on a workflow id does NOT
+    /// work — the runner mints its own id and `--workflow-id` means "resume an
+    /// EXISTING workflow", so a daemon-minted id cannot be handed down for a
+    /// fresh phase. A subjectless adhoc run falls back to the resume id / a fresh
+    /// mint (single-phase only — no cross-phase sharing without a subject).
+    fn configure_environment_broker(
+        &self,
+        dispatch: &SubjectDispatch,
+        project_root: &str,
+        resume_workflow_id: Option<&str>,
+        command: &mut Command,
+    ) -> Option<String> {
+        let broker = self.environment_broker.as_ref()?;
+        // The daemon dispatches per phase and cannot know a PHASE-level
+        // `environment:` override here, but the node is per-RUN anyway, so a
+        // single run-level environment is the correct granularity. Feed the
+        // dispatch's WORKFLOW-level `environment:` as `workflow_env` (the runner
+        // does the same when it resolves each phase) so a workflow-level
+        // environment engages the broker even with no kind-level routing rule —
+        // otherwise the broker never fired and every phase owned its own node.
+        // See TASK-431 / REQ-051.
+        let workflow_ref = dispatch.workflow_ref.trim();
+        let workflow_env = if workflow_ref.is_empty() {
+            None
+        } else {
+            self.workflow_environments.get(&workflow_ref.to_ascii_lowercase()).map(String::as_str)
+        };
+        let environment_id = orchestrator_config::workflow_config::resolve_environment(
+            dispatch.subject_kind(),
+            None,
+            None,
+            workflow_env,
+            self.environment_routing.as_ref(),
+        )?;
+        if is_local_environment(&environment_id) {
+            return None;
+        }
+        let run_id = match dispatch.subject_id() {
+            Some(subject) if !subject.is_empty() => format!("run-{subject}"),
+            _ => match resume_workflow_id {
+                Some(id) => id.to_string(),
+                None => format!("wf-{}", uuid::Uuid::new_v4().simple()),
+            },
+        };
+        broker.register_run(&run_id, project_root, &environment_id);
+        command.env(ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, broker.socket_path());
+        command.env(ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV, broker.token());
+        command.env(ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, &run_id);
+        command.env(ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV, &environment_id);
+        Some(run_id)
     }
 
     /// Bind a fresh per-spawn event pipe and attach the
@@ -510,7 +622,7 @@ impl ProcessManager {
             Some(root) => root.clone(),
             None => default_event_pipe_root(),
         };
-        let subject_label = dispatch.subject_id().to_string();
+        let subject_label = dispatch.subject_id().unwrap_or_default().to_string();
         // Bind synchronously on the calling thread (just a couple of
         // syscalls) and let `SubprocessEventPipe::bind_sync` spawn the
         // reader task on the current Tokio runtime. This avoids the
@@ -551,6 +663,9 @@ impl ProcessManager {
     async fn check_running_with_timeout(&mut self, timeout_secs: Option<u64>) -> Vec<CompletedProcess> {
         let mut completed = Vec::new();
         let mut active = Vec::with_capacity(self.processes.len());
+        // Cloned out of `self` up front so the terminal-teardown calls below do
+        // not conflict with the `&mut self.processes` drain borrow.
+        let environment_broker = self.environment_broker.clone();
 
         for mut process in self.processes.drain(..) {
             if let Some(timeout) = timeout_secs {
@@ -569,6 +684,14 @@ impl ProcessManager {
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
                     cleanup_agent_record(&process);
+                    // Timeout kill is a terminal Failed outcome: dispose the
+                    // run's shared node (if brokered) before reaping the record.
+                    teardown_environment_if_terminal(
+                        &environment_broker,
+                        process.environment_run_id.take(),
+                        Some(WorkflowStatus::Failed),
+                    )
+                    .await;
                     completed.push(CompletedProcess {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
@@ -649,6 +772,28 @@ impl ProcessManager {
                         workflow_status = Some(WorkflowStatus::Failed);
                     }
 
+                    // Record WHY the runner exited (code/signal/duration + stderr
+                    // tail) so a mid-run death — e.g. the ~60s exec_session
+                    // severance / SIGKILL / OOM that leaves a delegated run a
+                    // "running" ghost — is diagnosable from the logs instead of
+                    // silent (TASK-799).
+                    emit_runner_exit_diagnostic(
+                        workflow_id.as_deref(),
+                        &status,
+                        process.started_at,
+                        &process.stderr_lines,
+                    );
+
+                    // Terminal workflow state => tear the run's shared node down
+                    // (one node per run). Non-terminal (Running/Paused between
+                    // phases) => KEEP the node for the next phase's runner.
+                    teardown_environment_if_terminal(
+                        &environment_broker,
+                        process.environment_run_id.take(),
+                        workflow_status,
+                    )
+                    .await;
+
                     completed.push(CompletedProcess {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
@@ -696,6 +841,33 @@ impl ProcessManager {
     pub fn active_subject_ids(&self) -> HashSet<String> {
         self.processes.iter().flat_map(|process| [process.subject_key.clone(), process.subject_id.clone()]).collect()
     }
+}
+
+/// REQ-048: tear the run's shared ephemeral node down IFF the completed phase
+/// landed the workflow in a terminal state (Completed/Failed/Cancelled/
+/// Escalated). A non-terminal exit (Running/Paused between phases) keeps the
+/// node for the next phase's runner. A no-op when the dispatch was not brokered
+/// (`run_id` is `None`) or no broker is wired. `teardown` is idempotent.
+async fn teardown_environment_if_terminal(
+    broker: &Option<EnvironmentBroker>,
+    run_id: Option<String>,
+    status: Option<WorkflowStatus>,
+) {
+    let (Some(broker), Some(run_id)) = (broker.as_ref(), run_id) else {
+        return;
+    };
+    if is_terminal_workflow_status(status) {
+        broker.teardown(&run_id).await;
+    }
+}
+
+fn is_terminal_workflow_status(status: Option<WorkflowStatus>) -> bool {
+    matches!(
+        status,
+        Some(
+            WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::Escalated
+        )
+    )
 }
 
 fn cleanup_agent_record(process: &WorkflowProcess) {
@@ -789,6 +961,100 @@ fn latest_runner_workflow_status(events: &[RunnerEvent]) -> Option<WorkflowStatu
     events.iter().rev().find_map(|event| event.workflow_status)
 }
 
+/// Max stderr lines included in the `runner-exit` diagnostic tail (a bounded
+/// slice of the already-captured stderr — enough to name the exit reason).
+const RUNNER_STDERR_TAIL_LINES: usize = 40;
+
+/// Hard char budget for the diagnostic stderr tail — bounds the log line AND the
+/// transient allocation while building it.
+const RUNNER_STDERR_TAIL_MAX_CHARS: usize = 2000;
+
+/// Build a single-line, newline-escaped, char-budgeted tail from the last few
+/// stderr lines WITHOUT ever allocating the (potentially huge) full content: it
+/// copies at most `max_chars` chars, so a pathological megabyte-long stderr line
+/// can never OOM the daemon during reap (codex). Lines are joined with an escaped
+/// `\n`; embedded newlines are escaped the same way.
+fn capped_escaped_tail(lines: &[String], max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut budget = max_chars;
+    for (idx, line) in lines.iter().enumerate() {
+        if budget == 0 {
+            break;
+        }
+        if idx > 0 {
+            if budget < 2 {
+                break;
+            }
+            out.push_str("\\n");
+            budget -= 2;
+        }
+        for ch in line.chars() {
+            if ch == '\n' {
+                if budget < 2 {
+                    return out;
+                }
+                out.push_str("\\n");
+                budget -= 2;
+            } else {
+                if budget == 0 {
+                    return out;
+                }
+                out.push(ch);
+                budget -= 1;
+            }
+        }
+    }
+    out
+}
+
+/// Emit one greppable `runner-exit` line to STDOUT (the daemon's log stream,
+/// which reaches Railway — same channel as the reconcile-* lines) when a
+/// dispatched workflow runner exits. Records exit code, signal (SIGKILL=OOM/
+/// supervision), wall-clock duration, and the stderr tail — the definitive "why
+/// did the delegating runner die" signal (TASK-799). Safe here (unlike the local
+/// CLI spawn path): the daemon is a long-lived supervisor, not a `--json` command.
+fn emit_runner_exit_diagnostic(
+    workflow_id: Option<&str>,
+    status: &std::process::ExitStatus,
+    started_at: std::time::Instant,
+    stderr_lines: &Arc<Mutex<Vec<String>>>,
+) {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let tail_capped = stderr_lines
+        .lock()
+        .map(|buf| {
+            let start = buf.len().saturating_sub(RUNNER_STDERR_TAIL_LINES);
+            capped_escaped_tail(&buf[start..], RUNNER_STDERR_TAIL_MAX_CHARS)
+        })
+        .unwrap_or_default();
+    println!(
+        "{}",
+        format_runner_exit_line(workflow_id, status.code(), signal, started_at.elapsed().as_secs(), &tail_capped)
+    );
+}
+
+/// Pure formatter for the `runner-exit` line (kept separate so it is testable).
+/// `tail_capped` is expected to be pre-capped + single-lined by
+/// [`capped_escaped_tail`], so this only interpolates.
+fn format_runner_exit_line(
+    workflow_id: Option<&str>,
+    code: Option<i32>,
+    signal: Option<i32>,
+    duration_secs: u64,
+    tail_capped: &str,
+) -> String {
+    format!(
+        "runner-exit workflow_id={} code={code:?} signal={signal:?} duration_secs={duration_secs} stderr_tail={tail_capped}",
+        workflow_id.unwrap_or("-"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
@@ -801,6 +1067,38 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn runner_exit_line_formats_signal_and_pre_capped_tail() {
+        // A SIGKILL (OOM / external supervision) — the "why did the delegating
+        // runner die" record for a mid-run death.
+        let tail = capped_escaped_tail(&["boom".to_string(), "exec_session closed".to_string()], 2000);
+        let line = format_runner_exit_line(Some("wf-abc"), None, Some(9), 61, &tail);
+        assert!(line.starts_with("runner-exit workflow_id=wf-abc"));
+        assert!(line.contains("code=None"));
+        assert!(line.contains("signal=Some(9)"));
+        assert!(line.contains("duration_secs=61"));
+        // Lines joined + newlines escaped so the record stays one greppable line.
+        assert!(line.contains("stderr_tail=boom\\nexec_session closed"));
+        assert!(!line.contains('\n'), "the record must stay one greppable line");
+        // A clean exit renders code/workflow_id defaults.
+        let clean = format_runner_exit_line(None, Some(0), None, 5, "");
+        assert!(clean.contains("workflow_id=-"));
+        assert!(clean.contains("code=Some(0)"));
+    }
+
+    #[test]
+    fn capped_escaped_tail_bounds_memory_and_escapes_newlines() {
+        // A pathological megabyte-long single stderr line must NOT be copied
+        // whole — the cap applies while building, so the result is <= max_chars.
+        let huge = "x".repeat(1_000_000);
+        let out = capped_escaped_tail(std::slice::from_ref(&huge), 2000);
+        assert_eq!(out.chars().count(), 2000);
+        // Embedded newlines and the inter-line join are both escaped to `\n`.
+        let escaped = capped_escaped_tail(&["a\nb".to_string(), "c".to_string()], 2000);
+        assert_eq!(escaped, "a\\nb\\nc");
+        assert!(!escaped.contains('\n'));
+    }
 
     fn test_env_lock() -> &'static Mutex<()> {
         // Use the dispatch-wide shared lock so we serialize with sibling
@@ -1043,11 +1341,11 @@ mod tests {
     #[test]
     fn subject_id_returns_correct_value_for_each_variant() {
         let task = SubjectDispatch::for_task("TASK-1", "standard");
-        assert_eq!(task.subject_id(), "TASK-1");
+        assert_eq!(task.subject_id(), Some("TASK-1"));
         assert!(task.schedule_id().is_none());
 
         let requirement = SubjectDispatch::for_requirement("REQ-1", "standard", "manual");
-        assert_eq!(requirement.subject_id(), "REQ-1");
+        assert_eq!(requirement.subject_id(), Some("REQ-1"));
         assert!(requirement.schedule_id().is_none());
 
         let custom = SubjectDispatch::for_custom(
@@ -1057,7 +1355,7 @@ mod tests {
             Some(serde_json::json!({"key":"value"})),
             "schedule",
         );
-        assert_eq!(custom.subject_id(), "schedule:nightly");
+        assert_eq!(custom.subject_id(), Some("schedule:nightly"));
         assert_eq!(custom.schedule_id(), Some("nightly"));
     }
 
@@ -1185,6 +1483,7 @@ mod tests {
             "phases:\n  research:\n    mode: agent\n    skills:\n      - deep-search\n      - ghost-skill\nworkflows:\n  - id: research-only\n    name: Research Only\n    phases:\n      - research\n",
         )
         .expect("write workflows.yaml");
+        let _config = crate::test_env::install_yaml_config_source_fixture(temp_dir.path());
 
         let json = super::workflow_skills_env_payload(project_root)
             .expect("project with declared phase skills must produce a payload");

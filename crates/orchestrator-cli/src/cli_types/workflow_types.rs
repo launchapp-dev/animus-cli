@@ -5,6 +5,20 @@ use super::{
     WORKFLOW_SORT_HELP, WORKFLOW_STATUS_HELP,
 };
 
+fn parse_workflow_launch_idempotency_key(raw: &str) -> Result<String, String> {
+    let bytes = raw.as_bytes();
+    if bytes.is_empty() || bytes.len() > orchestrator_core::MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES {
+        return Err(format!(
+            "idempotency key must contain 1..={} bytes",
+            orchestrator_core::MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES
+        ));
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')) {
+        return Err("idempotency key may contain only ASCII letters, digits, '.', '_', ':', and '-'".to_string());
+    }
+    Ok(raw.to_string())
+}
+
 /// Workflow identifier args: `--id` is primary, `--workflow-id` is a hidden
 /// alias so domain-prefixed scripts keep working, `-i` is the short form.
 #[derive(Debug, Args)]
@@ -13,12 +27,20 @@ pub(crate) struct WorkflowIdArgs {
     pub(crate) id: String,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowGetArgs {
+    #[arg(short, long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCommand {
     /// List workflows.
     List(WorkflowListArgs),
     /// Get workflow details.
-    Get(WorkflowIdArgs),
+    Get(WorkflowGetArgs),
     /// Show workflow decisions.
     Decisions(WorkflowIdArgs),
     /// List and inspect workflow checkpoints.
@@ -79,18 +101,24 @@ pub(crate) enum WorkflowCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowListArgs {
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
     #[arg(long, value_name = "STATUS", help = WORKFLOW_STATUS_HELP)]
     pub(crate) status: Option<String>,
     #[arg(long, value_name = "WORKFLOW_REF", help = "Filter workflows by workflow definition/reference id.")]
     pub(crate) workflow_ref: Option<String>,
-    #[arg(long, value_name = "TASK_ID", help = "Filter workflows linked to a task id.")]
-    pub(crate) task_id: Option<String>,
+    #[arg(
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
+        help = "Filter workflows linked to a subject id. Matched exactly against the id the workflow stored — built-in kinds (task/requirement) store the qualified form, so filter with `task:TASK-001`."
+    )]
+    pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "PHASE_ID", help = "Filter workflows containing a phase id.")]
     pub(crate) phase_id: Option<String>,
     #[arg(
         long,
         value_name = "TEXT",
-        help = "Case-insensitive text search over workflow id, task id, ref, and phases."
+        help = "Case-insensitive text search over workflow id, subject id, ref, and phases."
     )]
     pub(crate) search: Option<String>,
     #[arg(long, value_name = "SORT", help = WORKFLOW_SORT_HELP)]
@@ -166,6 +194,11 @@ pub(crate) enum WorkflowConfigCommand {
     AgentSet(WorkflowConfigAgentSetArgs),
     /// Remove one agent definition (read-modify-write the full config).
     AgentRemove(WorkflowConfigEntityIdArgs),
+    /// Create or replace one phase definition on the config_source base
+    /// (read-modify-write). Writes `WorkflowConfig.phase_definitions`, NOT the
+    /// agent-runtime overlay that `workflow phases upsert` writes — so a
+    /// subsequently-set workflow that references the phase validates.
+    PhaseSet(WorkflowConfigPhaseSetArgs),
     /// Create or replace one workflow definition (read-modify-write).
     WorkflowSet(WorkflowConfigWorkflowSetArgs),
     /// Remove one workflow definition (read-modify-write).
@@ -197,6 +230,18 @@ pub(crate) struct WorkflowConfigAgentSetArgs {
     #[arg(long, value_name = "AGENT_ID", help = "Agent definition id to create or replace.")]
     pub(crate) id: String,
     #[arg(long, value_name = "JSON", help = "Agent profile overlay JSON payload (the value of agent_profiles.<id>).")]
+    pub(crate) input_json: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigPhaseSetArgs {
+    #[arg(long, value_name = "PHASE_ID", help = "Phase definition id to create or replace.")]
+    pub(crate) id: String,
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Phase execution definition JSON payload (the value of phase_definitions.<id>)."
+    )]
     pub(crate) input_json: String,
 }
 
@@ -276,22 +321,13 @@ pub(crate) struct WorkflowRunArgs {
         help = "Workflow definition name from project YAML or an installed pack (e.g. standard-workflow, hotfix-workflow, vendor.pack/review)."
     )]
     pub(crate) pipeline: Option<String>,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        group = "subject",
-        help = "Task to run the workflow for. Accepts a bare id (TASK-001) or the qualified form (task:TASK-001)."
-    )]
-    pub(crate) task_id: Option<String>,
-    #[arg(long, value_name = "REQ_ID", group = "subject", help = "Requirement id to run the workflow for.")]
-    pub(crate) requirement_id: Option<String>,
     #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for freeform execution.")]
     pub(crate) title: Option<String>,
     #[arg(
         long = "subject-id",
         value_name = "SUBJECT_ID",
         group = "subject",
-        help = "Generic subject to run the workflow for, any kind (BaaS dynamic kinds like blog/post). Accepts a qualified id (blog:BLOG-001 — kind trusted; the recommended form) or a bare id (BLOG-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --task-id / --requirement-id / --title."
+        help = "Subject to run the workflow for, any kind. Accepts a qualified id (task:TASK-001 / requirement:REQ-042 / blog:BLOG-001 — kind trusted; the recommended form) or a bare id (TASK-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --title."
     )]
     pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
@@ -326,6 +362,15 @@ pub(crate) struct WorkflowRunArgs {
     pub(crate) vars: Vec<String>,
     #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
     pub(crate) actor_json: Option<String>,
+    #[arg(
+        long,
+        value_name = "KEY",
+        value_parser = parse_workflow_launch_idempotency_key,
+        requires_all = ["subject_id", "actor_json"],
+        conflicts_with = "sync",
+        help = "Durably deduplicate an actor-scoped application launch. KEY is bound to actor + tenant/workspace + repository scope + effective workflow/subject/input. The same completed request replays its exact canonical run; a changed request conflicts. Requires --subject-id and --actor-json with tenant_id; detached launches only."
+    )]
+    pub(crate) idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -337,15 +382,13 @@ pub(crate) struct WorkflowPromptRenderArgs {
         help = "Existing workflow id to render from persisted workflow state."
     )]
     pub(crate) workflow_id: Option<String>,
-    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id for ad-hoc prompt rendering.")]
-    pub(crate) task_id: Option<String>,
     #[arg(
-        long,
-        value_name = "REQ_ID",
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
         group = "subject",
-        help = "Requirement id for ad-hoc prompt rendering (alternative to --task-id)."
+        help = "Subject to render an ad-hoc prompt for, any kind. Accepts a qualified id (task:TASK-001 / requirement:REQ-042 / blog:BLOG-001 — kind trusted; the recommended form) or a bare id (TASK-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form)."
     )]
-    pub(crate) requirement_id: Option<String>,
+    pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for ad-hoc prompt rendering.")]
     pub(crate) title: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]

@@ -29,6 +29,31 @@ lines (JSONL passthrough where structured) until interrupted:
 - `animus events tail` (workflow event stream; with `--json` each event is emitted as one JSONL line)
 - `animus chat send` (streams provider output as it arrives)
 
+`animus --json chat capabilities` is the machine-readable application probe.
+It reports durable chat idempotency support, scope/key constraints, terminal
+JSONL events, canonical receipt fields, and the closed
+`animus.chat.application_controls.v1` schema. Application callers pass that
+schema through `chat send --application-controls-json <JSON>` to request only
+bounded approvals, reasoning effort, permission intent, and configured
+profile/skill references. Unknown fields and raw provider argv, environment,
+filesystem, secret, or configuration channels are rejected; the typed envelope
+also conflicts with the corresponding operator flags.
+`chat send --idempotency-key <KEY>` requires `--conversation <ID>`,
+`--actor-json <JSON>`, and matching
+`--as-user <USER_ID>`; the actor must provide `user_id` and `tenant_id`. Exact
+retries replay the durable receipt, changed payloads return
+`idempotency_conflict`, and live claims return
+`idempotency_in_progress`. JSONL sends distinguish `user_message_accepted`
+from terminal `turn_completed` / `turn_failed`, so a provider failure cannot
+erase or duplicate the already-canonical user turn.
+The probe also verifies the complete seven-method shared-operation handshake,
+the fenced-assistant-append capability, and bounded read-only conversation and
+operation reads before reporting live `backend` readiness. Its additive
+capability lists identify both required markers while legacy singular fields
+continue to describe the original shared-operation marker. Multi-replica applications must pass the
+advertised `--require-shared-authority` policy flag on every keyed send; it
+rejects file fallback if the shared plugin disappears after startup.
+
 `animus logs tail` is *not* exempt: it is a bounded, pull-style reader that
 returns one envelope and exits; its `--follow` flag is a hidden deprecated
 no-op (see the `animus logs tail` section below).
@@ -68,10 +93,10 @@ The command surface converges on a small set of conventions:
   existing install, remove a dirty worktree, bypass a reference guard), not
   for skipping confirmation. `workflow pause/cancel --confirm <id>` is a
   deliberate repeat-the-id safety pattern for remote mutation and stays as-is.
-- **IDs**: domain-prefixed id flags (`--task-id`, `--run-id`,
-  `--workflow-id`) are accepted wherever the domain is unambiguous; workflow
-  commands take `--workflow-id` as an alias of `--id`. `subject --id` stays
-  kind-generic by design.
+- **IDs**: id flags (`--subject-id`, `--run-id`, `--workflow-id`) are accepted
+  wherever the domain is unambiguous; workflow commands take `--workflow-id` as
+  an alias of `--id`. `subject --id` and `--subject-id` stay kind-generic by
+  design — pass a bare id or a `kind:id`-qualified id.
 - **Durations**: age/window flags accept unit suffixes `s`/`m`/`h`/`d`
   (`--since 2h`, `workflow prune --older-than 12h`). Bare numbers keep their
   historical default unit (`--older-than 30` still means 30 days).
@@ -186,6 +211,7 @@ animus
 │   │   ├── set              Replace the full config via the writable config_source plugin (validates first; rejected on read-only sources)
 │   │   ├── agent-set        Create or replace one agent definition (read-modify-write the full config)
 │   │   ├── agent-remove     Remove one agent definition (read-modify-write the full config)
+│   │   ├── phase-set        Create or replace one phase definition on the config_source base (read-modify-write; writes phase_definitions, not the agent-runtime overlay)
 │   │   ├── workflow-set     Create or replace one workflow definition (read-modify-write)
 │   │   └── workflow-remove  Remove one workflow definition (read-modify-write)
 │   ├── state-machine
@@ -293,6 +319,8 @@ animus
 ├── mcp                      Run the Animus MCP service endpoint
 │   ├── serve                Start the MCP server in the current process. --management also exposes the animus.interactions.* inbox tools (off by default so agent-injected servers cannot answer their own approvals); --agent-id <ID> pins the identity used by the blocking ask/request_approval tools; --workflow-id <ID> pins the workflow context and flips their default wait mode to suspend (env fallback: ANIMUS_MCP_WORKFLOW_ID)
 │   ├── memory               Start the memory context MCP server for workflow phases
+│   ├── tools <server>       Enumerate a configured MCP server's tools deterministically (initialize + tools/list), so command phases + scripts can discover tool names without an LLM agent. Resolves the server the same way the daemon builds mcp_servers: an OAuth server (any flow) is reached through the local `animus-mcp-proxy` stdio bridge (injects the cached bearer); a plain-HTTP server (no oauth) is connected directly. --url overrides/sets the endpoint; --timeout SECS bounds the session (default 60). --json emits the animus.cli.v1 envelope `{server, tools:[{name, description, input_schema}]}`
+│   ├── call <server> <tool> Call one tool on a configured MCP server (initialize + tools/call) and print the result — deterministic, cheap MCP tool use for command phases + scripts (krisp transcript pulls, github ops, ...). Same server/transport resolution as `mcp tools`. Arguments: --args '<JSON object>' or --args-file <PATH> (mutually exclusive; omit for a no-argument call). --url and --timeout as above. --json emits `{server, tool, result}` where result is the full CallToolResult (content, structured_content, is_error) so scripts can inspect the in-band error flag. The proxy child is always torn down; the resolved bearer is never printed or logged
 │   ├── auth <server>        Authenticate an OAuth-protected MCP server (discovery + DCR + auth_code/PKCE + browser login); tokens stored in the OS keychain. Scopes: with no --scopes/config scopes, auto-detects the server's advertised scopes_supported (marked auto-detected); if none advertised, requests NONE (server default). Previews scopes + asks y/N before opening the browser. --url for servers not in config; --scopes to override/narrow (or `--scopes none` to force no scopes); --yes to skip the prompt; --dry-run to resolve scopes without authorizing. Delegated (headless/web) two-step flow for a remote host (e.g. the portal) that drives the redirect itself: `--print-url --redirect-uri <callback>` resolves + registers/configures the client and PRINTS the authorization URL + `state` (persisting the PKCE state) instead of opening a browser or binding a localhost listener; `--complete --code <code> --state <state>` runs in a fresh process to exchange the callback code for a token. The interactive loopback flow (no flags) is unchanged
 │   ├── auth-status          Show which OAuth-protected MCP servers are authenticated, with token expiry per principal. --server + --url to inspect a URL-bound token not in config
 │   └── auth-logout <server> Delete stored OAuth tokens for an MCP server. --url to address a token authenticated against a not-in-config URL
@@ -304,7 +332,7 @@ animus
 ├── init                     Initialize an Animus project from a template
 │   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults. Also scaffolds `animus.toml`, `.env.example`, and a merge-safe project `.gitignore`
 │
-├── install                  Resolve `animus.toml` into the lockfile and install the declared plugins + packs. `--locked` reproduces exactly the committed `.animus/plugins.lock` (npm-ci style; fails on manifest↔lock drift)
+├── install                  Resolve `animus.toml` into the lockfile and install the declared plugins + packs. `--locked` reproduces exactly the committed `.animus/plugins.lock` (npm-ci style; fails on manifest↔lock drift). `--allow-org OWNER` (repeatable) pre-trusts a third-party org so its git dependency installs non-interactively (CI fails closed otherwise)
 │   (no subcommands)         `--force` reinstalls already-present dependencies
 │
 ├── add                      Add a plugin (or pack with `--pack`) to `animus.toml` and install it. SPEC is `name[@version]`, `OWNER/REPO[@tag]`, or a bare `name`; `--path PATH` adds a local source dependency
@@ -325,13 +353,19 @@ animus
 ├── subject                  List, get, create, update, status, and delete subjects via installed subject_backend plugins
 │   ├── list                 List subjects for a given kind via the active subject_backend plugin
 │   ├── get                  Fetch a single subject by id from the active subject_backend plugin
-│   ├── create               Create a subject through the active subject_backend plugin
-│   ├── batch-create         Create up to 100 subjects from a JSON `--file` items array; `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-create` MCP tool
-│   ├── update               Update a subject through the active subject_backend plugin
-│   ├── batch-update         Patch up to 100 subjects from a JSON `--file` items array; `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-update` MCP tool
+│   ├── create               Create a subject through the active subject_backend plugin (`--data '{..}'` sets structured custom fields — declared kind fields with no dedicated flag — merged into the subject's `data`)
+│   ├── batch-create         Create up to 100 subjects from a JSON `--file` items array (each item may carry a `data` object); `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-create` MCP tool
+│   ├── update               Update a subject through the active subject_backend plugin (`--title` renames it; `--status` / `--priority` / `--labels` / `--body`; `--data '{..}'` sets structured custom fields merged into the subject's `data` via `patch.custom`)
+│   ├── batch-update         Patch up to 100 subjects from a JSON `--file` items array (each item may carry a `data` object → `patch.custom`; a data-only item is valid); `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-update` MCP tool
 │   ├── next                 Return the highest-priority Ready subject for the given kind
 │   ├── status               Set the status of a subject by id through the active subject_backend
 │   └── delete               Delete a subject by id; requires --yes to confirm (otherwise prints preview)
+│
+├── environment              Manage environment nodes (ephemeral run instances) via the installed environment plugin
+│   ├── list                 List managed environment nodes with their state + orphan flag
+│   ├── get                  Describe one managed node by substrate id or name
+│   ├── teardown             Destroy one managed node by substrate id or name (idempotent)
+│   └── reap                 Reap orphaned/dead nodes (`--dry-run` previews; `--all --force` also reaps healthy orphans)
 │
 ├── flavor                   Inspect or install Animus flavor manifests (`flavors/<name>.toml`) — v0.5
 │   ├── list                 List available flavor manifests on disk
@@ -418,13 +452,18 @@ tag (or the explicit git tag) selects the release, and the lock records the
 installed sha. `animus init` emits explicit `{ git, tag }` pins for the default
 set so the scaffold is fully reproducible.
 
-- `animus install [--locked] [--force]` — resolve + install plugins and packs,
-  then **provision secrets from `.env`** into the device-encrypted store
-  (idempotent; keys already set are skipped) and warn about any keys declared
-  (uncommented) in `.env.example` that are still unset. `--locked` refuses to
-  proceed if the manifest declares a plugin the lockfile does not pin (run
-  `animus install` without `--locked` to refresh). A missing `.env` is a no-op,
-  so the secret step never blocks the install.
+- `animus install [--locked] [--force] [--allow-org OWNER]...` — resolve +
+  install plugins and packs, then **provision secrets from `.env`** into the
+  device-encrypted store (idempotent; keys already set are skipped) and warn
+  about any keys declared (uncommented) in `.env.example` that are still unset.
+  `--locked` refuses to proceed if the manifest declares a plugin the lockfile
+  does not pin (run `animus install` without `--locked` to refresh). A missing
+  `.env` is a no-op, so the secret step never blocks the install. `--allow-org`
+  (repeatable) pre-trusts an additional GitHub owner: `launchapp-dev` is always
+  trusted, but a manifest git dependency from a third-party org fails closed in
+  a non-interactive / CI / server context (no TTY, or `ANIMUS_SERVER=1`) unless
+  its owner is passed here — this stops a hostile `animus.toml` from silently
+  pulling attacker-chosen plugins on `git clone && animus install`.
 - `animus add <spec> [--pack] [--path PATH] [--force]` — `spec` is
   `name[@version]`, `OWNER/REPO@tag`, or a bare `name`. Updates `animus.toml`
   and installs the one dependency. `--pack` targets `[packs]`.
@@ -743,7 +782,7 @@ now applies on both ad-hoc paths (matching workflow phases):
 
 | Flag | Description |
 |---|---|
-| `--agent <AGENT_ID>` | Select an agent profile; the run receives that profile's declared `mcp_servers`. On `animus agent run` this is applied only when no `--runtime-contract-json` (or `runtime_contract` in `--context-json`) was supplied — a caller-supplied contract is never clobbered. |
+| `--agent <AGENT_ID>` | Select an agent profile; the run receives that profile's declared `mcp_servers`. On `animus chat send`, the canonical profile id is durably bound to the conversation; later sends may omit the flag and reuse the bound profile, while a conflicting flag fails closed. On `animus agent run` this is applied only when no `--runtime-contract-json` (or `runtime_contract` in `--context-json`) was supplied — a caller-supplied contract is never clobbered. |
 | `--skill <SKILL>` | Select a skill; its declared `mcp_servers` are unioned into the resolved set, and its full application (prompt fragments, `extra_args`, `env`, `codex_config_overrides`) applies to the run as described above. An unknown skill name is an error. |
 | `--mcp-server <NAME>` | Add an MCP server by name (repeatable). The name must exist in the project's `mcp_servers` map, or `animus` for the built-in surface; an unknown name is an error. |
 | `--no-animus-mcp` | Drop the built-in `animus` server from the resolved set. |
@@ -752,6 +791,18 @@ When no profile/skill names any server (plain `animus chat send` or a bare
 `animus agent run`), the baseline set is just the built-in `animus` server so
 the agent still has the Animus tools. A tool whose CLI cannot speak MCP
 (`cli/capabilities/supports_mcp` is false) receives no MCP wiring.
+
+Bound chat conversations also project `agent_id` and a monotonic `revision` in
+`chat get` metadata and `chat list` summaries. Application layers should pass
+the observed token back as
+`animus chat send --conversation <id> --expected-revision <n> ...`; the turn
+checks it under the conversation lock and the plugin wire carries the same
+compare-and-swap precondition. Bound continuations re-resolve the exact profile
+in the current actor/project scope and apply its provider/model/persona,
+reasoning, permission/approval, MCP, and tool-policy configuration to native
+resume and replay-fallback attempts. Renamed/deleted/hidden profiles and
+conflicting `--agent` flags error before provider execution. Legacy metadata
+without `agent_id` remains neutral and is never inferred.
 
 ### `animus agent interactions`
 
@@ -854,24 +905,36 @@ other subject kind. By default the entry is dispatched as soon as the daemon
 has capacity.
 
 ```bash
-animus queue enqueue --task-id TASK-001
-animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
+animus queue enqueue --subject-id TASK-001
+animus queue enqueue --subject-id requirement:REQ-042 --workflow-ref ops
 animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
-animus queue enqueue --subject-id blog:BLOG-001                      # BaaS dynamic kind
+animus queue enqueue --subject-id blog:BLOG-001                      # dynamic kind
+animus queue enqueue --adhoc --workflow-ref relate                   # subjectless (ad-hoc) run
 ```
 
-**Generic subjects (`--subject-id`).** For a subject that is **not**
-`kind=task`/`requirement` (a BaaS dynamic kind such as `blog`, `post`, etc.),
-use `--subject-id` instead of `--task-id`. It accepts either a **qualified**
-id (`blog:BLOG-001` — the kind before the `:` is trusted; the recommended
-form) or a **bare** id (`BLOG-001` — the kind is resolved by probing the
-installed subject backends that declare concrete kinds). A backend that
-declares only the `subject_kind:*` catch-all (a pure dynamic-kind backend)
-cannot enumerate a bare id's kind, so it requires the qualified form.
-The resolved kind is preserved in the dispatch, so the queue lease and runner
-resolve the subject via `<kind>/get` rather than coercing it to a task.
-`--subject-id` is mutually exclusive with `--task-id` / `--requirement-id` /
-`--title`.
+> **Removed in v0.7 (breaking).** The deprecated `--task-id` / `--requirement-id`
+> flags were removed. `task` and `requirement` are ordinary subject kinds now —
+> use `--subject-id` (qualified `task:TASK-001` / `requirement:REQ-042`, or a
+> bare `TASK-001`) for every kind.
+
+**Subjectless (ad-hoc) runs (`--adhoc`).** A workflow that finds its own
+target (or needs none) can be dispatched with NO bound subject via `--adhoc`
+plus a required `--workflow-ref`. The run has no subject-bound template vars,
+so a subjectless-by-design workflow (e.g. `relate`) is a first-class mode, not
+an error. Each ad-hoc dispatch carries a unique id so a burst of subjectless
+runs is never deduped into one queue entry. `--adhoc` is mutually exclusive
+with `--subject-id` / `--title`.
+
+**Subjects (`--subject-id`).** `--subject-id` enqueues a subject of **any**
+kind — `task`, `requirement`, or a dynamic kind such as `blog`/`post`. It
+accepts either a **qualified** id (`task:TASK-001` / `blog:BLOG-001` — the kind
+before the `:` is trusted; the recommended form) or a **bare** id (`TASK-001` —
+the kind is resolved by probing the installed subject backends that declare
+concrete kinds). A backend that declares only the `subject_kind:*` catch-all
+(a pure dynamic-kind backend) cannot enumerate a bare id's kind, so it requires
+the qualified form. The resolved kind is preserved in the dispatch, so the
+queue lease and runner resolve the subject via `<kind>/get`. `--subject-id` is
+mutually exclusive with `--title` / `--adhoc`.
 
 **Deferred dispatch.** `--at` schedules the entry for a future time; it stays
 queued (counted under `pending`, and broken out as `deferred` in
@@ -879,13 +942,14 @@ queued (counted under `pending`, and broken out as `deferred` in
 the next daemon pickup.
 
 ```bash
-animus queue enqueue --task-id TASK-001 --at 2026-06-13T15:00:00Z   # absolute (RFC 3339)
-animus queue enqueue --task-id TASK-001 --at 2h                     # relative: 90s / 30m / 2h / 3d
-animus queue enqueue --task-id TASK-001 --at 2h --expire-after 10m  # drop if not dispatched within grace
+animus queue enqueue --subject-id TASK-001 --at 2026-06-13T15:00:00Z   # absolute (RFC 3339)
+animus queue enqueue --subject-id TASK-001 --at 2h                     # relative: 90s / 30m / 2h / 3d
+animus queue enqueue --subject-id TASK-001 --at 2h --expire-after 10m  # drop if not dispatched within grace
 ```
 
 | Flag | Description |
 |---|---|
+| `--adhoc` | Dispatch a subjectless (ad-hoc) run with no bound subject. Requires `--workflow-ref`; mutually exclusive with the subject selectors. |
 | `--at <WHEN>` | Defer until an RFC 3339 timestamp or a relative offset (`90s`, `30m`, `2h`, `3d`; bare number = seconds). Omit for immediate dispatch. |
 | `--expire-after <DURATION>` | Grace window after `--at`. If still pending past `--at + this`, the entry is dropped instead of dispatched late. Requires `--at`; omit to always fire late. |
 
@@ -1157,7 +1221,7 @@ Recommended pack installs are per-pack and never abort init: each pack reports
 `installed`, `already_installed`, or `failed` (with the manual
 `git clone ... && animus pack install --path ... --activate` recovery command).
 After a successful install, init prints the first runnable workflow command
-(`animus workflow run animus.task/standard --task-id ... --sync`). The
+(`animus workflow run animus.task/standard --subject-id ... --sync`). The
 `ANIMUS_INIT_PACK_SOURCE_DIR` env var overrides the GitHub clone with a local
 `<dir>/<pack-id>` source directory for offline installs and tests.
 
@@ -1220,10 +1284,14 @@ animus plugin install --locked
 
 When installing from a public repo, the CLI looks for a cosign keyless bundle next to the release asset and verifies it via `cosign verify-blob`. The outcome (one of `verified`, `unsigned`, `invalid`, `untrusted_signer`, `skipped`) is persisted in `~/.animus/plugins.yaml` and surfaced in the `SIG` column of `animus plugin list`. See [Security](../security.md) and [Plugin Signing](../../architecture/plugin-signing.md).
 
-- **`--signature-policy strict`**: refuse install when the bundle is missing, invalid, or signed by an untrusted identity. Requires `cosign` on `$PATH`.
-- **`--signature-policy warn`**: log signature failures and install with `signature_status=unsigned` or `untrusted_signer`. This is the v0.4.12 transition default.
+- **`--signature-policy strict`**: refuse install when the bundle is missing, invalid, or signed by an untrusted identity. Requires `cosign` on `$PATH` — when strict is in effect but `cosign` is missing, the install fails fast with an actionable "install cosign or set `ANIMUS_PLUGIN_SIGNATURE_POLICY=warn`" error instead of a confusing per-plugin block.
+- **`--signature-policy warn`**: log signature failures and install with `signature_status=unsigned` or `untrusted_signer`. This is the local default.
 - **`--signature-policy disabled`**: bypass verification entirely; install records `signature_status=skipped`.
 - **Legacy flags**: `--require-signature` maps to `strict`, `--skip-signature` maps to `disabled`, and `--allow-unsigned` maps to `warn`.
+
+**Policy resolution precedence** (highest first): the per-call flag above → the `ANIMUS_PLUGIN_SIGNATURE_POLICY` env (`strict`/`warn`/`skip`) → the `plugins.signature_policy` field in the global `config.json` → the `warn` default. When no flag is passed, `animus plugin install` and `animus install` inherit the env/config layer, so a cloud/CI host can set `ANIMUS_PLUGIN_SIGNATURE_POLICY=strict` once and have every install fail closed. The local default is unchanged: with no env and no config field, installs stay `warn`.
+
+**Publisher trust (TOFU) fail-closed in CI:** installing from a public repo owned by an untrusted org prompts for trust-on-first-use on an interactive terminal. In a non-interactive / server / CI context (no TTY, or `ANIMUS_SERVER=1`), `--yes`/`--force` no longer silently auto-trusts an unknown org — the install fails closed and asks you to re-run interactively or pass an explicit `--allow-org <OWNER>`. Built-in trusted orgs (`launchapp-dev`), already-trusted orgs, and `--allow-org` targets are unaffected. This closes the `git clone && animus install` hole where a hostile manifest could pull attacker-chosen plugins.
 
 The trusted-signers file format:
 
@@ -1791,7 +1859,7 @@ mode. Pass `--json` to get the `animus.cli.v1` envelope instead.
 | `animus workflow list` | Table; empty set prints a "Start one with:" hint |
 | `animus agent list` | Table of configured agent profiles |
 | `animus agent interactions list` | Table of pending interactions with answer-command hints |
-| `animus chat list` | Table, most-recently-updated first; `--as-user <id>` limits to that user's own + shared conversations |
+| `animus chat list` | Table, most-recently-updated first; `--actor-json <json>` supplies the authoritative user/tenant, optional matching `--as-user <id>` is assertion-only, then `--offset <n>` / `--limit <n>` bound the returned page |
 | `animus pack list` | Table; active packs flagged |
 | `animus skill list` | Table; `--verbose` surfaces per-file unparseable-skill warnings (otherwise suppressed/aggregated) |
 | `animus daemon preflight` | Checklist (pass/fail per role), not a JSON blob |
@@ -1801,21 +1869,29 @@ Priority is displayed in `p0`–`p3` bucket notation in all human-readable views
 ### ID normalization
 
 `subject get/update/status --id`, `queue hold/release/drop`, and
-`workflow run --task-id` all accept **either** the bare native id (e.g.
+`workflow run --subject-id` all accept **either** the bare native id (e.g.
 `TASK-001`) or the kind-qualified form (e.g. `task:TASK-001`). The bare form
 is normalized to the qualified form at the CLI boundary, so both resolve the
 same subject. You do not need to run any command in `--json` mode to discover
 the id format.
 
-For subjects of an arbitrary kind (BaaS dynamic kinds like `blog`, `post`),
-`queue enqueue --subject-id` and `workflow run --subject-id` accept a
-qualified id (`blog:BLOG-001`, kind trusted — the recommended form) or a bare
-id (`BLOG-001`, kind resolved by probing installed backends that declare
-concrete kinds; a pure `subject_kind:*` catch-all backend requires the
-qualified form). The resolved kind is preserved on the dispatch so the subject
-is leased/run under its real kind (via `<kind>/get`) instead of being coerced
-to `task`. `--subject-id` is mutually exclusive with `--task-id` /
-`--requirement-id` / `--title`.
+**Kind resolution for `subject get/update/status/delete`.** When `--kind` is
+omitted, the kind is resolved in this order: (1) explicit `--kind`; (2) the
+kind encoded in a **kind-qualified** `--id` (`transcript:TRANSCRIPT-001`
+resolves kind `transcript`); (3) the `default_subject_kind` config fallback.
+No subject kind is privileged when the id names its kind inline — a qualified
+id never falls through to the `task`-favoring config default. This is what lets
+a workflow `mark-running` command (`animus subject status --id <kind>:<id>
+--status in-progress`) target the right backend without a `task` default.
+
+For subjects of **any** kind — `task`, `requirement`, or a dynamic kind like
+`blog`/`post` — `queue enqueue --subject-id` and `workflow run --subject-id`
+accept a qualified id (`task:TASK-001` / `blog:BLOG-001`, kind trusted — the
+recommended form) or a bare id (`TASK-001`, kind resolved by probing installed
+backends that declare concrete kinds; a pure `subject_kind:*` catch-all backend
+requires the qualified form). The resolved kind is preserved on the dispatch so
+the subject is leased/run under its real kind (via `<kind>/get`). `--subject-id`
+is mutually exclusive with `--title` (and `--adhoc` for `queue enqueue`).
 
 ### `animus pack search` (positional query)
 
@@ -1840,27 +1916,55 @@ both modes.
 
 ### `--actor-json` (transport-asserted per-user scoping)
 
-`animus workflow run`, `animus workflow config get`, `animus workflow config
-validate`, and `animus chat send` accept `--actor-json <JSON>` — a JSON-encoded
-`Actor` (`{"user_id","claims","tenant_id"}`) that scopes the operation to that
-user, mirroring `animus mcp serve --actor-json`:
+`animus workflow run`, actor-aware workflow/output reads, `animus workflow
+config get/validate`, `animus subject list/get/create/update/batch-create/
+batch-update/status/delete`, and every conversation-store chat verb (`new`,
+`list`, `get`, `rename`, `delete`, `export`, `search`, `send`) accepts
+`--actor-json <JSON>` — a JSON-encoded `Actor`
+(`{"user_id","claims","tenant_id"}`) that
+scopes the operation to that user, mirroring `animus mcp serve --actor-json`:
 
 ```bash
-animus workflow run --task-id TASK-1 --actor-json '{"user_id":"alice"}'
+animus workflow run --subject-id task:TASK-1 --actor-json '{"user_id":"alice"}'
+animus workflow run animus.task/standard --subject-id task:TASK-1 \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-7"}' \
+  --idempotency-key arena.launch-01
 animus workflow config get  --actor-json '{"user_id":"alice"}'
-animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":["admin"]}'
+animus subject get --kind task --id TASK-1 --actor-json '{"user_id":"alice","tenant_id":"workspace-7"}'
+animus chat list --as-user alice \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-7","claims":[]}'
+animus chat send "hi" --as-user alice \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-7","claims":["admin"]}'
 ```
 
 - `workflow run` relays the actor to the runner (and onward to the per-agent
   `animus mcp serve` child + config_source), so the run resolves the actor's
   config partition and the agent's tools scope per-user.
+- `workflow run --idempotency-key <KEY>` is the detached application-launch
+  surface. `KEY` is 1–128 bytes from `[A-Za-z0-9._:-]` and requires both
+  `--subject-id` and an explicit `--actor-json` whose `tenant_id` is non-empty.
+  The durable key is partitioned by repository scope + tenant/workspace + actor
+  and bound to the effective workflow ref, qualified subject id, input, vars,
+  and runner overrides. An identical completed retry returns the exact stored
+  canonical run; a changed request returns `idempotency_conflict`; a live lease
+  returns `idempotency_in_progress`. Actorless/global and synchronous use fail
+  closed. A crash-stranded pending reservation becomes reclaimable after its
+  five-minute lease and reuses its preallocated workflow id.
 - `workflow config get` / `validate` return the actor's
   global ∪ private ∪ shared config set; an actor whose `claims` contains
   `admin` sees everything; **no flag = global-only**.
-- `chat send --actor-json` is the **authz** identity for the turn (binds the
-  chat agent's built-in `animus` MCP server to that user). It is distinct from
-  `--as-user`, which only stamps **conversation ownership** for the
-  `conversation_store`.
+- Actor-aware subject commands route only to the v2 subject protocol. Subject
+  rows are partitioned by exact user and tenant; an older v1-only backend
+  returns unsupported instead of receiving a downgraded global call.
+- For every conversation-store chat verb, `--actor-json` is the authoritative
+  identity. A plugin-backed command requires non-empty `user_id` and
+  `tenant_id`; the actor is injected into every RPC and the tenant is copied to
+  `ConversationScope.tenant_id`. `--as-user` is only a matching legacy
+  assertion and cannot establish or override identity. `chat send` also binds
+  the built-in `animus` MCP server to that same actor.
+- With no conversation-store plugin, an omitted actor is explicit unscoped
+  system/local mode. Tenant-scoped local actors use a hashed tenant directory;
+  they never share file-store paths with another tenant.
 - Omitting the flag = `None` = global scope (system / local runs), unchanged.
 
 **Trust boundary:** the flag is a *transport assertion*. The transport (e.g. a
@@ -1893,6 +1997,15 @@ the plugin — nothing is partially written.
   model back. This is the **definition**-management verb; it does not collide
   with the runtime `animus agent {list,get,run,...}` surface.
 - `animus workflow config agent-remove --id <id>` — remove one agent.
+- `animus workflow config phase-set --id <phase_id> --input-json <json>` — upsert
+  one phase definition on the RAW config_source base
+  (`WorkflowConfig.phase_definitions`). Read-modify-write, same validate-before-write
+  path as the other entity verbs. This writes the **config_source base**, NOT the
+  agent-runtime overlay that `animus workflow phases upsert` writes — so a phase
+  authored here resolves when a subsequently-set workflow references it, instead of
+  failing `workflow-set` with "references unknown phase". The JSON is a
+  `PhaseExecutionDefinition` (the value of `phase_definitions.<id>`), e.g.
+  `--input-json '{"mode":"agent","agent_id":"builder"}'`.
 - `animus workflow config workflow-set --input-json <json>` — upsert one
   workflow definition (the JSON must include an `id`).
 - `animus workflow config workflow-remove --id <id>` — remove one workflow.
@@ -1909,7 +2022,7 @@ watch (gated on the `config_watch` capability).
 | Metric | Count |
 |---|---|
 | Top-level commands | 28 |
-| Nested command entries (all levels) | 214 |
+| Nested command entries (all levels) | 215 |
 
 Counting basis: counts are derived from the command tree above. "Top-level
 commands" counts the column-0 tree roots (`animus <command>`); "Nested

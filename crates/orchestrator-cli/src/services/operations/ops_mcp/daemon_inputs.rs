@@ -77,6 +77,11 @@ pub(super) struct DaemonConfigSetInput {
     pub(super) stale_threshold_hours: Option<u64>,
     #[serde(default)]
     pub(super) phase_timeout_secs: Option<u64>,
+    /// Fleet daily spend cap in USD. A non-positive value (e.g. `0`)
+    /// persists as an explicit "uncapped" override. Hot-reloaded by the
+    /// running daemon's cost layer.
+    #[serde(default)]
+    pub(super) max_daily_usd: Option<f64>,
     #[serde(default)]
     pub(super) notification_config_json: Option<String>,
     #[serde(default)]

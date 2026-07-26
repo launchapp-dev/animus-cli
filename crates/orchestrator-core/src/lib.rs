@@ -1,10 +1,19 @@
 // phase-decision-test
 pub mod agent_runtime_config;
+pub mod chat_idempotency;
 pub mod config;
 pub mod daemon_config;
 pub mod daemon_tick_metrics;
 pub mod doctor;
 pub mod domain_state;
+/// v0.7 environment plugin kind wire types, re-exported so the follow-on runtime
+/// `EnvironmentClient` (prepare / exec / exec_stream / teardown) and the
+/// out-of-tree workflow runner can reach `EnvironmentSpec` / `HarnessCommand` /
+/// `ExecRequest` / `ExecResponse` / `EnvironmentHandle` from one place. The
+/// client itself is NOT implemented yet — this is the type seam only.
+pub mod environment {
+    pub use animus_environment_protocol::*;
+}
 pub mod execution_projection;
 pub mod flavor;
 pub mod model_quality;
@@ -34,6 +43,11 @@ pub use agent_runtime_config::{
     PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition,
     PhaseOutputContract, PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS,
 };
+pub use chat_idempotency::{
+    ChatOperationBegin, ChatOperationClaim, ChatOperationReceipt, ChatOperationRequest, ChatOperationStatus,
+    ChatOperationStore, DEFAULT_CHAT_OPERATION_LEASE_SECS, MAX_CHAT_IDEMPOTENCY_KEY_BYTES,
+    MAX_CHAT_OPERATION_ERROR_BYTES,
+};
 pub use config::RuntimeConfig;
 pub use daemon_config::{
     daemon_project_config_path, load_daemon_project_config, resolve_silent_threshold_mins, write_daemon_project_config,
@@ -47,12 +61,13 @@ pub use domain_state::{
     ErrorRecord, ErrorStore, HandoffRecord, HandoffStore, HistoryExecutionRecord, HistoryStore,
 };
 pub use execution_projection::{
-    builtin_execution_projector_registry, execution_fact_subject_kind, project_execution_fact,
-    project_requirement_workflow_status, project_schedule_dispatch_attempt, project_schedule_dispatch_missed,
-    project_schedule_execution_fact, project_task_blocked_with_reason, project_task_execution_fact,
-    project_task_status, project_task_terminal_workflow_status, project_task_workflow_pause_cleared,
-    project_task_workflow_paused, project_task_workflow_start, workflow_paused_reason, ExecutionProjector,
-    ExecutionProjectorRegistry, WORKFLOW_PAUSED_REASON_PREFIX, WORKFLOW_RUNNER_BLOCKED_PREFIX,
+    builtin_execution_projector_registry, execution_fact_subject_kind, hub_task_projection_store,
+    project_execution_fact, project_requirement_workflow_status, project_schedule_dispatch_attempt,
+    project_schedule_dispatch_missed, project_schedule_execution_fact, project_task_blocked_with_reason,
+    project_task_execution_fact, project_task_status, project_task_terminal_workflow_status,
+    project_task_workflow_pause_cleared, project_task_workflow_paused, project_task_workflow_start,
+    workflow_paused_reason, ExecutionProjector, ExecutionProjectorRegistry, HubTaskProjectionStore,
+    TaskProjectionStore, TaskProjectionView, WORKFLOW_PAUSED_REASON_PREFIX, WORKFLOW_RUNNER_BLOCKED_PREFIX,
 };
 pub use flavor::{
     list_available_flavor_names, load_flavor, locate_flavor_manifest, FlavorDefaults, FlavorManifest,
@@ -81,9 +96,9 @@ pub use plugin_preflight::{
     DEFAULT_REQUIREMENT_BACKEND_REPO, DEFAULT_TASK_BACKEND_REPO, QUEUE_PRECISE_WAKE_FLOOR, WORKFLOW_RUNNER_SKILL_FLOOR,
 };
 pub use plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, resolve_curated_plugin_by_basename,
-    resolve_tag_for_slug, DEFAULT_OAI_AGENT_PLUGINS, DEFAULT_PROVIDER_PLUGINS, DEFAULT_QUEUE_PLUGINS,
-    DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    default_provider_repo_spec, default_subject_backend_repo, default_subject_repo_for_kind, format_repo_spec,
+    resolve_curated_plugin_by_basename, resolve_tag_for_slug, DEFAULT_OAI_AGENT_PLUGINS, DEFAULT_PROVIDER_PLUGINS,
+    DEFAULT_QUEUE_PLUGINS, DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 pub use principal::{
     bootstrap_principals_file_if_absent, bootstrap_principals_file_if_absent_for, check_principal_can,
@@ -146,13 +161,16 @@ pub use workflow::{
     resolve_phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref_for_actor, save_requirement, save_task,
     BlockedTaskSummary, CleanupResult, RequirementLinkSummary, ResumabilityStatus, ResumeConfig, StaleTaskSummary,
     WorkflowActivitySummary, WorkflowCheckpointPruneResult, WorkflowFailureSummary, WorkflowHistorySummary,
-    WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
-    DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
+    WorkflowLaunchBegin, WorkflowLaunchClaim, WorkflowLaunchIdempotencyRequest, WorkflowLaunchIdempotencyStore,
+    WorkflowLaunchReplay, WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
+    DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, DEFAULT_WORKFLOW_LAUNCH_LEASE_SECS,
+    MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
 pub use workflow::{
     durable_journal_active, is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion,
     WorkflowRunPruneCandidate, WorkflowRunPruneFilter, WorkflowRunPruneReport,
 };
+pub use workflow::{shutdown_environment_hosts, EnvironmentClient, EnvironmentNode, ReapResponse};
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,
     expand_variables, expand_workflow_phases, generated_workflow_phase_is_defined, legacy_workflow_config_paths,
@@ -161,21 +179,23 @@ pub use workflow_config::{
     missing_skill_reference_warnings_for_sources, missing_skill_yaml_warnings, parse_yaml_workflow_config,
     remove_agent_profile, remove_generated_workflow_phase, remove_workflow_definition, resolve_workflow_phase_plan,
     resolve_workflow_rework_attempts, resolve_workflow_skip_guards, resolve_workflow_variables,
-    resolve_workflow_verdict_routing, unenforced_project_yaml_warnings, unenforced_yaml_field_warnings,
-    upsert_agent_profile, upsert_generated_workflow_phase, upsert_generated_workflow_pipeline,
-    upsert_workflow_definition, validate_and_compile_yaml_workflows, validate_workflow_and_runtime_configs,
-    validate_workflow_and_runtime_configs_with_project_root, validate_workflow_config, workflow_config_hash,
-    workflow_config_path, write_full_workflow_config, write_workflow_config, yaml_workflows_dir, CompileYamlResult,
-    FileWatcherTriggerConfig, LoadedWorkflowConfig, PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition,
-    SkillReferenceWarning, SubWorkflowRef, TriggerType, UnenforcedFieldWarning, WebhookTriggerConfig,
-    WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource,
-    WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule, WorkflowTrigger, WorkflowVariable,
-    WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
+    resolve_workflow_verdict_routing, set_phase_definition, unenforced_project_yaml_warnings,
+    unenforced_yaml_field_warnings, upsert_agent_profile, upsert_generated_workflow_phase,
+    upsert_generated_workflow_pipeline, upsert_workflow_definition, validate_and_compile_yaml_workflows,
+    validate_workflow_and_runtime_configs, validate_workflow_and_runtime_configs_with_project_root,
+    validate_workflow_config, workflow_config_hash, workflow_config_path, write_full_workflow_config,
+    write_workflow_config, yaml_workflows_dir, CompileYamlResult, FileWatcherTriggerConfig, LoadedWorkflowConfig,
+    PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition, SkillReferenceWarning, SubWorkflowRef, TriggerType,
+    UnenforcedFieldWarning, WebhookTriggerConfig, WorkflowCheckpointRetentionConfig, WorkflowConfig,
+    WorkflowConfigMetadata, WorkflowConfigSource, WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry,
+    WorkflowSchedule, WorkflowTrigger, WorkflowVariable, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID,
+    WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
 pub use workflow_config::{YamlDiagnostic, YamlExcerpt};
 pub use workflow_events::{dispatch_workflow_event, workflow_task_id, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{
-    active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid,
+    active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid, workflow_runner_liveness,
+    RunnerLiveness,
 };
 
 #[cfg(test)]

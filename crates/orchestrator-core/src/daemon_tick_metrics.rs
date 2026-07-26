@@ -21,7 +21,9 @@ pub struct DaemonTickMetrics {
 impl DaemonTickMetrics {
     pub async fn collect(hub: Arc<dyn ServiceHub>, stale_threshold_hours: u64) -> Result<Self> {
         let tasks = hub.tasks().list().await?;
-        let workflows = hub.workflows().list().await.unwrap_or_default();
+        // No-blob summaries: this gauge only counts by status, so avoid the
+        // all-runs full-blob scan (`list`) that ran every tick.
+        let workflows = hub.workflows().list_summaries().await.unwrap_or_default();
 
         let tasks_total = tasks.len();
         let tasks_ready =
@@ -35,8 +37,11 @@ impl DaemonTickMetrics {
             .iter()
             .filter(|workflow| matches!(workflow.status, WorkflowStatus::Running | WorkflowStatus::Paused))
             .count();
+        // Gauge count by terminal status. The summary drops machine_state /
+        // completed_at, so this counts on status alone (was
+        // is_terminally_completed_workflow) — an equivalent gauge value.
         let workflows_completed =
-            workflows.iter().filter(|workflow| is_terminally_completed_workflow(workflow)).count();
+            workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Completed).count();
         let workflows_failed = workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Failed).count();
 
         Ok(Self {
@@ -93,10 +98,4 @@ fn stale_in_progress_summary(
 
 fn task_age_seconds(now: chrono::DateTime<chrono::Utc>, updated_at: chrono::DateTime<chrono::Utc>) -> u64 {
     now.signed_duration_since(updated_at).num_seconds().max(0) as u64
-}
-
-fn is_terminally_completed_workflow(workflow: &crate::OrchestratorWorkflow) -> bool {
-    workflow.status == WorkflowStatus::Completed
-        && workflow.machine_state == crate::WorkflowMachineState::Completed
-        && workflow.completed_at.is_some()
 }

@@ -3,16 +3,11 @@ use super::*;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct QueueEnqueueInput {
     #[serde(default)]
-    pub(super) task_id: Option<String>,
-    #[serde(default)]
-    pub(super) requirement_id: Option<String>,
-    #[serde(default)]
     pub(super) title: Option<String>,
-    /// For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like
-    /// blog/post/etc.), pass `subject_id` (the kernel resolves the kind)
-    /// instead of `task_id`. Accepts a qualified id (`blog:BLOG-001` — kind
-    /// trusted) or a bare id (`BLOG-001` — kind resolved via the subject
-    /// router). Mutually exclusive with `task_id` / `requirement_id` / `title`.
+    /// Subject to enqueue for any kind (task, requirement, or dynamic kinds like
+    /// blog/post). Accepts a qualified id (`task:TASK-001` / `blog:BLOG-001` —
+    /// kind trusted) or a bare id (`TASK-001` — kind resolved via the subject
+    /// router). Mutually exclusive with `title`.
     #[serde(default)]
     pub(super) subject_id: Option<String>,
     #[serde(default)]
