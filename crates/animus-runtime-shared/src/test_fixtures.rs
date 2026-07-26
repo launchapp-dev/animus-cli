@@ -29,6 +29,7 @@ fn profile(description: &str, system_prompt: &str, role: Option<&str>) -> AgentP
         mcp_servers: Vec::new(),
         tool_policy: AgentToolPolicy::default(),
         skills: vec![],
+        application_chat_controls: None,
         capabilities: BTreeMap::new(),
         tool: None,
         tool_profile: None,

@@ -1218,7 +1218,7 @@ mod tests {
         match cli.command {
             Command::Chat { command: ChatCommand::Send(args) } => {
                 let parsed = args.application_controls_json.expect("controls parsed");
-                assert_eq!(parsed.schema, APPLICATION_CHAT_CONTROLS_SCHEMA);
+                assert_eq!(parsed.schema, ApplicationChatControlsSchema::V1);
                 assert_eq!(parsed.approvals, Some(true));
                 assert_eq!(parsed.reasoning_effort, Some(ApplicationReasoningEffort::High));
                 assert_eq!(parsed.permission_intent, Some(ApplicationPermissionIntent::Review));

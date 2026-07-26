@@ -16,7 +16,7 @@ test-support = []
 anyhow = "1.0"
 animus-plugin-protocol = { workspace = true }
 animus-actor = { workspace = true }
-animus-subject-protocol-v2 = { workspace = true }
+animus-subject-protocol-wire = { workspace = true }
 animus-session-backend = { workspace = true }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

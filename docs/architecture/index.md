@@ -6,15 +6,10 @@ helpers, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,
 and web UI integrations run as external stdio plugins rather than in-process
 desktop or web shell frameworks. The workspace also depends on external
-`launchapp-dev/animus-protocol` crates. The root `Cargo.toml` now pins the main
-protocol family (`protocol`, `animus-config-protocol`,
-`animus-subject-protocol`, `animus-provider-protocol`,
-`animus-session-backend`, `animus-journal-protocol`, and `animus-actor`) to
-the unified `v0.1.26` tag; `crates/orchestrator-cli/Cargo.toml` also pins the
-CLI-side `animus-control-protocol`, `animus-log-storage-protocol`,
-`animus-subject-protocol-wire`, and `animus-workflow-runner-protocol` crates to
-`v0.1.26`, while `animus-queue-protocol` and the separate
-`animus-subject-protocol-v05` compatibility line remain on `v0.5.10`.
+`launchapp-dev/animus-protocol` crates. The root `Cargo.toml` pins the entire
+application, control, plugin, queue, subject, provider, session, journal,
+config, and kernel protocol family to the unified `v0.7.0-rc.12` tag. Workspace
+members inherit those pins, avoiding duplicate wire identities.
 
 Trust code and generated references over hand-maintained summaries when they
 disagree. Start with:

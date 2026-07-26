@@ -7,7 +7,7 @@ use tracing::warn;
 
 use crate::services::plugin_clients;
 use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueLeaseRequest};
-use animus_subject_protocol_v05::SubjectId as QueueSubjectId;
+use animus_subject_protocol_wire::SubjectId as QueueSubjectId;
 
 pub async fn dispatch_queued_entries_via_runner(
     root: &str,

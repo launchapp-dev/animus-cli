@@ -25,25 +25,25 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 # Protocol/wire-type crates live in launchapp-dev/animus-protocol, never in
-# this repo. `protocol` + `animus-config-protocol` moved out in v0.6.1; all
-# animus-protocol git deps are pinned to the SAME tag (v0.1.26) so transitive
-# animus-subject-protocol resolves to one source (no duplicate-crate type
-# mismatches). The two local paths below are the coordinated rc.12 candidate;
-# replace both with the published protocol tag before merging the release.
-animus-plugin-protocol = { path = "../../../animus-protocol/worktrees/feat-lease-fenced-append/animus-plugin-protocol" }
-animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-# Coordinated TASK-970 development pin from the same protocol candidate.
-animus-subject-protocol-v2 = { package = "animus-subject-protocol", path = "../../../animus-protocol/worktrees/feat-lease-fenced-append/animus-subject-protocol" }
+# this repo. Every dependency is pinned to the same release so Cargo resolves
+# one coherent wire identity with no workstation paths or legacy source split.
+animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-application-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
+animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12" }
 # v0.7: environment plugin kind — EnvironmentSpec/HarnessCommand/ExecRequest wire
 # types + prepare/exec/exec_stream/teardown methods. Consumed by the routing
 # resolver + the follow-on runtime EnvironmentClient (not yet built).
-animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11" }
-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.11", package = "protocol" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.12", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }

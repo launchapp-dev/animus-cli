@@ -1568,6 +1568,7 @@ mod tests {
                 mcp_servers,
                 tool_policy,
                 skills,
+                application_chat_controls: None,
                 capabilities,
                 tool: None,
                 tool_profile: None,

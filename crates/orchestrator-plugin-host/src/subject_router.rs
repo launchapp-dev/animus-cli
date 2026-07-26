@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use animus_plugin_protocol::{EnvRequirement, RpcError};
-use animus_subject_protocol_v2::{
+use animus_subject_protocol_wire::{
     SubjectCreateRequestV2, SubjectDeleteRequestV2, SubjectFilter, SubjectGetRequestV2, SubjectId,
     SubjectListRequestV2, SubjectRequestContext, SubjectStatusRequestV2, SubjectUpdateRequestV2,
 };
