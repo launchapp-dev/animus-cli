@@ -227,6 +227,7 @@ fn require_complete_operation_surface(methods: &[String]) -> Result<()> {
     let missing: Vec<&str> = REQUIRED_SHARED_OPERATION_METHODS
         .iter()
         .copied()
+        .chain([SHARED_OPERATION_CAPABILITY, FENCED_APPEND_CAPABILITY])
         .filter(|required| !methods.iter().any(|method| method == required))
         .collect();
     if missing.is_empty() {
@@ -1547,14 +1548,28 @@ mod tests {
 
     #[test]
     fn live_operation_surface_and_missing_key_probe_fail_closed() {
-        let complete: Vec<String> = REQUIRED_SHARED_OPERATION_METHODS.iter().map(ToString::to_string).collect();
+        let complete: Vec<String> = REQUIRED_SHARED_OPERATION_METHODS
+            .iter()
+            .copied()
+            .chain([SHARED_OPERATION_CAPABILITY, FENCED_APPEND_CAPABILITY])
+            .map(ToString::to_string)
+            .collect();
         require_complete_operation_surface(&complete).unwrap();
-        let incomplete =
-            complete.into_iter().filter(|method| method != METHOD_OPERATION_TERMINALIZE).collect::<Vec<_>>();
+        let incomplete = complete
+            .iter()
+            .filter(|method| method.as_str() != METHOD_OPERATION_TERMINALIZE)
+            .cloned()
+            .collect::<Vec<_>>();
         assert!(require_complete_operation_surface(&incomplete)
             .unwrap_err()
             .to_string()
             .contains(METHOD_OPERATION_TERMINALIZE));
+        let missing_fence =
+            complete.iter().filter(|method| method.as_str() != FENCED_APPEND_CAPABILITY).cloned().collect::<Vec<_>>();
+        assert!(require_complete_operation_surface(&missing_fence)
+            .unwrap_err()
+            .to_string()
+            .contains(FENCED_APPEND_CAPABILITY));
 
         let missing_id = "__animus_readiness_probe_missing__";
         assert!(operation_probe_rejected_missing_key(
