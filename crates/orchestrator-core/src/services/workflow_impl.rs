@@ -210,11 +210,32 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 
     async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
+        WorkflowServiceApi::run_with_id(self, id, input, actor).await
+    }
+
+    async fn run_with_id(
+        &self,
+        id: String,
+        input: WorkflowRunInput,
+        actor: Option<&Actor>,
+    ) -> Result<OrchestratorWorkflow> {
         let workflow = {
             let mut lock = self.state.write().await;
             let task = input.subject.as_ref().and_then(|s| s.task_id()).and_then(|id| lock.tasks.get(id).cloned());
             let workflow_ref =
                 effective_workflow_ref(input.workflow_ref(), crate::workflow::STANDARD_WORKFLOW_REF, task.as_ref());
+            if let Some(existing) = lock.workflows.get(&id) {
+                if existing.subject == input.subject
+                    && existing.workflow_ref.as_deref() == Some(workflow_ref.as_str())
+                    && existing.input == input.input
+                    && existing.vars == input.vars
+                {
+                    return Ok(existing.clone());
+                }
+                return Err(crate::types::conflict(format!(
+                    "workflow id '{id}' already belongs to a different effective request"
+                )));
+            }
             let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 None,
                 Some(workflow_ref.as_str()),
@@ -441,8 +462,15 @@ impl WorkflowServiceApi for FileServiceHub {
 
     async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
-        let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
-        let retry_configs = load_phase_retry_configs(self.project_root.as_path(), actor);
+        WorkflowServiceApi::run_with_id(self, id, input, actor).await
+    }
+
+    async fn run_with_id(
+        &self,
+        id: String,
+        input: WorkflowRunInput,
+        actor: Option<&Actor>,
+    ) -> Result<OrchestratorWorkflow> {
         // Resolve the bootstrap config from the actor's partition so a per-user
         // `config_source` (global∪private∪shared) contributes the default
         // workflow ref, skip guards, and phase plan. `actor = None` = global.
@@ -454,6 +482,50 @@ impl WorkflowServiceApi for FileServiceHub {
         };
         let workflow_ref =
             effective_workflow_ref(input.workflow_ref(), &workflow_config.config.default_workflow_ref, task.as_ref());
+        let manager = self.workflow_manager();
+        match manager.load(&id) {
+            Ok(existing) => {
+                if existing.subject != input.subject
+                    || existing.workflow_ref.as_deref() != Some(workflow_ref.as_str())
+                    || existing.input != input.input
+                    || existing.vars != input.vars
+                {
+                    return Err(crate::types::conflict(format!(
+                        "workflow id '{id}' already belongs to a different effective request"
+                    )));
+                }
+                match (manager.load_workflow_actor(&id), actor) {
+                    (Some(stored), Some(requested))
+                        if stored.user_id == requested.user_id && stored.tenant_id == requested.tenant_id => {}
+                    (None, Some(requested)) => {
+                        // Crash reconciliation: save() can land before its
+                        // actor sidecar. The stable id is known only to the
+                        // scoped reservation claimant, so repair the missing
+                        // owner before the run can be returned or spawned.
+                        manager.set_workflow_actor(&id, Some(requested))?;
+                    }
+                    (None, None) => {}
+                    _ => {
+                        return Err(crate::types::conflict(format!(
+                            "workflow id '{id}' is owned by a different actor partition"
+                        )));
+                    }
+                }
+                return Ok(existing);
+            }
+            Err(error) if protocol::classify_anyhow_error_kind(&error) == protocol::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error.context(format!(
+                    "cannot safely reconcile workflow launch '{id}'; journal availability is unknown"
+                )));
+            }
+        }
+        // Existing crash-stranded runs return above without requiring the
+        // current state-machine/runtime config to still compile. The journaled
+        // run is authoritative for reconciliation; configuration is needed only
+        // when this claimant must create the preallocated id for the first time.
+        let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
+        let retry_configs = load_phase_retry_configs(self.project_root.as_path(), actor);
         let skip_guards = crate::resolve_workflow_skip_guards(&workflow_config.config, Some(workflow_ref.as_str()));
         let executor = WorkflowLifecycleExecutor::with_state_machines(
             crate::resolve_phase_plan_for_workflow_ref_for_actor(
@@ -475,7 +547,6 @@ impl WorkflowServiceApi for FileServiceHub {
             }
         }
 
-        let manager = self.workflow_manager();
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Start)?;
         // Persist the actor partition so EVERY later lifecycle transition

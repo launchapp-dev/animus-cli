@@ -832,16 +832,12 @@ impl SubjectRouter {
             message,
             data: None,
         };
-        let v2_actor = serde_json::from_value(
-            serde_json::to_value(actor).map_err(|error| invalid(error.to_string()))?,
-        )
-        .map_err(|error| invalid(format!("failed to convert authenticated actor: {error}")))?;
+        let v2_actor = serde_json::from_value(serde_json::to_value(actor).map_err(|error| invalid(error.to_string()))?)
+            .map_err(|error| invalid(format!("failed to convert authenticated actor: {error}")))?;
         let context = SubjectRequestContext::for_actor(v2_actor);
-        let (kind, verb) = method.split_once('/').ok_or_else(|| {
-            invalid(format!(
-                "actor-scoped subject method must be '<kind>/<verb>', got '{method}'"
-            ))
-        })?;
+        let (kind, verb) = method
+            .split_once('/')
+            .ok_or_else(|| invalid(format!("actor-scoped subject method must be '<kind>/<verb>', got '{method}'")))?;
         let raw = params.unwrap_or_else(|| serde_json::json!({}));
         let request = match verb {
             "list" => {
@@ -854,11 +850,9 @@ impl SubjectRouter {
                 let id = required_subject_id(&raw, verb).map_err(invalid)?;
                 serde_json::to_value(SubjectGetRequestV2 { context, id })
             }
-            "create" => serde_json::to_value(SubjectCreateRequestV2 {
-                context,
-                kind: Some(kind.to_string()),
-                payload: raw,
-            }),
+            "create" => {
+                serde_json::to_value(SubjectCreateRequestV2 { context, kind: Some(kind.to_string()), payload: raw })
+            }
             "update" => {
                 let id = required_subject_id(&raw, verb).map_err(invalid)?;
                 let patch = raw.get("patch").cloned().unwrap_or_else(|| {
@@ -893,8 +887,7 @@ impl SubjectRouter {
             }
         }
         .map_err(|error| invalid(format!("failed to encode subject v2 request: {error}")))?;
-        self.route_call(&format!("{kind}/v2/{verb}"), Some(request))
-            .await
+        self.route_call(&format!("{kind}/v2/{verb}"), Some(request)).await
     }
 
     pub async fn resolve_subject(&self, subject_kind: &str, subject_id: &str) -> Result<Value, RpcError> {

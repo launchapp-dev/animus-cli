@@ -1,6 +1,7 @@
 mod dependency;
 mod environment_client;
 mod journal_client;
+mod launch_idempotency;
 mod lifecycle_executor;
 mod phase_plan;
 mod resume;
@@ -20,6 +21,10 @@ pub use environment_client::{
 pub use journal_client::{
     durable_journal_active, import_local_sqlite_into_plugin, record_wire_event as journal_record_wire_event,
     shutdown_resident_hosts as shutdown_journal_hosts, JournalImportStats, WorkflowRunSummary,
+};
+pub use launch_idempotency::{
+    WorkflowLaunchBegin, WorkflowLaunchClaim, WorkflowLaunchIdempotencyRequest, WorkflowLaunchIdempotencyStore,
+    WorkflowLaunchReplay, DEFAULT_WORKFLOW_LAUNCH_LEASE_SECS, MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES,
 };
 
 pub use lifecycle_executor::WorkflowLifecycleExecutor;

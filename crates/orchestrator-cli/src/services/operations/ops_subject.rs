@@ -1203,9 +1203,8 @@ mod tests {
     #[tokio::test]
     async fn route_or_not_found_returns_unavailable_for_empty_dispatch() {
         let dispatch = SubjectPluginDispatch::empty();
-        let err = route_or_not_found_for_actor(&dispatch, "task/list", None, None)
-            .await
-            .expect_err("expect Unavailable");
+        let err =
+            route_or_not_found_for_actor(&dispatch, "task/list", None, None).await.expect_err("expect Unavailable");
         let message = err.to_string();
         assert!(message.contains("task"), "error message names kind: {message}");
         assert!(

@@ -175,6 +175,16 @@ pub trait WorkflowServiceApi: Send + Sync {
     /// runs, local CLI). The actor is NEVER synthesized from workflow YAML, agent
     /// output, or subject content.
     async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow>;
+    /// Bootstrap a workflow with a kernel-selected stable id. This is reserved
+    /// for durable caller-idempotency: the id is persisted in the reservation
+    /// before any enqueue/spawn, allowing a restarted process to reconcile the
+    /// exact run without a subject scan or a second launch.
+    async fn run_with_id(
+        &self,
+        id: String,
+        input: WorkflowRunInput,
+        actor: Option<&Actor>,
+    ) -> Result<OrchestratorWorkflow>;
     async fn resume(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn pause(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn cancel(&self, id: &str) -> Result<OrchestratorWorkflow>;

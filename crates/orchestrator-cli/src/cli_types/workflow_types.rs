@@ -5,6 +5,20 @@ use super::{
     WORKFLOW_SORT_HELP, WORKFLOW_STATUS_HELP,
 };
 
+fn parse_workflow_launch_idempotency_key(raw: &str) -> Result<String, String> {
+    let bytes = raw.as_bytes();
+    if bytes.is_empty() || bytes.len() > orchestrator_core::MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES {
+        return Err(format!(
+            "idempotency key must contain 1..={} bytes",
+            orchestrator_core::MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES
+        ));
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')) {
+        return Err("idempotency key may contain only ASCII letters, digits, '.', '_', ':', and '-'".to_string());
+    }
+    Ok(raw.to_string())
+}
+
 /// Workflow identifier args: `--id` is primary, `--workflow-id` is a hidden
 /// alias so domain-prefixed scripts keep working, `-i` is the short form.
 #[derive(Debug, Args)]
@@ -348,6 +362,15 @@ pub(crate) struct WorkflowRunArgs {
     pub(crate) vars: Vec<String>,
     #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
     pub(crate) actor_json: Option<String>,
+    #[arg(
+        long,
+        value_name = "KEY",
+        value_parser = parse_workflow_launch_idempotency_key,
+        requires_all = ["subject_id", "actor_json"],
+        conflicts_with = "sync",
+        help = "Durably deduplicate an actor-scoped application launch. KEY is bound to actor + tenant/workspace + repository scope + effective workflow/subject/input. The same completed request replays its exact canonical run; a changed request conflicts. Requires --subject-id and --actor-json with tenant_id; detached launches only."
+    )]
+    pub(crate) idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Args)]

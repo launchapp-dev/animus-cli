@@ -288,6 +288,68 @@ mod tests {
     }
 
     #[test]
+    fn workflow_run_idempotency_key_is_bounded_and_actor_subject_scoped() {
+        let actor = r#"{"user_id":"alice","tenant_id":"workspace-a","claims":[]}"#;
+        let cli = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "animus.task/standard",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor,
+            "--idempotency-key",
+            "arena.launch_1:retry-0",
+        ])
+        .expect("bounded actor+subject launch key should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Run(args) } => {
+                assert_eq!(args.idempotency_key.as_deref(), Some("arena.launch_1:retry-0"));
+            }
+            other => panic!("expected workflow run, got {other:?}"),
+        }
+
+        for argv in [
+            vec!["animus", "workflow", "run", "--subject-id", "task:TASK-1", "--idempotency-key", "key"],
+            vec!["animus", "workflow", "run", "--actor-json", actor, "--idempotency-key", "key"],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(argv).expect_err("idempotency scope invariant must be clap-enforced").kind(),
+                ErrorKind::MissingRequiredArgument
+            );
+        }
+        let sync = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "--sync",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor,
+            "--idempotency-key",
+            "key",
+        ])
+        .expect_err("synchronous keyed launch must be rejected");
+        assert_eq!(sync.kind(), ErrorKind::ArgumentConflict);
+
+        let invalid = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor,
+            "--idempotency-key",
+            "not valid",
+        ])
+        .expect_err("unsafe key alphabet must fail");
+        assert_eq!(invalid.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
     fn workflow_run_subject_id_conflicts_with_title() {
         let error = Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001", "--title", "x"])
             .expect_err("--subject-id must be mutually exclusive with --title");
@@ -1050,18 +1112,9 @@ mod tests {
 
     #[test]
     fn chat_reads_parse_bounded_page_arguments() {
-        let list = Cli::try_parse_from([
-            "animus",
-            "chat",
-            "list",
-            "--as-user",
-            "carol",
-            "--limit",
-            "25",
-            "--offset",
-            "50",
-        ])
-        .expect("bounded chat list should parse");
+        let list =
+            Cli::try_parse_from(["animus", "chat", "list", "--as-user", "carol", "--limit", "25", "--offset", "50"])
+                .expect("bounded chat list should parse");
         match list.command {
             Command::Chat { command: ChatCommand::List(args) } => {
                 assert_eq!(args.as_user.as_deref(), Some("carol"));
@@ -1071,9 +1124,8 @@ mod tests {
             other => panic!("expected chat list, got {other:?}"),
         }
 
-        let get =
-            Cli::try_parse_from(["animus", "chat", "get", "conv-1", "--limit", "10", "--offset", "20"])
-                .expect("bounded chat get should parse");
+        let get = Cli::try_parse_from(["animus", "chat", "get", "conv-1", "--limit", "10", "--offset", "20"])
+            .expect("bounded chat get should parse");
         match get.command {
             Command::Chat { command: ChatCommand::Get(args) } => {
                 assert_eq!(args.id, "conv-1");

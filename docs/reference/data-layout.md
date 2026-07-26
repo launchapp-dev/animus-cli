@@ -122,7 +122,8 @@ Mutable runtime state lives outside the repo:
 
 Key points:
 
-- `workflow.db` stores persisted workflows, tasks, requirements, and checkpoints
+- `workflow.db` stores persisted workflows, tasks, requirements, checkpoints,
+  and actor-scoped workflow-launch idempotency reservations
 - `core-state.json` stores the shared runtime snapshot Animus loads at startup
 - `config/state-machines.v1.json` stores the effective state-machine document
 - `config/workflow-config.v2.json` stores compiled workflow config when a compile/write flow
@@ -230,7 +231,7 @@ Use Animus commands or Animus MCP tools instead.
 | `.animus/config/skill_definitions/<name>.yaml` | Project-scoped YAML skill definition (highest skill priority) |
 | `.animus/plugins/` | Project-local plugin discovery/install directory |
 | `.animus/plugins/<pack-id>/` | Project-local pack override root |
-| `~/.animus/<repo-scope>/workflow.db` | Persisted workflows, tasks, requirements, checkpoints |
+| `~/.animus/<repo-scope>/workflow.db` | Persisted workflows, tasks, requirements, checkpoints, and workflow-launch idempotency reservations |
 | `~/.animus/<repo-scope>/config/state-machines.v1.json` | Repo-scoped state-machine config |
 | `~/.animus/<repo-scope>/config/workflow-config.v2.json` | Compiled repo-scoped workflow config |
 | `~/.animus/<repo-scope>/config/agent-runtime-config.v2.json` | Compiled repo-scoped agent runtime config |

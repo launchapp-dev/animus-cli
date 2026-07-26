@@ -155,8 +155,10 @@ pub use workflow::{
     resolve_phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref_for_actor, save_requirement, save_task,
     BlockedTaskSummary, CleanupResult, RequirementLinkSummary, ResumabilityStatus, ResumeConfig, StaleTaskSummary,
     WorkflowActivitySummary, WorkflowCheckpointPruneResult, WorkflowFailureSummary, WorkflowHistorySummary,
-    WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
-    DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
+    WorkflowLaunchBegin, WorkflowLaunchClaim, WorkflowLaunchIdempotencyRequest, WorkflowLaunchIdempotencyStore,
+    WorkflowLaunchReplay, WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
+    DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, DEFAULT_WORKFLOW_LAUNCH_LEASE_SECS,
+    MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
 pub use workflow::{
     durable_journal_active, is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion,

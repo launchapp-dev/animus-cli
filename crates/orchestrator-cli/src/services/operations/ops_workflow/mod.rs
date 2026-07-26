@@ -1,6 +1,7 @@
 mod config;
 mod control_routing;
 pub(crate) mod execute;
+mod idempotency;
 mod phases;
 mod prompt;
 
@@ -497,10 +498,7 @@ pub(crate) async fn handle_workflow(
                             let current_phase = workflow_current_phase(&workflow);
                             if let Value::Object(run) = run {
                                 if let Some(current_phase) = current_phase {
-                                    run.insert(
-                                        "current_phase".to_string(),
-                                        Value::String(current_phase.clone()),
-                                    );
+                                    run.insert("current_phase".to_string(), Value::String(current_phase.clone()));
                                     project_current_agent_fields(run, Some(&current_phase), &runtime);
                                 } else {
                                     run.remove("current_phase");
@@ -530,8 +528,10 @@ pub(crate) async fn handle_workflow(
                     print_workflow_list_table(&items);
                     return Ok(());
                 }
-                let runtime =
-                    animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, Some(actor));
+                let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(
+                    project_root,
+                    Some(actor),
+                );
                 let values = owned
                     .into_iter()
                     .map(|(workflow, owner)| workflow_value_for_application(workflow, &runtime, Some(&owner)))
@@ -553,8 +553,10 @@ pub(crate) async fn handle_workflow(
         WorkflowCommand::Get(args) => {
             let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
             let owner = authorized_workflow_actor(project_root, &args.id, actor.as_ref())?;
-            let runtime =
-                animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor.as_ref());
+            let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(
+                project_root,
+                actor.as_ref(),
+            );
             if json {
                 if let Some(run) = try_workflow_get_via_control(project_root, &args.id).await? {
                     return print_value(workflow_value_for_application(run, &runtime, owner.as_ref())?, true);
@@ -562,10 +564,9 @@ pub(crate) async fn handle_workflow(
             }
             let workflow = workflows.get(&args.id).await?;
             match owner.as_ref() {
-                Some(owner) if json => print_value(
-                    workflow_value_for_application(workflow, &runtime, Some(owner))?,
-                    true,
-                ),
+                Some(owner) if json => {
+                    print_value(workflow_value_for_application(workflow, &runtime, Some(owner))?, true)
+                }
                 None if json => print_value(workflow_value_for_application(workflow, &runtime, None)?, true),
                 _ => print_value(workflow, json),
             }
@@ -695,13 +696,22 @@ pub(crate) async fn handle_workflow(
                 // that nothing drives (the orphan reconciler then
                 // zombie-cancels it). Hand execution to a detached
                 // workflow_runner spawn instead.
-                let workflow = phases::start_workflow_with_runner(
-                    hub.clone(),
-                    project_root,
-                    dispatch.to_workflow_run_input(),
-                    runner_overrides,
-                )
-                .await?;
+                let input = dispatch.to_workflow_run_input();
+                let workflow = match args.idempotency_key {
+                    Some(key) => {
+                        idempotency::start_workflow_idempotently(
+                            hub.clone(),
+                            project_root,
+                            input,
+                            runner_overrides,
+                            key,
+                        )
+                        .await?
+                    }
+                    None => {
+                        phases::start_workflow_with_runner(hub.clone(), project_root, input, runner_overrides).await?
+                    }
+                };
                 if !json {
                     eprintln!(
                         "dispatched workflow {} (status={:?}) — tail with: animus daemon events --follow, or rerun with --sync to stream phase events",
@@ -1196,8 +1206,8 @@ mod tests {
         assert_eq!(owned[0].0.id, "wf-owned");
         let runtime =
             animus_runtime_shared::config_context::RuntimeConfigContext::load(temp.path().to_string_lossy().as_ref());
-        let value = workflow_value_for_application(&owned[0].0, &runtime, Some(&owned[0].1))
-            .expect("ownership projection");
+        let value =
+            workflow_value_for_application(&owned[0].0, &runtime, Some(&owned[0].1)).expect("ownership projection");
         assert_eq!(value.pointer("/actor/user_id").and_then(Value::as_str), Some("alice"));
         assert_eq!(value.get("workspace_id").and_then(Value::as_str), Some("tenant-a"));
         assert_eq!(value.get("initiated_by").and_then(Value::as_str), Some("alice"));
@@ -1212,8 +1222,7 @@ mod tests {
         );
         let mut executing = owned[0].0.clone();
         executing.current_phase = Some("implementation".to_string());
-        let value = workflow_value_for_application(&executing, &runtime, Some(&owned[0].1))
-            .expect("agent projection");
+        let value = workflow_value_for_application(&executing, &runtime, Some(&owned[0].1)).expect("agent projection");
         assert_eq!(value.get("current_phase").and_then(Value::as_str), Some("implementation"));
         assert_eq!(value.get("agent_id").and_then(Value::as_str), Some("swe"));
 
@@ -1221,13 +1230,8 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "mode": "agent", "agent_id": "must-not-leak" }))
                 .expect("phase definition");
         command_phase.mode = orchestrator_config::agent_runtime_config::PhaseExecutionMode::Command;
-        runtime
-            .workflow_config
-            .config
-            .phase_definitions
-            .insert("implementation".to_string(), command_phase);
-        let value =
-            workflow_value_for_application(&executing, &runtime, None).expect("non-agent projection");
+        runtime.workflow_config.config.phase_definitions.insert("implementation".to_string(), command_phase);
+        let value = workflow_value_for_application(&executing, &runtime, None).expect("non-agent projection");
         assert!(value.get("agent_id").is_none());
     }
 

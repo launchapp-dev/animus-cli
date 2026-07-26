@@ -1887,6 +1887,9 @@ scopes the operation to that user, mirroring `animus mcp serve --actor-json`:
 
 ```bash
 animus workflow run --subject-id task:TASK-1 --actor-json '{"user_id":"alice"}'
+animus workflow run animus.task/standard --subject-id task:TASK-1 \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-7"}' \
+  --idempotency-key arena.launch-01
 animus workflow config get  --actor-json '{"user_id":"alice"}'
 animus subject get --kind task --id TASK-1 --actor-json '{"user_id":"alice","tenant_id":"workspace-7"}'
 animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":["admin"]}'
@@ -1895,6 +1898,16 @@ animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":
 - `workflow run` relays the actor to the runner (and onward to the per-agent
   `animus mcp serve` child + config_source), so the run resolves the actor's
   config partition and the agent's tools scope per-user.
+- `workflow run --idempotency-key <KEY>` is the detached application-launch
+  surface. `KEY` is 1–128 bytes from `[A-Za-z0-9._:-]` and requires both
+  `--subject-id` and an explicit `--actor-json` whose `tenant_id` is non-empty.
+  The durable key is partitioned by repository scope + tenant/workspace + actor
+  and bound to the effective workflow ref, qualified subject id, input, vars,
+  and runner overrides. An identical completed retry returns the exact stored
+  canonical run; a changed request returns `idempotency_conflict`; a live lease
+  returns `idempotency_in_progress`. Actorless/global and synchronous use fail
+  closed. A crash-stranded pending reservation becomes reclaimable after its
+  five-minute lease and reuses its preallocated workflow id.
 - `workflow config get` / `validate` return the actor's
   global ∪ private ∪ shared config set; an actor whose `claims` contains
   `admin` sees everything; **no flag = global-only**.

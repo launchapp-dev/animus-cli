@@ -279,6 +279,50 @@ pub(crate) async fn start_workflow_with_runner(
     // workflow resolves at run-time, not only from the global view. The same
     // actor is relayed to the detached runner child via WORKFLOW_ACTOR_ENV.
     let workflow = hub.workflows().run(input, overrides.actor.as_ref()).await?;
+    finalize_workflow_runner_start(hub, project_root, workflow, overrides).await
+}
+
+/// Bootstrap a caller-idempotent launch with the workflow id that was durably
+/// reserved before any run record or child process existed. Reusing the same id
+/// is what makes a crash between reservation, journal save, and spawn safely
+/// reconcilable without scanning another actor's runs.
+pub(crate) async fn bootstrap_reserved_workflow(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: String,
+    input: WorkflowRunInput,
+    actor: &Actor,
+) -> Result<OrchestratorWorkflow> {
+    ensure_workflow_runner_plugin(Path::new(project_root))?;
+    hub.workflows().run_with_id(workflow_id, input, Some(actor)).await
+}
+
+/// Complete the task projection + detached spawn after an idempotency claimant
+/// has renewed its lease. If a previous process already spawned this exact run,
+/// the live pid registry is authoritative and prevents a duplicate child.
+pub(crate) async fn finalize_workflow_runner_start(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow: OrchestratorWorkflow,
+    overrides: DetachedRunnerOverrides,
+) -> Result<OrchestratorWorkflow> {
+    finalize_workflow_runner_start_guarded(hub, project_root, workflow, overrides, None).await
+}
+
+pub(crate) async fn finalize_workflow_runner_start_guarded(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow: OrchestratorWorkflow,
+    overrides: DetachedRunnerOverrides,
+    before_spawn: Option<&(dyn Fn() -> Result<()> + Send + Sync)>,
+) -> Result<OrchestratorWorkflow> {
+    if matches!(
+        workflow.status,
+        orchestrator_core::WorkflowStatus::Running | orchestrator_core::WorkflowStatus::Pending
+    ) && orchestrator_core::workflow_runner_liveness(Path::new(project_root), &workflow.id).live
+    {
+        return Ok(workflow);
+    }
     // Route the Ready->InProgress transition through the installed subject
     // backend when one owns `task` (portal); the in-tree store is empty there,
     // so the transition would silently no-op and the daemon would re-dispatch
@@ -332,6 +376,17 @@ pub(crate) async fn start_workflow_with_runner(
         )
         .await;
         return Ok(workflow);
+    }
+    if let Some(before_spawn) = before_spawn {
+        // This is deliberately adjacent to spawn. Actor-idempotency leases can
+        // change hands while subject projection awaits a remote backend; a
+        // superseded process must not launch a second child after that await.
+        if let Err(error) = before_spawn() {
+            if let Some(previous_status) = task_status_before_dispatch {
+                let _ = task_store.set_status(&workflow.task_id, previous_status).await;
+            }
+            return Err(error);
+        }
     }
     if let Err(error) = spawn_detached_workflow_runner(project_root, &workflow.id, &overrides) {
         let _ = hub.workflows().cancel(&workflow.id).await;

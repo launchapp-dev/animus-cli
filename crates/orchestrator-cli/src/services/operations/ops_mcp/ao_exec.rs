@@ -179,10 +179,9 @@ mod tests {
             Actor { user_id: "bob".to_string(), claims: Vec::new(), tenant_id: Some("tenant-b".to_string()) },
         ];
         for actor in actors {
-            for requested in [
-                strings(&["queue", "list"]),
-                strings(&["workflow", "config", "agent-set", "--id", "reviewer"]),
-            ] {
+            for requested in
+                [strings(&["queue", "list"]), strings(&["workflow", "config", "agent-set", "--id", "reviewer"])]
+            {
                 let error = build_ao_args("/project", &requested, Some(&actor))
                     .expect_err("actor-bound call must never downgrade into an unscoped backend");
                 assert!(error.to_string().contains("not actor-aware"));
