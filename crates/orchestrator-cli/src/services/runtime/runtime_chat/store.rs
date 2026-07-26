@@ -82,6 +82,11 @@ pub(crate) enum TurnBlock {
 /// the turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChatMessage {
+    /// Stable operation-assigned identity for new messages. Legacy and
+    /// external conversation-store protocol rows may omit it; `seq` remains
+    /// the canonical compatibility locator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Monotonic 0-based index within the conversation.
     pub seq: u64,
     /// Who produced this turn.
@@ -512,6 +517,7 @@ mod tests {
     fn render_history_prompt_includes_prior_turns_and_new_user_turn() {
         let messages = vec![
             ChatMessage {
+                id: None,
                 seq: 0,
                 role: ChatRole::User,
                 content: "hello".into(),
@@ -523,6 +529,7 @@ mod tests {
                 blocks: Vec::new(),
             },
             ChatMessage {
+                id: None,
                 seq: 1,
                 role: ChatRole::Assistant,
                 content: "hi there".into(),
@@ -574,6 +581,7 @@ mod tests {
             .append_message(
                 "conv-test",
                 &ChatMessage {
+                    id: None,
                     seq: 0,
                     role: ChatRole::User,
                     content: "q".into(),
@@ -597,6 +605,7 @@ mod tests {
         let store = FileConversationStore { root: tmp.path().join("chat") };
         store.create(Some("conv-blocks".into())).unwrap();
         let msg = ChatMessage {
+            id: None,
             seq: 1,
             role: ChatRole::Assistant,
             content: "done".into(),
@@ -670,6 +679,7 @@ mod tests {
                 .append_message(
                     "a/b",
                     &ChatMessage {
+                        id: None,
                         seq: 0,
                         role: ChatRole::User,
                         content: "x".into(),

@@ -28,6 +28,22 @@ fn assert_error_envelope(payload: &Value, expected_code: &str, expected_exit_cod
 }
 
 #[test]
+fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let payload = harness.run_json_ok(&["chat", "capabilities"])?;
+    assert_success_envelope(&payload);
+    assert_eq!(payload.pointer("/data/schema").and_then(Value::as_str), Some("animus.chat.capabilities.v1"));
+    assert_eq!(payload.pointer("/data/send/durable_idempotency/supported").and_then(Value::as_bool), Some(true));
+    assert_eq!(payload.pointer("/data/send/partial_success/supported").and_then(Value::as_bool), Some(true));
+    let events = payload
+        .pointer("/data/send/partial_success/jsonl_events")
+        .and_then(Value::as_array)
+        .expect("capability probe should list terminal JSONL events");
+    assert!(events.iter().any(|event| event == "turn_failed"));
+    Ok(())
+}
+
+#[test]
 fn status_command_json_payload_includes_dashboard_schema_and_slices() -> Result<()> {
     let harness = CliHarness::new()?;
 

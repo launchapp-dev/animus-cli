@@ -1436,6 +1436,7 @@ mod tests {
 
     fn assistant_turn(input: u32, output: u32, reasoning: Option<u32>, model: &str, cost: Option<f64>) -> ChatMessage {
         ChatMessage {
+            id: None,
             seq: 1,
             role: ChatRole::Assistant,
             content: "reply".into(),
@@ -1478,6 +1479,7 @@ mod tests {
     #[test]
     fn conversation_cost_skips_user_only_turns() {
         let user = ChatMessage {
+            id: None,
             seq: 0,
             role: ChatRole::User,
             content: "hi".into(),

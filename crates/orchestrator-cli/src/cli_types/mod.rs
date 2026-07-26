@@ -1111,6 +1111,81 @@ mod tests {
     }
 
     #[test]
+    fn chat_send_idempotency_key_is_bounded_and_application_scoped() {
+        let actor_json = r#"{"user_id":"carol","tenant_id":"workspace-a","claims":[]}"#;
+        let cli = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--actor-json",
+            actor_json,
+            "--as-user",
+            "carol",
+            "--idempotency-key",
+            "arena.chat_1:retry-0",
+        ])
+        .expect("bounded application chat key should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                assert_eq!(args.idempotency_key.as_deref(), Some("arena.chat_1:retry-0"));
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+
+        for argv in [
+            vec!["animus", "chat", "send", "hello", "--conversation", "conv-1", "--idempotency-key", "key"],
+            vec![
+                "animus",
+                "chat",
+                "send",
+                "hello",
+                "--actor-json",
+                actor_json,
+                "--as-user",
+                "carol",
+                "--idempotency-key",
+                "key",
+            ],
+            vec![
+                "animus",
+                "chat",
+                "send",
+                "hello",
+                "--conversation",
+                "conv-1",
+                "--actor-json",
+                actor_json,
+                "--idempotency-key",
+                "key",
+            ],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(argv).expect_err("chat operation scope must be clap-enforced").kind(),
+                ErrorKind::MissingRequiredArgument
+            );
+        }
+        let invalid = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--actor-json",
+            actor_json,
+            "--as-user",
+            "carol",
+            "--idempotency-key",
+            "not valid",
+        ])
+        .expect_err("unsafe key alphabet must fail");
+        assert_eq!(invalid.kind(), ErrorKind::ValueValidation);
+    }
+
+    #[test]
     fn chat_reads_parse_bounded_page_arguments() {
         let list =
             Cli::try_parse_from(["animus", "chat", "list", "--as-user", "carol", "--limit", "25", "--offset", "50"])

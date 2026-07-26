@@ -1,5 +1,6 @@
 // phase-decision-test
 pub mod agent_runtime_config;
+pub mod chat_idempotency;
 pub mod config;
 pub mod daemon_config;
 pub mod daemon_tick_metrics;
@@ -41,6 +42,11 @@ pub use agent_runtime_config::{
     AgentRuntimeSource, BackoffConfig, CliToolConfig, CommandCwdMode, Idempotency, LoadedAgentRuntimeConfig,
     PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition,
     PhaseOutputContract, PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS,
+};
+pub use chat_idempotency::{
+    ChatOperationBegin, ChatOperationClaim, ChatOperationReceipt, ChatOperationRequest, ChatOperationStatus,
+    ChatOperationStore, DEFAULT_CHAT_OPERATION_LEASE_SECS, MAX_CHAT_IDEMPOTENCY_KEY_BYTES,
+    MAX_CHAT_OPERATION_ERROR_BYTES,
 };
 pub use config::RuntimeConfig;
 pub use daemon_config::{

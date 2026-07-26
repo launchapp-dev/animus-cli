@@ -29,6 +29,17 @@ lines (JSONL passthrough where structured) until interrupted:
 - `animus events tail` (workflow event stream; with `--json` each event is emitted as one JSONL line)
 - `animus chat send` (streams provider output as it arrives)
 
+`animus --json chat capabilities` is the machine-readable application probe.
+It reports durable chat idempotency support, scope/key constraints, terminal
+JSONL events, and canonical receipt fields. `chat send --idempotency-key
+<KEY>` requires `--conversation <ID>`, `--actor-json <JSON>`, and matching
+`--as-user <USER_ID>`; the actor must provide `user_id` and `tenant_id`. Exact
+retries replay the durable receipt, changed payloads return
+`idempotency_conflict`, and live claims return
+`idempotency_in_progress`. JSONL sends distinguish `user_message_accepted`
+from terminal `turn_completed` / `turn_failed`, so a provider failure cannot
+erase or duplicate the already-canonical user turn.
+
 `animus logs tail` is *not* exempt: it is a bounded, pull-style reader that
 returns one envelope and exits; its `--follow` flag is a hidden deprecated
 no-op (see the `animus logs tail` section below).

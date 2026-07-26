@@ -46,6 +46,7 @@ use serde_json::{json, Value};
 
 use crate::services::runtime::runtime_agent::provider_client::{graft_skill_launch_contract, skill_has_launch_extras};
 
+use super::idempotency::ChatTurnOperation;
 use super::sink::{ChatStreamEvent, ChatStreamSink};
 use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationStore, TurnBlock};
 
@@ -195,6 +196,8 @@ pub(crate) struct TurnContext<'a> {
     /// runtime contract's `cli.launch` block. `None` when no `--skill` is
     /// selected or the skill application is empty.
     pub skill: Option<&'a SkillApplicationResult>,
+    /// Durable application-operation claim. Local interactive sends omit it.
+    pub operation: Option<&'a mut ChatTurnOperation>,
 }
 
 /// Run a single conversation turn.
@@ -212,7 +215,7 @@ pub(crate) async fn run_turn(
     producer: &dyn TurnProducer,
     store: &dyn ConversationStore,
     sink: &mut dyn ChatStreamSink,
-    ctx: TurnContext<'_>,
+    mut ctx: TurnContext<'_>,
 ) -> Result<u64> {
     // Cross-process lock held for the WHOLE turn (read meta → append user →
     // run provider → append assistant → save meta). Two simultaneous sends to
@@ -234,31 +237,119 @@ pub(crate) async fn run_turn(
         .load_meta(ctx.conversation_id)?
         .ok_or_else(|| anyhow!("conversation '{}' not found", ctx.conversation_id))?;
 
-    // (1) Persist the user message FIRST — before the provider call — so a
-    // crash mid-turn never loses the user's input.
-    let user_seq = meta.message_count;
-    store.append_message(
-        ctx.conversation_id,
-        &ChatMessage {
-            seq: user_seq,
-            role: ChatRole::User,
-            content: ctx.user_message.to_string(),
-            recorded_at: now_rfc3339(),
-            tool: None,
-            model: None,
-            usage: None,
-            cost_usd: None,
-            blocks: Vec::new(),
-        },
-    )?;
-    meta.message_count += 1;
-    // Persist the bumped count BEFORE the provider call. If the provider
-    // fails or the process crashes mid-turn, the user message and the count
-    // stay consistent, so the next turn assigns a fresh seq instead of
-    // colliding with — and the replay filter dropping — the prior user turn.
+    // Repair a crash between append_message and save_meta before assigning a
+    // new sequence. This is also what makes an idempotency retry safe after
+    // the process stopped at that exact filesystem boundary.
+    let existing = store.load_messages(ctx.conversation_id)?;
+    let canonical_count = existing.iter().map(|message| message.seq.saturating_add(1)).max().unwrap_or(0);
+    if meta.message_count < canonical_count {
+        meta.message_count = canonical_count;
+        meta.updated_at = now_rfc3339();
+        store.save_meta(&meta)?;
+    }
+
+    let mut operation = ctx.operation.take();
+    let operation_id = operation.as_ref().map(|op| op.claim().operation_id.clone());
+    let user_message_id = operation
+        .as_ref()
+        .map(|op| op.user_message_id().to_string())
+        .unwrap_or_else(|| format!("msg-{}", uuid::Uuid::new_v4()));
+
+    // A recovered pending claim may have crashed after appending the user row
+    // but before advancing the SQLite journal. Reconcile by the preallocated
+    // message id rather than appending the caller payload a second time.
+    let recovered_user = existing.iter().find(|message| message.id.as_deref() == Some(&user_message_id));
+    let user_seq = if let Some(message) = recovered_user {
+        if message.role != ChatRole::User || message.content != ctx.user_message {
+            return Err(crate::conflict_error(
+                "idempotency_conflict: recovered user message does not match the effective chat request",
+            ));
+        }
+        message.seq
+    } else {
+        let seq = meta.message_count;
+        store.append_message(
+            ctx.conversation_id,
+            &ChatMessage {
+                id: Some(user_message_id.clone()),
+                seq,
+                role: ChatRole::User,
+                content: ctx.user_message.to_string(),
+                recorded_at: now_rfc3339(),
+                tool: None,
+                model: None,
+                usage: None,
+                cost_usd: None,
+                blocks: Vec::new(),
+            },
+        )?;
+        seq
+    };
+
+    if let Some(op) = operation.as_mut() {
+        op.mark_user_accepted(user_seq)?;
+    }
+    meta.message_count = meta.message_count.max(user_seq.saturating_add(1));
     meta.updated_at = now_rfc3339();
     store.save_meta(&meta)?;
+    sink.emit(&ChatStreamEvent::UserMessageAccepted {
+        status: orchestrator_core::ChatOperationStatus::UserAccepted,
+        conversation_id: ctx.conversation_id.to_string(),
+        seq: user_seq,
+        message_id: user_message_id.clone(),
+        operation_id: operation_id.clone(),
+    })?;
 
+    let assistant_message_id = operation
+        .as_ref()
+        .map(|op| op.assistant_message_id().to_string())
+        .unwrap_or_else(|| format!("msg-{}", uuid::Uuid::new_v4()));
+    let turn = finish_turn(producer, store, sink, &ctx, meta, user_seq, &assistant_message_id).await;
+
+    match turn {
+        Ok((assistant_seq, session_id)) => {
+            if let Some(op) = operation.as_mut() {
+                op.complete(assistant_seq)?;
+            }
+            sink.emit(&ChatStreamEvent::TurnCompleted {
+                status: orchestrator_core::ChatOperationStatus::Completed,
+                conversation_id: ctx.conversation_id.to_string(),
+                seq: assistant_seq,
+                message_id: assistant_message_id,
+                user_seq,
+                user_message_id,
+                operation_id,
+                session_id,
+            })?;
+            Ok(assistant_seq)
+        }
+        Err(error) => {
+            if let Some(op) = operation.as_mut() {
+                let receipt = op.fail("provider_failed", &error.to_string())?;
+                sink.emit(&ChatStreamEvent::TurnFailed {
+                    status: receipt.status,
+                    conversation_id: ctx.conversation_id.to_string(),
+                    user_seq: receipt.user_seq.unwrap_or(user_seq),
+                    user_message_id: receipt.user_message_id,
+                    operation_id: Some(receipt.operation_id),
+                    error_code: receipt.error_code.unwrap_or_else(|| "provider_failed".to_string()),
+                    error_message: receipt.error_message.unwrap_or_else(|| "assistant failed".to_string()),
+                })?;
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn finish_turn(
+    producer: &dyn TurnProducer,
+    store: &dyn ConversationStore,
+    sink: &mut dyn ChatStreamSink,
+    ctx: &TurnContext<'_>,
+    mut meta: super::store::ConversationMeta,
+    user_seq: u64,
+    assistant_message_id: &str,
+) -> Result<(u64, Option<String>)> {
     // (2) Resume-vs-replay decision. A stored session_id is only valid for
     // the tool that issued it — a tool change forces replay. A backend that
     // does not advertise native resume must ALSO replay: handing it a
@@ -302,7 +393,7 @@ pub(crate) async fn run_turn(
         resumed,
     })?;
 
-    let mut output = drive_once(producer, sink, &ctx, &prior_history, resume_session_id.as_deref(), resumed).await?;
+    let mut output = drive_once(producer, sink, ctx, &prior_history, resume_session_id.as_deref(), resumed).await?;
 
     // (5) Stale-session fallback: if a resume attempt reports the session is
     // gone/invalid, retry ONCE with the full-history replay and no
@@ -318,7 +409,7 @@ pub(crate) async fn run_turn(
             model: ctx.model.to_string(),
             resumed,
         })?;
-        output = drive_once(producer, sink, &ctx, &prior_history, None, resumed).await?;
+        output = drive_once(producer, sink, ctx, &prior_history, None, resumed).await?;
         if output.stale_session {
             return Err(anyhow!(
                 "provider reported a stale session even after a full-history replay for conversation '{}'",
@@ -347,6 +438,7 @@ pub(crate) async fn run_turn(
     store.append_message(
         ctx.conversation_id,
         &ChatMessage {
+            id: Some(assistant_message_id.to_string()),
             seq: assistant_seq,
             role: ChatRole::Assistant,
             content: output.text.clone(),
@@ -369,13 +461,7 @@ pub(crate) async fn run_turn(
     meta.updated_at = now_rfc3339();
     store.save_meta(&meta)?;
 
-    sink.emit(&ChatStreamEvent::TurnCompleted {
-        conversation_id: ctx.conversation_id.to_string(),
-        seq: assistant_seq,
-        session_id: output.session_id.clone(),
-    })?;
-
-    Ok(assistant_seq)
+    Ok((assistant_seq, output.session_id))
 }
 
 /// Build the request, start the session, and drain it once. The `resumed`
@@ -857,6 +943,7 @@ mod tests {
             mcp_contract: None,
             isolated_mcp_config_path: None,
             skill: None,
+            operation: None,
         }
     }
 
@@ -1231,6 +1318,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idempotent_turn_persists_canonical_receipt_and_message_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-1", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+
+        assert_eq!(run_turn(&producer, &store, &mut sink, context).await.unwrap(), 1);
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message.id.is_some()));
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("exact retry should replay");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::Completed);
+        assert_eq!(receipt.user_seq, Some(0));
+        assert_eq!(receipt.assistant_seq, Some(1));
+        assert_eq!(messages[0].id.as_deref(), Some(receipt.user_message_id.as_str()));
+        assert_eq!(messages[1].id.as_deref(), Some(receipt.assistant_message_id.as_str()));
+        assert!(sink.events.iter().any(|event| matches!(event, ChatStreamEvent::UserMessageAccepted { seq: 0, .. })));
+        assert!(sink.events.iter().any(|event| matches!(
+            event,
+            ChatStreamEvent::TurnCompleted {
+                status: orchestrator_core::ChatOperationStatus::Completed,
+                user_seq: 0,
+                seq: 1,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn idempotent_provider_failure_is_terminal_partial_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let producer = MockProducer::new(vec![(
+            vec![SessionEvent::Error { message: "provider exploded".into(), recoverable: false }],
+            None,
+        )]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+
+        assert!(run_turn(&producer, &store, &mut sink, context).await.is_err());
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 1, "the accepted user row remains canonical");
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("failed operation should replay its terminal receipt");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantFailed);
+        assert_eq!(receipt.user_seq, Some(0));
+        assert_eq!(receipt.assistant_seq, None);
+        assert!(sink.events.iter().any(|event| matches!(
+            event,
+            ChatStreamEvent::TurnFailed {
+                status: orchestrator_core::ChatOperationStatus::AssistantFailed,
+                user_seq: 0,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
     async fn stale_session_error_on_fresh_turn_fails_instead_of_persisting_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store_for(&tmp);
@@ -1288,6 +1457,7 @@ mod tests {
                                 mcp_contract: None,
                                 isolated_mcp_config_path: None,
                                 skill: None,
+                                operation: None,
                             },
                         ))
                         .expect("concurrent send turn")

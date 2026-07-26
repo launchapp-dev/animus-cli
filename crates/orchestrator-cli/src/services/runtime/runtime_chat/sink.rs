@@ -36,6 +36,16 @@ pub(crate) enum ChatStreamEvent {
         /// UI / test can confirm the XOR continuity decision.
         resumed: bool,
     },
+    /// Durable boundary: the canonical user message is stored. A provider
+    /// failure after this frame must not be reported as an unaccepted send.
+    UserMessageAccepted {
+        status: orchestrator_core::ChatOperationStatus,
+        conversation_id: String,
+        seq: u64,
+        message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
+    },
     /// Incremental assistant text.
     TextDelta { text: String },
     /// Visible reasoning trace.
@@ -65,11 +75,29 @@ pub(crate) enum ChatStreamEvent {
     /// Terminal frame: the turn finished and the assistant message was
     /// persisted. Carries the captured continuity pointer for the next turn.
     TurnCompleted {
+        status: orchestrator_core::ChatOperationStatus,
         conversation_id: String,
         seq: u64,
+        message_id: String,
+        user_seq: u64,
+        user_message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
         /// `session_id` captured from `SessionRun` for the next turn, if the
         /// provider returned one.
         session_id: Option<String>,
+    },
+    /// Terminal partial-success frame. The user message is canonical but the
+    /// assistant did not complete; exact retries replay this bounded receipt.
+    TurnFailed {
+        status: orchestrator_core::ChatOperationStatus,
+        conversation_id: String,
+        user_seq: u64,
+        user_message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        operation_id: Option<String>,
+        error_code: String,
+        error_message: String,
     },
 }
 
@@ -111,6 +139,9 @@ impl ChatStreamSink for TextStdoutSink {
             }
             ChatStreamEvent::TurnCompleted { .. } => {
                 println!();
+            }
+            ChatStreamEvent::TurnFailed { error_message, .. } => {
+                eprintln!("[assistant failed: {error_message}]");
             }
             _ => {}
         }
@@ -169,5 +200,25 @@ mod tests {
         let value: serde_json::Value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["type"], "turn_started");
         assert_eq!(value["resumed"], true);
+    }
+
+    #[test]
+    fn terminal_partial_success_frame_has_canonical_bounded_fields() {
+        let event = ChatStreamEvent::TurnFailed {
+            status: orchestrator_core::ChatOperationStatus::AssistantFailed,
+            conversation_id: "c1".into(),
+            user_seq: 4,
+            user_message_id: "msg-user".into(),
+            operation_id: Some("op-1".into()),
+            error_code: "provider_failed".into(),
+            error_message: "boom".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["type"], "turn_failed");
+        assert_eq!(value["status"], "assistant_failed");
+        assert_eq!(value["conversation_id"], "c1");
+        assert_eq!(value["user_seq"], 4);
+        assert_eq!(value["user_message_id"], "msg-user");
+        assert_eq!(value["operation_id"], "op-1");
     }
 }

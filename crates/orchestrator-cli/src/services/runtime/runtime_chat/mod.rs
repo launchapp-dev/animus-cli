@@ -17,17 +17,19 @@ use crate::{
 use serde::Serialize;
 
 pub(crate) mod client;
+pub(crate) mod idempotency;
 pub(crate) mod sink;
 pub(crate) mod store;
 pub(crate) mod turn;
 
 use client::ConversationStoreClient;
-use sink::{ChatStreamSink, JsonlStdoutSink, NullSink, TextStdoutSink};
+use sink::{ChatStreamEvent, ChatStreamSink, JsonlStdoutSink, NullSink, TextStdoutSink};
 use store::{ChatMessage, ChatRole, ConversationMeta, ConversationStore, TurnBlock, Visibility};
 use turn::{run_turn, ResolverTurnProducer, TurnContext};
 
 pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
+        ChatCommand::Capabilities => handle_chat_capabilities(json),
         ChatCommand::New(args) => handle_chat_new(args, project_root, json),
         ChatCommand::Send(args) => handle_chat_send(args, project_root, json).await,
         ChatCommand::Get(args) => handle_chat_get(args, project_root, json),
@@ -37,6 +39,33 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
         ChatCommand::Export(args) => handle_chat_export(args, project_root, json),
         ChatCommand::Search(args) => handle_chat_search(args, project_root, json),
     }
+}
+
+fn handle_chat_capabilities(json: bool) -> Result<()> {
+    print_value(
+        serde_json::json!({
+            "schema": "animus.chat.capabilities.v1",
+            "send": {
+                "durable_idempotency": {
+                    "supported": true,
+                    "flag": "--idempotency-key",
+                    "max_key_bytes": orchestrator_core::MAX_CHAT_IDEMPOTENCY_KEY_BYTES,
+                    "requires": ["--conversation", "--actor-json", "--as-user"],
+                    "scope": ["repository", "workspace", "actor", "conversation"],
+                },
+                "partial_success": {
+                    "supported": true,
+                    "jsonl_events": ["user_message_accepted", "turn_completed", "turn_failed"],
+                    "terminal_statuses": ["completed", "assistant_failed", "assistant_interrupted"],
+                    "canonical_fields": [
+                        "operation_id", "conversation_id", "user_message_id", "user_seq",
+                        "message_id", "seq"
+                    ],
+                }
+            }
+        }),
+        json,
+    )
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -313,6 +342,22 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // Omitted => `None` => global scope.
     let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
 
+    if args.idempotency_key.is_some() {
+        let asserted_user = actor
+            .as_ref()
+            .map(|value| value.user_id.as_str())
+            .ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --actor-json"))?;
+        let acting_user = args
+            .as_user
+            .as_deref()
+            .ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --as-user"))?;
+        if asserted_user != acting_user {
+            return Err(crate::invalid_input_error(
+                "idempotent chat send requires --as-user to equal actor_json.user_id",
+            ));
+        }
+    }
+
     let store = ConversationStoreClient::for_project_as_user(&project_root_path, args.as_user.as_deref())?;
 
     // Resolve (or create) the target conversation.
@@ -331,11 +376,6 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             (store.create_with_ownership(None, args.as_user.clone(), visibility_from_arg(args.visibility))?.id, true)
         }
     };
-
-    // Apply an optional title — names a freshly-created conversation or renames
-    // the target one. Done before the turn so a crash mid-stream still leaves
-    // the conversation named.
-    apply_conversation_title(&store, &conversation_id, args.title.as_deref())?;
 
     // Surface an auto-created conversation id up front so the caller can pass
     // `--conversation <id>` on the next turn (codex round-4 P2). In `--json`
@@ -479,6 +519,77 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         Box::new(NullSink)
     };
 
+    // Application callers reserve their exact effective operation before the
+    // user transcript write. The key scope is repository + workspace + actor
+    // + conversation, and the hash includes every launch-affecting input that
+    // was resolved above.
+    let mut turn_operation = if let Some(caller_key) = args.idempotency_key.clone() {
+        let actor =
+            actor.as_ref().ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --actor-json"))?;
+        let request_hash = idempotency::effective_request_hash(serde_json::json!({
+            "version": 1,
+            "conversation_id": conversation_id,
+            "message": args.message,
+            "tool": args.tool,
+            "model": model,
+            "cwd": cwd,
+            "reasoning_effort": args.reasoning_effort.map(|value| value.as_str()),
+            "permission_mode": permission_mode,
+            "approvals": approvals,
+            "title": args.title,
+            "agent": args.agent,
+            "skill": args.skill,
+            "mcp_servers": args.mcp_server,
+            "no_animus_mcp": args.no_animus_mcp,
+            "as_user": args.as_user,
+            "visibility": match args.visibility {
+                ChatVisibilityArg::Private => "private",
+                ChatVisibilityArg::Shared => "shared",
+            },
+            "runtime_contract": mcp_contract,
+            "skill_application": skill_application,
+        }))?;
+        let (operation_store, begin) =
+            idempotency::begin(&project_root_path, actor, &conversation_id, caller_key, request_hash)?;
+        match begin {
+            orchestrator_core::ChatOperationBegin::Conflict => {
+                return Err(crate::conflict_error(
+                    "idempotency_conflict: key was already used for a different effective chat send",
+                ));
+            }
+            orchestrator_core::ChatOperationBegin::InProgress => {
+                return Err(crate::conflict_error(
+                    "idempotency_in_progress: a chat send with this key is still pending",
+                ));
+            }
+            orchestrator_core::ChatOperationBegin::Replay(receipt) => {
+                emit_operation_receipt(sink.as_mut(), &receipt)?;
+                return replay_result(&receipt);
+            }
+            orchestrator_core::ChatOperationBegin::Acquired(claim)
+                if claim.recovered && claim.status == orchestrator_core::ChatOperationStatus::UserAccepted =>
+            {
+                let assistant_seq = store
+                    .load_messages(&conversation_id)?
+                    .into_iter()
+                    .find(|message| message.id.as_deref() == Some(&claim.assistant_message_id))
+                    .map(|message| message.seq);
+                let receipt = idempotency::reconcile_recovered_accepted(&operation_store, &claim, assistant_seq)?;
+                emit_operation_receipt(sink.as_mut(), &receipt)?;
+                return replay_result(&receipt);
+            }
+            orchestrator_core::ChatOperationBegin::Acquired(claim) => {
+                Some(idempotency::ChatTurnOperation::new(operation_store, claim))
+            }
+        }
+    } else {
+        None
+    };
+
+    // The optional title is part of the operation hash and only mutates after
+    // admission, so an exact replay cannot accidentally apply a new rename.
+    apply_conversation_title(&store, &conversation_id, args.title.as_deref())?;
+
     let ctx = TurnContext {
         conversation_id: &conversation_id,
         tool: &args.tool,
@@ -492,6 +603,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         mcp_contract: mcp_contract.as_ref(),
         isolated_mcp_config_path: isolated_mcp_config_path.as_deref(),
         skill: skill_application,
+        operation: turn_operation.as_mut(),
     };
 
     let assistant_seq = run_turn(&producer, &store, sink.as_mut(), ctx).await?;
@@ -505,6 +617,60 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         }
     }
     Ok(())
+}
+
+fn emit_operation_receipt(
+    sink: &mut dyn ChatStreamSink,
+    receipt: &orchestrator_core::ChatOperationReceipt,
+) -> Result<()> {
+    let user_seq =
+        receipt.user_seq.ok_or_else(|| anyhow!("canonical chat operation receipt is missing its user sequence"))?;
+    sink.emit(&ChatStreamEvent::UserMessageAccepted {
+        status: orchestrator_core::ChatOperationStatus::UserAccepted,
+        conversation_id: receipt.conversation_id.clone(),
+        seq: user_seq,
+        message_id: receipt.user_message_id.clone(),
+        operation_id: Some(receipt.operation_id.clone()),
+    })?;
+    match receipt.status {
+        orchestrator_core::ChatOperationStatus::Completed => sink.emit(&ChatStreamEvent::TurnCompleted {
+            status: receipt.status,
+            conversation_id: receipt.conversation_id.clone(),
+            seq: receipt
+                .assistant_seq
+                .ok_or_else(|| anyhow!("completed chat operation receipt is missing its assistant sequence"))?,
+            message_id: receipt.assistant_message_id.clone(),
+            user_seq,
+            user_message_id: receipt.user_message_id.clone(),
+            operation_id: Some(receipt.operation_id.clone()),
+            session_id: None,
+        }),
+        orchestrator_core::ChatOperationStatus::AssistantFailed
+        | orchestrator_core::ChatOperationStatus::AssistantInterrupted => sink.emit(&ChatStreamEvent::TurnFailed {
+            status: receipt.status,
+            conversation_id: receipt.conversation_id.clone(),
+            user_seq,
+            user_message_id: receipt.user_message_id.clone(),
+            operation_id: Some(receipt.operation_id.clone()),
+            error_code: receipt.error_code.clone().unwrap_or_else(|| "assistant_failed".to_string()),
+            error_message: receipt.error_message.clone().unwrap_or_else(|| "assistant failed".to_string()),
+        }),
+        status => Err(anyhow!("cannot replay non-terminal chat operation status {status:?}")),
+    }
+}
+
+fn replay_result(receipt: &orchestrator_core::ChatOperationReceipt) -> Result<()> {
+    match receipt.status {
+        orchestrator_core::ChatOperationStatus::Completed => Ok(()),
+        orchestrator_core::ChatOperationStatus::AssistantFailed
+        | orchestrator_core::ChatOperationStatus::AssistantInterrupted => Err(anyhow!(
+            "{}: user message accepted at seq {}; {}",
+            receipt.error_code.as_deref().unwrap_or("assistant_failed"),
+            receipt.user_seq.unwrap_or_default(),
+            receipt.error_message.as_deref().unwrap_or("assistant failed")
+        )),
+        status => Err(anyhow!("cannot replay non-terminal chat operation status {status:?}")),
+    }
 }
 
 fn handle_chat_get(args: ChatGetArgs, project_root: &str, json: bool) -> Result<()> {
@@ -576,6 +742,7 @@ mod export_tests {
 
     fn msg(role: ChatRole, content: &str, blocks: Vec<TurnBlock>) -> ChatMessage {
         ChatMessage {
+            id: None,
             seq: 0,
             role,
             content: content.into(),

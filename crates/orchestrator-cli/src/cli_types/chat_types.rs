@@ -2,6 +2,20 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use super::{ReasoningEffortArg, ACTOR_JSON_HELP};
 
+fn parse_chat_idempotency_key(raw: &str) -> Result<String, String> {
+    let bytes = raw.as_bytes();
+    if bytes.is_empty() || bytes.len() > orchestrator_core::MAX_CHAT_IDEMPOTENCY_KEY_BYTES {
+        return Err(format!(
+            "idempotency key must contain 1..={} bytes",
+            orchestrator_core::MAX_CHAT_IDEMPOTENCY_KEY_BYTES
+        ));
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')) {
+        return Err("idempotency key may contain only ASCII letters, digits, '.', '_', ':', and '-'".to_string());
+    }
+    Ok(raw.to_string())
+}
+
 /// `animus chat` — hold multi-turn conversations with a provider tool.
 ///
 /// Continuity is owned by the wrapped CLI tool's native session; Animus
@@ -13,6 +27,8 @@ use super::{ReasoningEffortArg, ACTOR_JSON_HELP};
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub(crate) enum ChatCommand {
+    /// Print the machine-readable chat application contract.
+    Capabilities,
     /// Start a new (empty) conversation and print its id.
     New(ChatNewArgs),
     /// Send a user message to a conversation and stream the reply.
@@ -153,6 +169,16 @@ pub(crate) struct ChatSendArgs {
     /// per-user subject / queue / integration tools are scoped accordingly.
     #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
     pub(crate) actor_json: Option<String>,
+    /// Durable caller operation key. Exact retries replay the canonical turn
+    /// receipt; conflicting payloads fail closed. Application callers must
+    /// also provide an existing conversation and transport-asserted actor.
+    #[arg(
+        long,
+        value_name = "KEY",
+        value_parser = parse_chat_idempotency_key,
+        requires_all = ["conversation", "actor_json", "as_user"]
+    )]
+    pub(crate) idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Args)]

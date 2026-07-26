@@ -50,6 +50,15 @@ animus chat send "your message" \
   [--conversation <id>] [--tool claude] [--model <model>] [--cwd <path>] \
   [--stream] [--title <title>] [--as-user <user-id>] [--visibility private|shared]
 
+# Probe the application contract without starting a provider
+animus --json chat capabilities
+
+# Durable application send (all three scoped flags are required together)
+animus --json chat send "your message" --conversation <id> \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-a","claims":[]}' \
+  --as-user alice \
+  --idempotency-key <key>
+
 # Read a transcript, optionally returning a bounded slice
 animus chat get <id> [--as-user <user-id>] [--limit <n>] [--offset <n>]
 
@@ -79,9 +88,33 @@ supplied.
 
 `animus chat send` selects its sink from the flags:
 
-- `--json` → **JsonlStdoutSink**: one self-describing JSON object per line (`turn_started`, `text_delta`, `thinking`, `tool_call`, `tool_result`, `metadata`, `warning`, `turn_completed`). The `turn_started` frame carries `resumed: true|false` so a downstream app can confirm the XOR continuity decision. The `turn_completed` frame carries the captured `session_id` for the next turn.
+- `--json` → **JsonlStdoutSink**: one self-describing JSON object per line (`user_message_accepted`, `turn_started`, `text_delta`, `thinking`, `tool_call`, `tool_result`, `metadata`, `warning`, then exactly one `turn_completed` or `turn_failed`). The acceptance frame carries the canonical user `message_id` + `seq`. Terminal frames carry the operation id and both canonical user and assistant locators. `turn_failed` means the user message is durable even though the assistant did not complete; callers must not present it as an unaccepted send.
 - `--stream` (no `--json`) → plain text deltas to stdout for an interactive session.
 - neither → the final assistant turn is printed once the turn completes.
+
+### Durable application idempotency and partial success
+
+`chat send --idempotency-key` is intentionally restricted to an explicit
+`--conversation`, transport-asserted `--actor-json`, and matching `--as-user`.
+The actor must include both a non-empty `user_id` and `tenant_id`, and its
+`user_id` must equal `--as-user`. The durable key is scoped by repository,
+workspace, actor, and conversation. Reuse with an identical effective request
+replays its canonical receipt, while a changed request returns
+`idempotency_conflict` and a live lease returns `idempotency_in_progress`.
+
+The SQLite/WAL reservation is created before the user transcript row. Once the
+user row is accepted, a retry never blindly starts the provider again: an
+expired process is reconciled to the stored assistant row when present, or to
+the terminal `assistant_interrupted` state otherwise. This avoids duplicate
+agent/tool side effects. Provider errors persist `assistant_failed`; exact
+retries replay the same bounded failure receipt. Use `animus --json chat
+capabilities` as the stable Portal capability probe instead of scraping help.
+
+The in-tree file store persists stable message ids. The current external
+`conversation_store` protocol still locates messages by canonical
+`{conversation_id, seq}` and does not carry the additive message-id field; a
+future protocol revision can preserve that field without changing this
+operation contract.
 
 ## Cost
 
