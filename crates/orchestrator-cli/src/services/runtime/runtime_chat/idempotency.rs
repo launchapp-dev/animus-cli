@@ -16,6 +16,11 @@ pub(crate) struct ChatTurnOperation {
     heartbeat: Option<LeaseHeartbeat>,
 }
 
+pub(crate) enum ExecutionHashBinding {
+    Bound,
+    Drifted,
+}
+
 impl ChatTurnOperation {
     pub(crate) fn new(store: ChatOperationStore, claim: Box<ChatOperationClaim>) -> Self {
         Self { store, claim, heartbeat: None }
@@ -31,6 +36,68 @@ impl ChatTurnOperation {
 
     pub(crate) fn assistant_message_id(&self) -> &str {
         &self.claim.assistant_message_id
+    }
+
+    pub(crate) fn bind_execution_hash(&mut self, execution_hash: &str) -> Result<ExecutionHashBinding> {
+        if self.claim.execution_hash.as_deref().is_some_and(|stored| stored != execution_hash) {
+            return Ok(ExecutionHashBinding::Drifted);
+        }
+        if !self.store.bind_execution_hash(&mut self.claim, execution_hash)? {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: chat operation authority moved before execution was bound",
+            ));
+        }
+        Ok(ExecutionHashBinding::Bound)
+    }
+
+    pub(crate) fn rebind_recovered_execution_hash(&mut self, execution_hash: &str) -> Result<()> {
+        if !self.store.rebind_recovered_execution_hash(&mut self.claim, execution_hash)? {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: recovered chat operation could not rebind execution authority",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn renew_authority(&self) -> Result<bool> {
+        self.store.renew(&self.claim)
+    }
+
+    pub(crate) fn receipt(&self) -> Result<ChatOperationReceipt> {
+        self.store.receipt(&self.claim)
+    }
+
+    pub(crate) fn release_pending(&self) -> Result<()> {
+        if !self.store.release_pending(&self.claim)? {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: pending chat operation authority moved before release",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn interrupt_recovered_user(&mut self, user_seq: u64, message: &str) -> Result<ChatOperationReceipt> {
+        if self.claim.status == orchestrator_core::ChatOperationStatus::Pending {
+            if !self.store.mark_user_accepted(&mut self.claim, user_seq)? {
+                return Err(crate::conflict_error(
+                    "idempotency_in_progress: recovered chat operation lost authority before user reconciliation",
+                ));
+            }
+        } else if self.claim.user_seq != Some(user_seq) {
+            return Err(crate::conflict_error(
+                "idempotency_conflict: recovered chat operation has a different canonical user sequence",
+            ));
+        }
+        if !self.store.interrupt(&self.claim, message)? {
+            let receipt = self.store.receipt(&self.claim)?;
+            if receipt.status.is_terminal() {
+                return Ok(receipt);
+            }
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: recovered chat operation lost authority before interruption",
+            ));
+        }
+        self.store.receipt(&self.claim)
     }
 
     pub(crate) fn mark_user_accepted(&mut self, seq: u64) -> Result<()> {
@@ -74,10 +141,14 @@ impl ChatTurnOperation {
         if let Some(heartbeat) = self.heartbeat.take() {
             let _ = heartbeat.finish();
         }
-        if !self.store.fail(&self.claim, code, error)? {
-            return self.store.receipt(&self.claim);
+        let changed = self.store.fail(&self.claim, code, error)?;
+        let receipt = self.store.receipt(&self.claim)?;
+        if !changed && !receipt.status.is_terminal() {
+            return Err(crate::conflict_error(
+                "idempotency_in_progress: chat operation authority moved before failure was recorded",
+            ));
         }
-        self.store.receipt(&self.claim)
+        Ok(receipt)
     }
 }
 

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS chat_operations (
     conversation_id    TEXT NOT NULL,
     caller_key         TEXT NOT NULL,
     request_hash       TEXT NOT NULL,
+    execution_hash     TEXT,
     operation_id       TEXT NOT NULL,
     user_message_id    TEXT NOT NULL,
     assistant_message_id TEXT NOT NULL,
@@ -130,6 +131,9 @@ pub struct ChatOperationClaim {
     pub assistant_message_id: String,
     pub status: ChatOperationStatus,
     pub user_seq: Option<u64>,
+    /// Hash of the resolved provider/profile execution snapshot. Bound after
+    /// caller admission and reused by recovered pending operations.
+    pub execution_hash: Option<String>,
     lease_token: String,
     pub recovered: bool,
 }
@@ -316,6 +320,94 @@ impl ChatOperationStore {
         Ok(updated == 1)
     }
 
+    pub fn bind_execution_hash(&self, claim: &mut ChatOperationClaim, execution_hash: &str) -> Result<bool> {
+        validate_required("execution hash", execution_hash, 128)?;
+        let conn = self.open()?;
+        let updated = conn.execute(
+            "UPDATE chat_operations SET execution_hash = ?7, updated_at = ?8
+             WHERE project_scope = ?1 AND workspace_id = ?2 AND actor_id = ?3
+               AND conversation_id = ?4 AND caller_key = ?5 AND operation_id = ?6
+               AND state = 'pending' AND lease_token = ?9
+               AND (execution_hash IS NULL OR execution_hash = ?7)",
+            params![
+                claim.request.project_scope,
+                claim.request.workspace_id,
+                claim.request.actor_id,
+                claim.request.conversation_id,
+                claim.request.caller_key,
+                claim.operation_id,
+                execution_hash,
+                Utc::now().timestamp(),
+                claim.lease_token,
+            ],
+        )?;
+        if updated == 1 {
+            claim.execution_hash = Some(execution_hash.to_string());
+        }
+        Ok(updated == 1)
+    }
+
+    /// Rebind an expired, recovered pending claim after the caller has proved
+    /// under the conversation lock that no canonical user row exists. Once a
+    /// user row exists the operation must be reconciled instead of changing
+    /// its execution snapshot.
+    pub fn rebind_recovered_execution_hash(
+        &self,
+        claim: &mut ChatOperationClaim,
+        execution_hash: &str,
+    ) -> Result<bool> {
+        validate_required("execution hash", execution_hash, 128)?;
+        if !claim.recovered {
+            return Ok(false);
+        }
+        let conn = self.open()?;
+        let updated = conn.execute(
+            "UPDATE chat_operations SET execution_hash = ?7, updated_at = ?8
+             WHERE project_scope = ?1 AND workspace_id = ?2 AND actor_id = ?3
+               AND conversation_id = ?4 AND caller_key = ?5 AND operation_id = ?6
+               AND state = 'pending' AND lease_token = ?9 AND user_seq IS NULL
+               AND execution_hash IS NOT NULL AND execution_hash <> ?7",
+            params![
+                claim.request.project_scope,
+                claim.request.workspace_id,
+                claim.request.actor_id,
+                claim.request.conversation_id,
+                claim.request.caller_key,
+                claim.operation_id,
+                execution_hash,
+                Utc::now().timestamp(),
+                claim.lease_token,
+            ],
+        )?;
+        if updated == 1 {
+            claim.execution_hash = Some(execution_hash.to_string());
+        }
+        Ok(updated == 1)
+    }
+
+    /// Release a lease-owned pending admission only when no user acceptance
+    /// was journaled. The caller must hold the conversation lock and prove no
+    /// canonical user row exists before invoking this method.
+    pub fn release_pending(&self, claim: &ChatOperationClaim) -> Result<bool> {
+        let conn = self.open()?;
+        let deleted = conn.execute(
+            "DELETE FROM chat_operations
+             WHERE project_scope = ?1 AND workspace_id = ?2 AND actor_id = ?3
+               AND conversation_id = ?4 AND caller_key = ?5 AND operation_id = ?6
+               AND state = 'pending' AND user_seq IS NULL AND lease_token = ?7",
+            params![
+                claim.request.project_scope,
+                claim.request.workspace_id,
+                claim.request.actor_id,
+                claim.request.conversation_id,
+                claim.request.caller_key,
+                claim.operation_id,
+                claim.lease_token,
+            ],
+        )?;
+        Ok(deleted == 1)
+    }
+
     pub fn mark_user_accepted(&self, claim: &mut ChatOperationClaim, user_seq: u64) -> Result<bool> {
         let conn = self.open()?;
         let now = Utc::now().timestamp();
@@ -412,6 +504,15 @@ impl ChatOperationStore {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         execute_batch_with_busy_retry(&conn, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         execute_batch_with_busy_retry(&conn, SCHEMA)?;
+        let has_execution_hash = {
+            let mut statement = conn.prepare("PRAGMA table_info(chat_operations)")?;
+            let columns =
+                statement.query_map([], |row| row.get::<_, String>(1))?.collect::<std::result::Result<Vec<_>, _>>()?;
+            columns.iter().any(|name| name == "execution_hash")
+        };
+        if !has_execution_hash {
+            conn.execute("ALTER TABLE chat_operations ADD COLUMN execution_hash TEXT", [])?;
+        }
         Ok(conn)
     }
 }
@@ -429,6 +530,7 @@ fn bound_error(value: &str) -> String {
 
 struct StoredOperation {
     request_hash: String,
+    execution_hash: Option<String>,
     operation_id: String,
     user_message_id: String,
     assistant_message_id: String,
@@ -450,6 +552,7 @@ impl StoredOperation {
             assistant_message_id: self.assistant_message_id.clone(),
             status: self.status,
             user_seq: self.user_seq.map(u64::try_from).transpose().context("negative user sequence in chat journal")?,
+            execution_hash: self.execution_hash.clone(),
             lease_token,
             recovered,
         })
@@ -476,7 +579,7 @@ impl StoredOperation {
 
 fn load_row(conn: &Connection, request: &ChatOperationRequest) -> Result<Option<StoredOperation>> {
     conn.query_row(
-        "SELECT request_hash, operation_id, user_message_id, assistant_message_id, state,
+        "SELECT request_hash, execution_hash, operation_id, user_message_id, assistant_message_id, state,
                 user_seq, assistant_seq, error_code, error_message, lease_token, lease_expires_at
          FROM chat_operations
          WHERE project_scope = ?1 AND workspace_id = ?2 AND actor_id = ?3
@@ -489,19 +592,20 @@ fn load_row(conn: &Connection, request: &ChatOperationRequest) -> Result<Option<
             request.caller_key,
         ],
         |row| {
-            let state: String = row.get(4)?;
+            let state: String = row.get(5)?;
             Ok((
                 row.get(0)?,
                 row.get(1)?,
                 row.get(2)?,
                 row.get(3)?,
+                row.get(4)?,
                 state,
-                row.get(5)?,
                 row.get(6)?,
                 row.get(7)?,
                 row.get(8)?,
                 row.get(9)?,
                 row.get(10)?,
+                row.get(11)?,
             ))
         },
     )
@@ -509,16 +613,17 @@ fn load_row(conn: &Connection, request: &ChatOperationRequest) -> Result<Option<
     .map(|tuple| {
         Ok(StoredOperation {
             request_hash: tuple.0,
-            operation_id: tuple.1,
-            user_message_id: tuple.2,
-            assistant_message_id: tuple.3,
-            status: ChatOperationStatus::parse(&tuple.4)?,
-            user_seq: tuple.5,
-            assistant_seq: tuple.6,
-            error_code: tuple.7,
-            error_message: tuple.8,
-            lease_token: tuple.9,
-            lease_expires_at: tuple.10,
+            execution_hash: tuple.1,
+            operation_id: tuple.2,
+            user_message_id: tuple.3,
+            assistant_message_id: tuple.4,
+            status: ChatOperationStatus::parse(&tuple.5)?,
+            user_seq: tuple.6,
+            assistant_seq: tuple.7,
+            error_code: tuple.8,
+            error_message: tuple.9,
+            lease_token: tuple.10,
+            lease_expires_at: tuple.11,
         })
     })
     .transpose()
@@ -630,6 +735,74 @@ mod tests {
     }
 
     #[test]
+    fn execution_hash_is_bound_once_and_survives_pending_recovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ops.db");
+        let first = ChatOperationStore::with_path_and_lease(path.clone(), "repo", 1);
+        let req = request(&first, "alice", "key", "caller-hash");
+        let ChatOperationBegin::Acquired(mut original) = first.begin_at(req.clone(), 10).unwrap() else {
+            panic!("initial claim");
+        };
+
+        assert!(first.bind_execution_hash(&mut original, "execution-hash").unwrap());
+        assert_eq!(original.execution_hash.as_deref(), Some("execution-hash"));
+        assert!(first.bind_execution_hash(&mut original, "execution-hash").unwrap());
+        assert!(!first.bind_execution_hash(&mut original, "different-execution").unwrap());
+        drop(first);
+
+        let restarted = ChatOperationStore::with_path_and_lease(path, "repo", 1);
+        let ChatOperationBegin::Acquired(mut recovered) = restarted.begin_at(req, 12).unwrap() else {
+            panic!("expired claim should recover");
+        };
+        assert!(recovered.recovered);
+        assert_eq!(recovered.execution_hash.as_deref(), Some("execution-hash"));
+        assert!(restarted.rebind_recovered_execution_hash(&mut recovered, "replacement-execution").unwrap());
+        assert_eq!(recovered.execution_hash.as_deref(), Some("replacement-execution"));
+    }
+
+    #[test]
+    fn legacy_database_is_migrated_with_execution_hash_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ops.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE chat_operations (
+                project_scope TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                caller_key TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                operation_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL,
+                assistant_message_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                user_seq INTEGER,
+                assistant_seq INTEGER,
+                error_code TEXT,
+                error_message TEXT,
+                lease_token TEXT,
+                lease_expires_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (project_scope, workspace_id, actor_id, conversation_id, caller_key),
+                UNIQUE (project_scope, operation_id)
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = ChatOperationStore::with_path_and_lease(path, "repo", 60);
+        let ChatOperationBegin::Acquired(mut claim) =
+            store.begin(request(&store, "alice", "key", "caller-hash")).unwrap()
+        else {
+            panic!("migrated store should admit a claim");
+        };
+        assert!(store.bind_execution_hash(&mut claim, "execution-hash").unwrap());
+        assert_eq!(claim.execution_hash.as_deref(), Some("execution-hash"));
+    }
+
+    #[test]
     fn expired_user_accepted_claim_reconciles_without_new_identity() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("ops.db");
@@ -673,6 +846,25 @@ mod tests {
             store.begin(store.request("tenant-a", "alice", "conv-b", "same", "hash-c")).unwrap(),
             ChatOperationBegin::Acquired(_)
         ));
+    }
+
+    #[test]
+    fn lease_owner_can_release_only_a_not_yet_accepted_operation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ChatOperationStore::with_path_and_lease(tmp.path().join("ops.db"), "repo", 60);
+        let first_request = request(&store, "alice", "first", "hash");
+        let ChatOperationBegin::Acquired(first) = store.begin(first_request.clone()).unwrap() else {
+            panic!("first claim");
+        };
+        assert!(store.release_pending(&first).unwrap());
+        assert!(matches!(store.begin(first_request).unwrap(), ChatOperationBegin::Acquired(_)));
+
+        let second_request = request(&store, "alice", "second", "hash");
+        let ChatOperationBegin::Acquired(mut second) = store.begin(second_request).unwrap() else {
+            panic!("second claim");
+        };
+        assert!(store.mark_user_accepted(&mut second, 0).unwrap());
+        assert!(!store.release_pending(&second).unwrap(), "accepted operations are never releasable");
     }
 
     #[test]

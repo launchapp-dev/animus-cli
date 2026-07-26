@@ -142,6 +142,18 @@ pub(crate) enum Visibility {
 pub(crate) struct ConversationMeta {
     /// Stable conversation id (also the on-disk directory name).
     pub id: String,
+    /// Canonical configured agent profile bound to this conversation. Missing
+    /// on legacy and intentionally unbound conversations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// Monotonic optimistic-concurrency token. Legacy metas start at zero.
+    #[serde(default)]
+    pub revision: u64,
+    /// Durable proof that a keyed application operation consumed the current
+    /// revision reservation. It is cleared when that operation reaches a
+    /// terminal outcome. Legacy and interactive conversations omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_operation_id: Option<String>,
     /// Wrapped tool that currently owns the native session
     /// (`session_id`). `None` until the first turn completes.
     #[serde(default)]
@@ -183,6 +195,9 @@ impl ConversationMeta {
         let now = now_rfc3339();
         Self {
             id,
+            agent_id: None,
+            revision: 0,
+            active_operation_id: None,
             tool: None,
             model: None,
             session_id: None,
@@ -197,9 +212,12 @@ impl ConversationMeta {
 }
 
 /// One-line summary used by `animus chat list`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ConversationSummary {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    pub revision: u64,
     pub title: Option<String>,
     pub tool: Option<String>,
     pub model: Option<String>,
@@ -217,6 +235,8 @@ impl From<&ConversationMeta> for ConversationSummary {
     fn from(meta: &ConversationMeta) -> Self {
         Self {
             id: meta.id.clone(),
+            agent_id: meta.agent_id.clone(),
+            revision: meta.revision,
             title: meta.title.clone(),
             tool: meta.tool.clone(),
             model: meta.model.clone(),
@@ -265,6 +285,23 @@ pub(crate) trait ConversationStore: Send + Sync {
     fn load_meta(&self, id: &str) -> Result<Option<ConversationMeta>>;
     /// Persist updated meta (continuity pointer, counts, timestamps).
     fn save_meta(&self, meta: &ConversationMeta) -> Result<()>;
+    /// Persist meta only if the current revision still matches `expected`.
+    /// Plugin backends map this to the wire CAS field; the file backend checks
+    /// while the caller holds its conversation lock.
+    fn save_meta_if_revision(&self, meta: &ConversationMeta, expected: Option<u64>) -> Result<()> {
+        if let Some(expected) = expected {
+            let current = self.load_meta(&meta.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", meta.id))?;
+            if current.revision != expected {
+                return Err(anyhow!(
+                    "conversation '{}' revision conflict: expected {}, found {}",
+                    meta.id,
+                    expected,
+                    current.revision
+                ));
+            }
+        }
+        self.save_meta(meta)
+    }
     /// Append a turn to the conversation's event log.
     fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()>;
     /// Read the full ordered turn history. Used for `chat get` and for the
@@ -641,6 +678,30 @@ mod tests {
         let legacy = r#"{"seq":1,"role":"assistant","content":"hi","recorded_at":"2026-06-08T00:00:00Z"}"#;
         let msg: ChatMessage = serde_json::from_str(legacy).expect("legacy line must still parse");
         assert!(msg.blocks.is_empty(), "missing blocks must default to empty, not error");
+    }
+
+    #[test]
+    fn legacy_meta_is_unbound_at_revision_zero() {
+        let legacy = r#"{"id":"conv-old","created_at":"2026-06-08T00:00:00Z","updated_at":"2026-06-08T00:00:00Z"}"#;
+        let meta: ConversationMeta = serde_json::from_str(legacy).expect("legacy meta must still parse");
+        assert!(meta.agent_id.is_none());
+        assert_eq!(meta.revision, 0);
+    }
+
+    #[test]
+    fn file_store_revision_compare_and_swap_rejects_stale_writer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileConversationStore { root: tmp.path().join("chat") };
+        let mut meta = store.create(Some("conv-cas".into())).unwrap();
+        meta.revision = 1;
+        store.save_meta_if_revision(&meta, Some(0)).unwrap();
+
+        let mut stale = meta.clone();
+        stale.title = Some("stale".into());
+        stale.revision = 2;
+        let error = store.save_meta_if_revision(&stale, Some(0)).unwrap_err();
+        assert!(error.to_string().contains("revision conflict"), "unexpected error: {error}");
+        assert!(store.load_meta("conv-cas").unwrap().unwrap().title.is_none());
     }
 
     #[test]

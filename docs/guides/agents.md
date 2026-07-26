@@ -533,6 +533,17 @@ Act on `remediation` first when present; see the
   any server with an `oauth:` block is routed through `animus-mcp-proxy`
   instead of exposing a bearer token directly. See the per-agent MCP server
   section in the [CLI Command Surface](../reference/cli/index.md).
+- For chat, `--agent` is persisted as the canonical conversation `agent_id`.
+  Continuations may omit the flag and still re-resolve that exact profile in
+  the current actor/project scope, including its provider/model/persona,
+  reasoning, permission/approval, MCP, and tool-policy configuration. A
+  different flag or a renamed/deleted/hidden profile fails closed; legacy
+  conversations stay unbound. Portal-style application layers should pair the
+  `revision` returned by `chat get` with `chat send --expected-revision` so a
+  preflight-to-mutation identity race cannot execute against stale state. A
+  keyed application send also reserves that revision with an internal durable
+  operation id, allowing exact recovery across the crash boundary before the
+  user message is appended without admitting a different operation.
 - Workflow phase agents receive skills the same way: the union of the phase's
   `skills:` list and the executing agent profile's `skills:` is resolved
   daemon-side at dispatch (same scoped sources and trust rules as `--skill`)

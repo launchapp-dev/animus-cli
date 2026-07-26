@@ -768,7 +768,7 @@ now applies on both ad-hoc paths (matching workflow phases):
 
 | Flag | Description |
 |---|---|
-| `--agent <AGENT_ID>` | Select an agent profile; the run receives that profile's declared `mcp_servers`. On `animus agent run` this is applied only when no `--runtime-contract-json` (or `runtime_contract` in `--context-json`) was supplied — a caller-supplied contract is never clobbered. |
+| `--agent <AGENT_ID>` | Select an agent profile; the run receives that profile's declared `mcp_servers`. On `animus chat send`, the canonical profile id is durably bound to the conversation; later sends may omit the flag and reuse the bound profile, while a conflicting flag fails closed. On `animus agent run` this is applied only when no `--runtime-contract-json` (or `runtime_contract` in `--context-json`) was supplied — a caller-supplied contract is never clobbered. |
 | `--skill <SKILL>` | Select a skill; its declared `mcp_servers` are unioned into the resolved set, and its full application (prompt fragments, `extra_args`, `env`, `codex_config_overrides`) applies to the run as described above. An unknown skill name is an error. |
 | `--mcp-server <NAME>` | Add an MCP server by name (repeatable). The name must exist in the project's `mcp_servers` map, or `animus` for the built-in surface; an unknown name is an error. |
 | `--no-animus-mcp` | Drop the built-in `animus` server from the resolved set. |
@@ -777,6 +777,18 @@ When no profile/skill names any server (plain `animus chat send` or a bare
 `animus agent run`), the baseline set is just the built-in `animus` server so
 the agent still has the Animus tools. A tool whose CLI cannot speak MCP
 (`cli/capabilities/supports_mcp` is false) receives no MCP wiring.
+
+Bound chat conversations also project `agent_id` and a monotonic `revision` in
+`chat get` metadata and `chat list` summaries. Application layers should pass
+the observed token back as
+`animus chat send --conversation <id> --expected-revision <n> ...`; the turn
+checks it under the conversation lock and the plugin wire carries the same
+compare-and-swap precondition. Bound continuations re-resolve the exact profile
+in the current actor/project scope and apply its provider/model/persona,
+reasoning, permission/approval, MCP, and tool-policy configuration to native
+resume and replay-fallback attempts. Renamed/deleted/hidden profiles and
+conflicting `--agent` flags error before provider execution. Legacy metadata
+without `agent_id` remains neutral and is never inferred.
 
 ### `animus agent interactions`
 

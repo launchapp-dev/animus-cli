@@ -30,7 +30,7 @@ Animus's store is **not** the replay engine for live sessions. It is the portabl
 - **Portable / queryable record.** The tool's native session is tool-specific and machine-local. Animus's normalized `ChatMessage` event log is what `animus chat get` / `chat list` read, what `animus chat send --stream --json` emits, and what `animus cost conversation` aggregates — all provider-agnostic.
 - **Ordered assistant timelines.** Assistant turns now persist a `blocks` timeline in arrival order (`text`, `thinking`, `tool_call`, `tool_result`) so reloads can reconstruct the same interleaved view the live stream showed. Thinking blocks keep the accumulated reasoning text when the provider emits it, and older messages that predate this field still load cleanly and fall back to the aggregated `content` text.
 - **Resume fallback.** When no native session is alive (case 2 above), Animus replays its stored history into the prompt.
-- **Continuity pointer.** Conversation meta stores the current `session_id` + `tool` + `model`. The loop captures `SessionRun.session_id` into meta after every turn so the next turn can resume.
+- **Continuity and identity pointer.** Conversation meta stores the current `session_id` + `tool` + `model`, optional canonical `agent_id`, and a monotonic `revision`. The loop captures `SessionRun.session_id` after every turn; a bound `agent_id` is re-resolved on every continuation.
 
 Animus still persists every turn — the user message before the provider call (crash safety), the assistant message after — but that store serves portability / query / fallback, **not** live-session prompt replay. There is no double-bookkeeping of context into the prompt.
 
@@ -47,7 +47,8 @@ animus chat new [--id <id>] [--title <title>] \
 
 # Send a turn (creates a conversation if --conversation is omitted)
 animus chat send "your message" \
-  [--conversation <id>] [--tool claude] [--model <model>] [--cwd <path>] \
+  [--conversation <id>] [--expected-revision <n>] [--agent <agent-id>] \
+  [--tool claude] [--model <model>] [--cwd <path>] \
   [--stream] [--title <title>] [--as-user <user-id>] [--visibility private|shared]
 
 # Probe the application contract without starting a provider
@@ -84,6 +85,30 @@ missing conversation is treated as already deleted rather than an error.
 }` JSON shape, and writes raw transcript content to stdout unless `--output` is
 supplied.
 
+`--agent` is a durable conversation binding, not a display hint. On an
+auto-created conversation the canonical configured map key is stamped by the
+create operation; on a pre-created legacy/unbound conversation it is stamped
+under the turn lock before the user message. Later sends may omit `--agent` and
+still reuse that exact profile's tool, model, system prompt/persona,
+`tool_profile`, reasoning effort, permission mode, approval policy, MCP servers,
+and tool policy on native-resume and replay-fallback paths. Passing a different
+`--agent`, or continuing after the configured profile was renamed, deleted, or
+became invisible in the actor/project scope, fails before message persistence or
+provider execution. Conversations created before this field remain unbound and
+never infer identity from title, owner, tool, or model.
+
+Application layers should read `meta.revision` with `chat get`, then pass it as
+`chat send --expected-revision <n> --conversation <id>`. The turn re-checks the
+token after acquiring the conversation lock and the conversation-store
+`save_meta` RPC reserves the operation with `expected_revision` compare-and-swap
+before the first message append. A
+binding/title/concurrent mutation between preflight and execution therefore
+fails closed instead of running against stale identity.
+`animus --json chat capabilities` advertises this as the exact
+`send.identity_binding` contract. Application clients must derive `agent_id`
+and `revision` from authorized conversation metadata; `client_selectable` is
+false, so an untrusted request body may never choose or override the agent.
+
 ### Streaming and output modes
 
 `animus chat send` selects its sink from the flags:
@@ -110,6 +135,28 @@ agent/tool side effects. Provider errors persist `assistant_failed`; exact
 retries replay the same bounded failure receipt. Use `animus --json chat
 capabilities` as the stable Portal capability probe instead of scraping help.
 
+Admission uses two hashes. The first covers normalized caller intent and is
+checked before mutable agent/profile/MCP resolution, so a terminal receipt can
+replay even after configuration changes. A pending operation then binds exactly
+once to the fully resolved execution snapshot. If that snapshot changes after
+a crash, recovery holds the conversation lock: with no durable user row it can
+safely rebind because no provider could have started; with a durable user row it
+records `assistant_interrupted` and never repeats provider effects. The
+conversation meta also carries an internal
+`active_operation_id` reservation in the same revision CAS. It proves that the
+same operation may resume if the process stopped after consuming the revision
+but before appending the user row, and it is cleared on terminal completion or
+reconciliation.
+
+Recovery and failed-preparation cleanup hold the conversation lock and renew
+the operation authority before scanning or clearing that reservation. Stable
+message ids are preferred; an external store using the staged protocol can use
+the reservation's canonical pre-append sequence plus role/content validation
+when its wire message omits the additive id. If profile/MCP preparation fails
+with no user row, the pending admission is released for a safe retry; if the
+user row is already durable, the operation becomes `assistant_interrupted`
+instead of repeating provider effects.
+
 The in-tree file store persists stable message ids. The current external
 `conversation_store` protocol still locates messages by canonical
 `{conversation_id, seq}` and does not carry the additive message-id field; a
@@ -126,10 +173,15 @@ Per-turn `usage` and `cost_usd` are recorded on each assistant `ChatMessage` fro
 
 ## Ownership and visibility
 
-Each conversation carries two optional identity fields on its `ConversationMeta`:
+Each conversation carries these identity/concurrency fields on its `ConversationMeta`:
 
 - `owner` — the authenticated user id that owns the conversation. `None` for **unowned** conversations: legacy on-disk metas (the field is serde-defaulted, so existing conversations load unchanged) and ones created without `--as-user`.
 - `visibility` — `private` (the default) or `shared`.
+- `agent_id` — optional canonical configured profile id. Missing means deliberately unbound; it is never inferred.
+- `revision` — monotonic optimistic-concurrency token (`0` for legacy metadata).
+- `active_operation_id` — optional internal keyed-send reservation. It is
+  omitted from conversation-list summaries and is not a client-selectable
+  application field.
 
 `--as-user <id>` stamps an owner on `animus chat new` and on an `animus chat send` that auto-creates a conversation; `--visibility` sets the initial visibility. `animus chat list --as-user <id>` returns that user's own conversations PLUS any `shared` ones; `animus chat list` with no `--as-user` returns everything (the legacy/admin view).
 
@@ -147,13 +199,13 @@ output.
 
 Chat persistence is served by an **optional** `conversation_store` plugin role. With no plugin installed, the in-tree filesystem store (below) is used — chat works with zero plugins. When a `conversation_store` plugin is discovered, the chat data ops (`create` / `load_meta` / `save_meta` / `append_message` / `load_messages` / `list` / `delete`) route to it over JSON-RPC instead; this is how an out-of-tree Postgres backend serves chat history with real per-user ownership + sharing.
 
-The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The contract (method names + request/response types) lives in `crates/animus-plugin-protocol/src/lib.rs` under the `conversation_store` module; the `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation instead. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
+The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The contract (method names + request/response types) lives in `crates/animus-plugin-protocol/src/lib.rs` under the `conversation_store` module; the `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. `conversation/create` can stamp `agent_id` atomically, and `conversation/save_meta` accepts `expected_revision` for compare-and-swap. A durable backend must persist and enforce `active_operation_id` in that same owner-scoped CAS; a different operation cannot replace a live reservation. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation and MUST enforce the revision precondition. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
 
 ## State layout
 
 When no `conversation_store` plugin is installed, conversations live under the scoped runtime root:
 
-- `~/.animus/<repo-scope>/chat/<conversation-id>/meta.json` — `ConversationMeta` (the continuity pointer: `session_id` + `tool` + `model`, plus counts and timestamps).
+- `~/.animus/<repo-scope>/chat/<conversation-id>/meta.json` — `ConversationMeta` (`agent_id` + `revision` + internal `active_operation_id`, the `session_id` / `tool` / `model` continuity pointer, counts, ownership, and timestamps).
 - `~/.animus/<repo-scope>/chat/<conversation-id>/messages.jsonl` — append-only `ChatMessage` event log. Assistant turns carry both aggregated `content` and, when available, an ordered `blocks[]` timeline for text, thinking text, and tool activity.
 
 As with all Animus state, treat these as tool-managed — use the `animus chat` surface rather than hand-editing the JSON.

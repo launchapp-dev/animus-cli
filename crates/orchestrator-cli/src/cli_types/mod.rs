@@ -1186,6 +1186,35 @@ mod tests {
     }
 
     #[test]
+    fn chat_send_parses_agent_revision_contract_and_keeps_tool_unset_for_profile_default() {
+        let cli = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--expected-revision",
+            "7",
+            "--agent",
+            "researcher",
+        ])
+        .expect("bound chat send should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                assert_eq!(args.expected_revision, Some(7));
+                assert_eq!(args.agent.as_deref(), Some("researcher"));
+                assert_eq!(args.tool, None, "omitting --tool lets the bound profile choose it");
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+
+        let error = Cli::try_parse_from(["animus", "chat", "send", "hello", "--expected-revision", "7"])
+            .expect_err("revision without an existing conversation must be rejected");
+        assert!(error.to_string().contains("--conversation"));
+    }
+
+    #[test]
     fn chat_reads_parse_bounded_page_arguments() {
         let list =
             Cli::try_parse_from(["animus", "chat", "list", "--as-user", "carol", "--limit", "25", "--offset", "50"])

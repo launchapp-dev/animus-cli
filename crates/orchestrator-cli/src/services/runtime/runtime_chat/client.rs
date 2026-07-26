@@ -132,7 +132,14 @@ impl ConversationStore for ConversationStoreClient {
     fn save_meta(&self, meta: &ConversationMeta) -> Result<()> {
         match self {
             Self::File(store) => store.save_meta(meta),
-            Self::Plugin(plugin) => plugin.save_meta(meta),
+            Self::Plugin(plugin) => plugin.save_meta(meta, None),
+        }
+    }
+
+    fn save_meta_if_revision(&self, meta: &ConversationMeta, expected: Option<u64>) -> Result<()> {
+        match self {
+            Self::File(store) => store.save_meta_if_revision(meta, expected),
+            Self::Plugin(plugin) => plugin.save_meta(meta, expected),
         }
     }
 
@@ -172,17 +179,31 @@ impl ConversationStoreClient {
         owner: Option<String>,
         visibility: super::store::Visibility,
     ) -> Result<ConversationMeta> {
+        self.create_with_ownership_and_agent(id, owner, visibility, None)
+    }
+
+    /// Create a conversation and atomically stamp its canonical agent
+    /// binding. The binding rides the create RPC so a plugin-backed store
+    /// cannot briefly expose an unbound row between create and save_meta.
+    pub(crate) fn create_with_ownership_and_agent(
+        &self,
+        id: Option<String>,
+        owner: Option<String>,
+        visibility: super::store::Visibility,
+        agent_id: Option<String>,
+    ) -> Result<ConversationMeta> {
         match self {
             Self::File(store) => {
                 let mut meta = store.create(id)?;
-                if owner.is_some() || visibility != super::store::Visibility::Private {
+                if owner.is_some() || visibility != super::store::Visibility::Private || agent_id.is_some() {
                     meta.owner = owner;
                     meta.visibility = visibility;
+                    meta.agent_id = agent_id;
                     store.save_meta(&meta)?;
                 }
                 Ok(meta)
             }
-            Self::Plugin(plugin) => plugin.create(id, owner, visibility),
+            Self::Plugin(plugin) => plugin.create(id, owner, visibility, agent_id),
         }
     }
 
@@ -263,6 +284,49 @@ pub(crate) struct PluginConversationStore {
     lock_store: FileConversationStore,
 }
 
+// These three wire structs intentionally live in the kernel while the
+// companion animus-plugin-protocol release is staged. They use the canonical
+// JSON field names and keep `agent_id` visible instead of round-tripping
+// through an older tagged protocol struct that would silently discard it.
+#[derive(serde::Serialize)]
+struct BoundConversationCreateRequest {
+    #[serde(flatten)]
+    scope: proto::ConversationScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner: Option<String>,
+    visibility: super::store::Visibility,
+}
+
+#[derive(serde::Deserialize)]
+struct BoundConversationMetaResponse {
+    meta: Option<ConversationMeta>,
+}
+
+#[derive(serde::Deserialize)]
+struct BoundConversationCreateResponse {
+    meta: ConversationMeta,
+}
+
+#[derive(serde::Serialize)]
+struct BoundConversationSaveMetaRequest<'a> {
+    #[serde(flatten)]
+    scope: proto::ConversationScope,
+    meta: &'a ConversationMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    as_user: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct BoundConversationListResponse {
+    conversations: Vec<ConversationSummary>,
+}
+
 impl PluginConversationStore {
     fn new(
         plugin: DiscoveredPlugin,
@@ -300,28 +364,25 @@ impl PluginConversationStore {
         id: Option<String>,
         owner: Option<String>,
         visibility: super::store::Visibility,
+        agent_id: Option<String>,
     ) -> Result<ConversationMeta> {
-        let request = proto::ConversationCreateRequest {
-            scope: self.scope(),
-            id,
-            owner,
-            visibility: to_proto_visibility(visibility),
-        };
-        let resp: proto::ConversationCreateResponse = self.call(proto::METHOD_CONVERSATION_CREATE, &request)?;
-        from_proto_meta(resp.meta)
+        let request = BoundConversationCreateRequest { scope: self.scope(), id, agent_id, owner, visibility };
+        let resp: BoundConversationCreateResponse = self.call(proto::METHOD_CONVERSATION_CREATE, &request)?;
+        Ok(resp.meta)
     }
 
     fn load_meta(&self, id: &str) -> Result<Option<ConversationMeta>> {
         let request =
             proto::ConversationLoadMetaRequest { scope: self.scope(), id: id.to_string(), as_user: self.acting_user() };
-        let resp: proto::ConversationLoadMetaResponse = self.call(proto::METHOD_CONVERSATION_LOAD_META, &request)?;
-        resp.meta.map(from_proto_meta).transpose()
+        let resp: BoundConversationMetaResponse = self.call(proto::METHOD_CONVERSATION_LOAD_META, &request)?;
+        Ok(resp.meta)
     }
 
-    fn save_meta(&self, meta: &ConversationMeta) -> Result<()> {
-        let request = proto::ConversationSaveMetaRequest {
+    fn save_meta(&self, meta: &ConversationMeta, expected_revision: Option<u64>) -> Result<()> {
+        let request = BoundConversationSaveMetaRequest {
             scope: self.scope(),
-            meta: to_proto_meta(meta)?,
+            meta,
+            expected_revision,
             as_user: self.acting_user(),
         };
         let _: proto::ConversationSaveMetaResponse = self.call(proto::METHOD_CONVERSATION_SAVE_META, &request)?;
@@ -353,8 +414,8 @@ impl PluginConversationStore {
 
     fn list(&self, as_user: Option<&str>) -> Result<Vec<ConversationSummary>> {
         let request = proto::ConversationListRequest { scope: self.scope(), as_user: as_user.map(ToOwned::to_owned) };
-        let resp: proto::ConversationListResponse = self.call(proto::METHOD_CONVERSATION_LIST, &request)?;
-        Ok(resp.conversations.into_iter().map(from_proto_summary).collect())
+        let resp: BoundConversationListResponse = self.call(proto::METHOD_CONVERSATION_LIST, &request)?;
+        Ok(resp.conversations)
     }
 
     fn delete(&self, id: &str) -> Result<()> {
@@ -452,13 +513,12 @@ impl PluginConversationStore {
                 .request_typed_with_timeout(proto::METHOD_CONVERSATION_LIST, Some(list_params), RPC_TIMEOUT)
                 .await
                 .with_context(|| format!("conversation/list on {}", self.plugin.name))?;
-            let list_resp: proto::ConversationListResponse = serde_json::from_value(list_val)?;
+            let list_resp: BoundConversationListResponse = serde_json::from_value(list_val)?;
             let mut out: Vec<super::SearchMatch> = Vec::new();
-            for psummary in list_resp.conversations {
+            for summary in list_resp.conversations {
                 if out.len() >= limit {
                     break;
                 }
-                let summary = from_proto_summary(psummary);
                 let lm_params = serde_json::to_value(proto::ConversationLoadMessagesRequest {
                     scope: self.scope(),
                     id: summary.id.clone(),
@@ -509,33 +569,6 @@ fn run_blocking<F: Future>(fut: F) -> Result<F::Output> {
     }
 }
 
-fn to_proto_visibility(visibility: super::store::Visibility) -> proto::Visibility {
-    match visibility {
-        super::store::Visibility::Private => proto::Visibility::Private,
-        super::store::Visibility::Shared => proto::Visibility::Shared,
-    }
-}
-
-fn from_proto_visibility(visibility: proto::Visibility) -> super::store::Visibility {
-    match visibility {
-        proto::Visibility::Private => super::store::Visibility::Private,
-        proto::Visibility::Shared => super::store::Visibility::Shared,
-    }
-}
-
-/// Convert a kernel meta into the protocol shape. The two structs are
-/// field-identical except `Visibility`, so a JSON round-trip is the cheapest
-/// faithful conversion and keeps the two in lockstep.
-fn to_proto_meta(meta: &ConversationMeta) -> Result<proto::ConversationMeta> {
-    serde_json::from_value(serde_json::to_value(meta).context("serializing ConversationMeta")?)
-        .context("converting ConversationMeta to protocol shape")
-}
-
-fn from_proto_meta(meta: proto::ConversationMeta) -> Result<ConversationMeta> {
-    serde_json::from_value(serde_json::to_value(meta).context("serializing protocol ConversationMeta")?)
-        .context("converting protocol ConversationMeta to kernel shape")
-}
-
 fn to_proto_message(message: &ChatMessage) -> Result<proto::ChatMessage> {
     serde_json::from_value(serde_json::to_value(message).context("serializing ChatMessage")?)
         .context("converting ChatMessage to protocol shape")
@@ -546,19 +579,6 @@ fn from_proto_message(message: proto::ChatMessage) -> Result<ChatMessage> {
         .context("converting protocol ChatMessage to kernel shape")
 }
 
-fn from_proto_summary(summary: proto::ConversationSummary) -> ConversationSummary {
-    ConversationSummary {
-        id: summary.id,
-        title: summary.title,
-        tool: summary.tool,
-        model: summary.model,
-        message_count: summary.message_count,
-        updated_at: summary.updated_at,
-        owner: summary.owner,
-        visibility: from_proto_visibility(summary.visibility),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,6 +587,8 @@ mod tests {
     fn summary(id: &str, owner: Option<&str>, visibility: Visibility) -> ConversationSummary {
         ConversationSummary {
             id: id.to_string(),
+            agent_id: None,
+            revision: 0,
             title: None,
             tool: None,
             model: None,
@@ -602,6 +624,9 @@ mod tests {
     fn meta_with(owner: Option<&str>, visibility: Visibility) -> ConversationMeta {
         ConversationMeta {
             id: "conv-z".to_string(),
+            agent_id: None,
+            revision: 0,
+            active_operation_id: None,
             tool: None,
             model: None,
             session_id: None,
@@ -638,9 +663,12 @@ mod tests {
     }
 
     #[test]
-    fn meta_round_trips_through_proto_shape() {
-        let mut meta = ConversationMeta {
+    fn bound_meta_round_trips_through_wire_json() {
+        let meta = ConversationMeta {
             id: "conv-x".to_string(),
+            agent_id: Some("researcher".to_string()),
+            revision: 7,
+            active_operation_id: None,
             tool: Some("claude".to_string()),
             model: Some("claude-sonnet-4-6".to_string()),
             session_id: Some("sess-1".to_string()),
@@ -651,15 +679,37 @@ mod tests {
             owner: Some("u1".to_string()),
             visibility: Visibility::Shared,
         };
-        let proto = to_proto_meta(&meta).unwrap();
-        assert_eq!(proto.owner.as_deref(), Some("u1"));
-        assert_eq!(proto.visibility, proto::Visibility::Shared);
-        let back = from_proto_meta(proto).unwrap();
-        // updated_at is the same across the round-trip; whole struct matches.
-        meta.updated_at = back.updated_at.clone();
+        let wire = serde_json::to_value(&meta).unwrap();
+        let back: ConversationMeta = serde_json::from_value(wire).unwrap();
         assert_eq!(back.id, meta.id);
+        assert_eq!(back.agent_id, meta.agent_id);
         assert_eq!(back.owner, meta.owner);
         assert_eq!(back.visibility, meta.visibility);
         assert_eq!(back.session_id, meta.session_id);
+    }
+
+    #[test]
+    fn plugin_wire_preserves_create_binding_and_save_revision_precondition() {
+        let create = BoundConversationCreateRequest {
+            scope: proto::ConversationScope { project_root: Some("/repo".into()), repo_scope: Some("scope-1".into()) },
+            id: Some("conv-x".into()),
+            agent_id: Some("researcher".into()),
+            owner: Some("u1".into()),
+            visibility: Visibility::Private,
+        };
+        let value = serde_json::to_value(create).unwrap();
+        assert_eq!(value["agent_id"], "researcher");
+        assert_eq!(value["project_root"], "/repo");
+
+        let meta = meta_with(Some("u1"), Visibility::Private);
+        let save = BoundConversationSaveMetaRequest {
+            scope: proto::ConversationScope::default(),
+            meta: &meta,
+            expected_revision: Some(7),
+            as_user: Some("u1".into()),
+        };
+        let value = serde_json::to_value(save).unwrap();
+        assert_eq!(value["expected_revision"], 7);
+        assert_eq!(value["meta"]["revision"], 0);
     }
 }

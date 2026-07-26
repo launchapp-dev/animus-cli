@@ -646,6 +646,27 @@ pub(crate) struct ResolvedAgentScope {
     pub(crate) skill_application: Option<orchestrator_config::skill_definition::SkillApplicationResult>,
 }
 
+/// Resolve a caller-supplied profile id to the exact configured map key and
+/// its compiled profile. Persisting the map key (rather than the caller's
+/// casing) gives conversations a stable canonical identity.
+pub(crate) fn resolve_canonical_agent_profile(
+    project_root: &Path,
+    agent_id: &str,
+    actor: Option<&Actor>,
+) -> Result<(String, orchestrator_config::agent_runtime_config::AgentProfile)> {
+    let config = orchestrator_config::agent_runtime_config::load_agent_runtime_config_with_metadata_for_actor(
+        project_root,
+        actor,
+    )?
+    .config;
+    config
+        .agents
+        .iter()
+        .find(|(configured_id, _)| configured_id.eq_ignore_ascii_case(agent_id))
+        .map(|(configured_id, profile)| (configured_id.clone(), profile.clone()))
+        .ok_or_else(|| anyhow!("unknown agent profile '{agent_id}'; not visible in this project and actor scope"))
+}
+
 /// Resolve the MCP server names that an `--agent` profile and `--skill`
 /// declare, reading the agent runtime config and skill sources for the
 /// project.
