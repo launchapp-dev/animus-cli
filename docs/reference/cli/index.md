@@ -37,8 +37,9 @@ schema through `chat send --application-controls-json <JSON>` to request only
 bounded approvals, reasoning effort, permission intent, and configured
 profile/skill references. Unknown fields and raw provider argv, environment,
 filesystem, secret, or configuration channels are rejected; the typed envelope
-also conflicts with the corresponding operator flags. `chat send --idempotency-key
-<KEY>` requires `--conversation <ID>`, `--actor-json <JSON>`, and matching
+also conflicts with the corresponding operator flags.
+`chat send --idempotency-key <KEY>` requires `--conversation <ID>`,
+`--actor-json <JSON>`, and matching
 `--as-user <USER_ID>`; the actor must provide `user_id` and `tenant_id`. Exact
 retries replay the durable receipt, changed payloads return
 `idempotency_conflict`, and live claims return
@@ -1918,8 +1919,9 @@ both modes.
 `animus workflow run`, actor-aware workflow/output reads, `animus workflow
 config get/validate`, `animus subject list/get/create/update/batch-create/
 batch-update/status/delete`, and every conversation-store chat verb (`new`,
-`list`, `get`, `rename`, `delete`, `export`, `search`, `send`) accepts `--actor-json
-<JSON>` — a JSON-encoded `Actor` (`{"user_id","claims","tenant_id"}`) that
+`list`, `get`, `rename`, `delete`, `export`, `search`, `send`) accepts
+`--actor-json <JSON>` — a JSON-encoded `Actor`
+(`{"user_id","claims","tenant_id"}`) that
 scopes the operation to that user, mirroring `animus mcp serve --actor-json`:
 
 ```bash
