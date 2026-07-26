@@ -158,9 +158,12 @@ to the terminal `assistant_interrupted` state otherwise. This avoids duplicate
 agent/tool side effects. Provider errors persist `assistant_failed`; exact
 retries replay the same bounded failure receipt. Use `animus --json chat
 capabilities` as the stable Portal capability probe instead of scraping help.
-The probe's live `backend` object reports the selected `kind`, `authority_mode`,
-whether the shared capability was observed, readiness, and a stable
-`error_code`. For a capable plugin, the command also requires the handshake to
+The probe's live `backend` object preserves the legacy singular shared-marker
+fields and adds the exact `required_capabilities` list, an overall
+`required_capabilities_observed` result, individual shared/fenced observation
+booleans, method-surface observation, readiness, and a stable `error_code`.
+The static operation-authority block likewise publishes both capabilities in
+`required_backend_capabilities`. For a capable plugin, the command also requires the handshake to
 declare all seven methods and performs bounded, read-only
 `conversation/load_meta` and `conversation/operation_load` probes against a
 guaranteed-missing key. This verifies process startup, method routing, and

@@ -46,6 +46,15 @@ fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
     );
     assert_eq!(
         payload
+            .pointer("/data/send/durable_idempotency/authority/plugin_store/required_backend_capabilities")
+            .and_then(Value::as_array),
+        Some(&vec![
+            Value::String("conversation_operations_shared_v1".to_string()),
+            Value::String("conversation_operation_fenced_append_v1".to_string()),
+        ])
+    );
+    assert_eq!(
+        payload
             .pointer("/data/send/durable_idempotency/authority/plugin_store/missing_capability")
             .and_then(Value::as_str),
         Some("fail_closed")
@@ -88,6 +97,26 @@ fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
         Some("conversation_operations_shared_v1")
     );
     assert_eq!(payload.pointer("/data/backend/required_capability_observed").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        payload.pointer("/data/backend/required_capabilities").and_then(Value::as_array),
+        Some(&vec![
+            Value::String("conversation_operations_shared_v1".to_string()),
+            Value::String("conversation_operation_fenced_append_v1".to_string()),
+        ])
+    );
+    assert_eq!(payload.pointer("/data/backend/required_capabilities_observed").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        payload.pointer("/data/backend/shared_operation_capability_observed").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/backend/fenced_append_capability_observed").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/backend/required_operation_methods_observed").and_then(Value::as_bool),
+        Some(false)
+    );
     assert_eq!(payload.pointer("/data/backend/ready").and_then(Value::as_bool), Some(true));
     assert!(payload.pointer("/data/backend/error_code").is_some_and(Value::is_null));
     Ok(())

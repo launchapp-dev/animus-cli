@@ -39,6 +39,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SHARED_OPERATION_CAPABILITY: &str = proto::CAPABILITY_CONVERSATION_OPERATIONS_SHARED_V1;
 pub(crate) const FENCED_APPEND_CAPABILITY: &str = proto::CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1;
+pub(crate) const REQUIRED_BACKEND_CAPABILITIES: [&str; 2] = [SHARED_OPERATION_CAPABILITY, FENCED_APPEND_CAPABILITY];
 const REQUIRED_SHARED_OPERATION_METHODS: [&str; 7] = [
     proto::METHOD_CONVERSATION_OPERATION_BEGIN,
     proto::METHOD_CONVERSATION_OPERATION_LOAD,
@@ -56,6 +57,11 @@ pub(crate) struct ChatBackendReadiness {
     pub authority_mode: &'static str,
     pub required_capability: &'static str,
     pub required_capability_observed: bool,
+    pub required_capabilities: [&'static str; 2],
+    pub required_capabilities_observed: bool,
+    pub shared_operation_capability_observed: bool,
+    pub fenced_append_capability_observed: bool,
+    pub required_operation_methods_observed: bool,
     pub ready: bool,
     pub error_code: Option<&'static str>,
 }
@@ -66,9 +72,9 @@ pub(crate) fn backend_readiness(project_root: &Path) -> ChatBackendReadiness {
         Ok(plugins) => match plugins.into_iter().next() {
             None => BackendDiscovery::File,
             Some(plugin) => {
-                let shared = plugin_supports_shared_authority(&plugin);
-                let probe_succeeded = shared && probe_plugin_backend(&plugin, project_root).is_ok();
-                BackendDiscovery::Plugin { shared, probe_succeeded }
+                let observation = shared_contract_observation(&plugin);
+                let probe_succeeded = observation.complete() && probe_plugin_backend(&plugin, project_root).is_ok();
+                BackendDiscovery::Plugin { observation, probe_succeeded }
             }
         },
     };
@@ -79,7 +85,24 @@ pub(crate) fn backend_readiness(project_root: &Path) -> ChatBackendReadiness {
 enum BackendDiscovery {
     Failed,
     File,
-    Plugin { shared: bool, probe_succeeded: bool },
+    Plugin { observation: SharedContractObservation, probe_succeeded: bool },
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SharedContractObservation {
+    shared_marker: bool,
+    fenced_append: bool,
+    operation_methods: bool,
+}
+
+impl SharedContractObservation {
+    fn capabilities_complete(self) -> bool {
+        self.shared_marker && self.fenced_append
+    }
+
+    fn complete(self) -> bool {
+        self.capabilities_complete() && self.operation_methods
+    }
 }
 
 fn readiness_for(discovered: BackendDiscovery) -> ChatBackendReadiness {
@@ -90,6 +113,11 @@ fn readiness_for(discovered: BackendDiscovery) -> ChatBackendReadiness {
             authority_mode: "unavailable",
             required_capability: SHARED_OPERATION_CAPABILITY,
             required_capability_observed: false,
+            required_capabilities: REQUIRED_BACKEND_CAPABILITIES,
+            required_capabilities_observed: false,
+            shared_operation_capability_observed: false,
+            fenced_append_capability_observed: false,
+            required_operation_methods_observed: false,
             ready: false,
             error_code: Some("conversation_store_discovery_failed"),
         },
@@ -99,35 +127,65 @@ fn readiness_for(discovered: BackendDiscovery) -> ChatBackendReadiness {
             authority_mode: "local_sqlite",
             required_capability: SHARED_OPERATION_CAPABILITY,
             required_capability_observed: false,
+            required_capabilities: REQUIRED_BACKEND_CAPABILITIES,
+            required_capabilities_observed: false,
+            shared_operation_capability_observed: false,
+            fenced_append_capability_observed: false,
+            required_operation_methods_observed: false,
             ready: true,
             error_code: None,
         },
-        BackendDiscovery::Plugin { shared: true, probe_succeeded: true } => ChatBackendReadiness {
-            schema: "animus.chat.backend_readiness.v1",
-            kind: "plugin",
-            authority_mode: "shared_conversation_store_rpc",
-            required_capability: SHARED_OPERATION_CAPABILITY,
-            required_capability_observed: true,
-            ready: true,
-            error_code: None,
-        },
-        BackendDiscovery::Plugin { shared: true, probe_succeeded: false } => ChatBackendReadiness {
+        BackendDiscovery::Plugin { observation, probe_succeeded: true } if observation.complete() => {
+            ChatBackendReadiness {
+                schema: "animus.chat.backend_readiness.v1",
+                kind: "plugin",
+                authority_mode: "shared_conversation_store_rpc",
+                required_capability: SHARED_OPERATION_CAPABILITY,
+                required_capability_observed: true,
+                required_capabilities: REQUIRED_BACKEND_CAPABILITIES,
+                required_capabilities_observed: true,
+                shared_operation_capability_observed: true,
+                fenced_append_capability_observed: true,
+                required_operation_methods_observed: true,
+                ready: true,
+                error_code: None,
+            }
+        }
+        BackendDiscovery::Plugin { observation, probe_succeeded: false } if observation.complete() => {
+            ChatBackendReadiness {
+                schema: "animus.chat.backend_readiness.v1",
+                kind: "plugin",
+                authority_mode: "unavailable",
+                required_capability: SHARED_OPERATION_CAPABILITY,
+                required_capability_observed: true,
+                required_capabilities: REQUIRED_BACKEND_CAPABILITIES,
+                required_capabilities_observed: true,
+                shared_operation_capability_observed: true,
+                fenced_append_capability_observed: true,
+                required_operation_methods_observed: true,
+                ready: false,
+                error_code: Some("conversation_store_probe_failed"),
+            }
+        }
+        BackendDiscovery::Plugin { observation, .. } => ChatBackendReadiness {
             schema: "animus.chat.backend_readiness.v1",
             kind: "plugin",
             authority_mode: "unavailable",
             required_capability: SHARED_OPERATION_CAPABILITY,
-            required_capability_observed: true,
+            required_capability_observed: observation.shared_marker,
+            required_capabilities: REQUIRED_BACKEND_CAPABILITIES,
+            required_capabilities_observed: observation.capabilities_complete(),
+            shared_operation_capability_observed: observation.shared_marker,
+            fenced_append_capability_observed: observation.fenced_append,
+            required_operation_methods_observed: observation.operation_methods,
             ready: false,
-            error_code: Some("conversation_store_probe_failed"),
-        },
-        BackendDiscovery::Plugin { shared: false, .. } => ChatBackendReadiness {
-            schema: "animus.chat.backend_readiness.v1",
-            kind: "plugin",
-            authority_mode: "unavailable",
-            required_capability: SHARED_OPERATION_CAPABILITY,
-            required_capability_observed: false,
-            ready: false,
-            error_code: Some("shared_operation_authority_missing"),
+            error_code: Some(if !observation.shared_marker {
+                "shared_operation_authority_missing"
+            } else if !observation.fenced_append {
+                "fenced_append_authority_missing"
+            } else {
+                "shared_operation_methods_missing"
+            }),
         },
     }
 }
@@ -217,10 +275,18 @@ fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Resul
 }
 
 fn plugin_supports_shared_authority(plugin: &DiscoveredPlugin) -> bool {
+    shared_contract_observation(plugin).complete()
+}
+
+fn shared_contract_observation(plugin: &DiscoveredPlugin) -> SharedContractObservation {
     let capabilities = &plugin.manifest.capabilities;
-    capabilities.iter().any(|value| value == SHARED_OPERATION_CAPABILITY)
-        && capabilities.iter().any(|value| value == FENCED_APPEND_CAPABILITY)
-        && REQUIRED_SHARED_OPERATION_METHODS.iter().all(|required| capabilities.iter().any(|value| value == required))
+    SharedContractObservation {
+        shared_marker: capabilities.iter().any(|value| value == SHARED_OPERATION_CAPABILITY),
+        fenced_append: capabilities.iter().any(|value| value == FENCED_APPEND_CAPABILITY),
+        operation_methods: REQUIRED_SHARED_OPERATION_METHODS
+            .iter()
+            .all(|required| capabilities.iter().any(|value| value == required)),
+    }
 }
 
 fn require_complete_operation_surface(methods: &[String]) -> Result<()> {
@@ -1426,52 +1492,60 @@ mod tests {
     }
 
     #[test]
-    fn backend_readiness_has_all_five_stable_variants() {
-        let cases = [
-            (
-                BackendDiscovery::Failed,
-                "unavailable",
-                "unavailable",
-                false,
-                false,
-                Some("conversation_store_discovery_failed"),
-            ),
-            (BackendDiscovery::File, "file", "local_sqlite", false, true, None),
-            (
-                BackendDiscovery::Plugin { shared: true, probe_succeeded: true },
-                "plugin",
-                "shared_conversation_store_rpc",
-                true,
-                true,
-                None,
-            ),
-            (
-                BackendDiscovery::Plugin { shared: true, probe_succeeded: false },
-                "plugin",
-                "unavailable",
-                true,
-                false,
-                Some("conversation_store_probe_failed"),
-            ),
-            (
-                BackendDiscovery::Plugin { shared: false, probe_succeeded: false },
-                "plugin",
-                "unavailable",
-                false,
-                false,
-                Some("shared_operation_authority_missing"),
-            ),
-        ];
-        for (input, kind, mode, observed, ready, error) in cases {
-            let value = readiness_for(input);
-            assert_eq!(value.schema, "animus.chat.backend_readiness.v1");
-            assert_eq!(value.kind, kind);
-            assert_eq!(value.authority_mode, mode);
-            assert_eq!(value.required_capability, SHARED_OPERATION_CAPABILITY);
-            assert_eq!(value.required_capability_observed, observed);
-            assert_eq!(value.ready, ready);
-            assert_eq!(value.error_code, error);
-        }
+    fn backend_readiness_distinguishes_each_required_contract_piece() {
+        let plugin = |shared_marker, fenced_append, operation_methods, probe_succeeded| BackendDiscovery::Plugin {
+            observation: SharedContractObservation { shared_marker, fenced_append, operation_methods },
+            probe_succeeded,
+        };
+
+        let failed = readiness_for(BackendDiscovery::Failed);
+        assert_eq!(failed.kind, "unavailable");
+        assert!(!failed.required_capabilities_observed);
+        assert_eq!(failed.error_code, Some("conversation_store_discovery_failed"));
+
+        let file = readiness_for(BackendDiscovery::File);
+        assert_eq!(file.kind, "file");
+        assert!(file.ready);
+        assert!(!file.required_capabilities_observed);
+
+        let ready = readiness_for(plugin(true, true, true, true));
+        assert_eq!(ready.schema, "animus.chat.backend_readiness.v1");
+        assert_eq!(ready.authority_mode, "shared_conversation_store_rpc");
+        assert_eq!(ready.required_capability, SHARED_OPERATION_CAPABILITY);
+        assert!(ready.required_capability_observed);
+        assert_eq!(ready.required_capabilities, REQUIRED_BACKEND_CAPABILITIES);
+        assert!(ready.required_capabilities_observed);
+        assert!(ready.shared_operation_capability_observed);
+        assert!(ready.fenced_append_capability_observed);
+        assert!(ready.required_operation_methods_observed);
+        assert!(ready.ready);
+        assert_eq!(ready.error_code, None);
+
+        let probe_failed = readiness_for(plugin(true, true, true, false));
+        assert!(probe_failed.required_capabilities_observed);
+        assert!(!probe_failed.ready);
+        assert_eq!(probe_failed.error_code, Some("conversation_store_probe_failed"));
+
+        let only_old = readiness_for(plugin(true, false, true, false));
+        assert!(only_old.required_capability_observed, "legacy singular field remains accurate");
+        assert!(only_old.shared_operation_capability_observed);
+        assert!(!only_old.fenced_append_capability_observed);
+        assert!(!only_old.required_capabilities_observed);
+        assert_eq!(only_old.error_code, Some("fenced_append_authority_missing"));
+
+        let only_fenced = readiness_for(plugin(false, true, true, false));
+        assert!(!only_fenced.required_capability_observed);
+        assert!(!only_fenced.shared_operation_capability_observed);
+        assert!(only_fenced.fenced_append_capability_observed);
+        assert!(!only_fenced.required_capabilities_observed);
+        assert_eq!(only_fenced.error_code, Some("shared_operation_authority_missing"));
+
+        let missing_method = readiness_for(plugin(true, true, false, false));
+        assert!(missing_method.shared_operation_capability_observed);
+        assert!(missing_method.fenced_append_capability_observed);
+        assert!(missing_method.required_capabilities_observed);
+        assert!(!missing_method.required_operation_methods_observed);
+        assert_eq!(missing_method.error_code, Some("shared_operation_methods_missing"));
     }
 
     #[test]
@@ -1499,7 +1573,14 @@ mod tests {
         };
         assert!(plugin_supports_shared_authority(&plugin));
         assert!(probe_plugin_backend(&plugin, Path::new("/repo")).is_err());
-        let readiness = readiness_for(BackendDiscovery::Plugin { shared: true, probe_succeeded: false });
+        let readiness = readiness_for(BackendDiscovery::Plugin {
+            observation: SharedContractObservation {
+                shared_marker: true,
+                fenced_append: true,
+                operation_methods: true,
+            },
+            probe_succeeded: false,
+        });
         assert!(!readiness.ready);
         assert_eq!(readiness.error_code, Some("conversation_store_probe_failed"));
     }

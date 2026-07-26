@@ -92,6 +92,7 @@ fn handle_chat_capabilities(project_root: &str, json: bool) -> Result<()> {
                         "plugin_store": {
                             "mode": "shared_conversation_store_rpc",
                             "required_backend_capability": client::SHARED_OPERATION_CAPABILITY,
+                            "required_backend_capabilities": client::REQUIRED_BACKEND_CAPABILITIES,
                             "missing_capability": "fail_closed",
                             "shared_across_hosts": true,
                         },

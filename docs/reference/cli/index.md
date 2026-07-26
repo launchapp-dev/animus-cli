@@ -41,7 +41,9 @@ from terminal `turn_completed` / `turn_failed`, so a provider failure cannot
 erase or duplicate the already-canonical user turn.
 The probe also verifies the complete seven-method shared-operation handshake,
 the fenced-assistant-append capability, and bounded read-only conversation and
-operation reads before reporting live `backend` readiness. Multi-replica applications must pass the
+operation reads before reporting live `backend` readiness. Its additive
+capability lists identify both required markers while legacy singular fields
+continue to describe the original shared-operation marker. Multi-replica applications must pass the
 advertised `--require-shared-authority` policy flag on every keyed send; it
 rejects file fallback if the shared plugin disappears after startup.
 
