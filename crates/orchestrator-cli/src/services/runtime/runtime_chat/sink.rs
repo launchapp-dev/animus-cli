@@ -16,8 +16,12 @@
 //!
 //! [`SessionEvent`]: animus_session_backend::session::SessionEvent
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::Serialize;
+
+const MAX_APPLICATION_PROTOCOL_STRING_BYTES: usize = 512;
+const MAX_APPLICATION_CHAT_ERROR_BYTES: usize = 1_024;
+const MAX_APPLICATION_CHAT_SEQUENCE: u64 = 9_007_199_254_740_991;
 
 /// Normalized, provider-agnostic streaming event. Mirrors the meaningful
 /// subset of `SessionEvent` that a chat UI cares about, plus chat-level
@@ -111,8 +115,103 @@ pub(crate) trait ChatStreamSink {
 /// `animus chat send --stream --json`.
 pub(crate) struct JsonlStdoutSink;
 
+fn validate_application_protocol_string(label: &str, value: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > MAX_APPLICATION_PROTOCOL_STRING_BYTES
+        || value.chars().any(|character| character.is_ascii_control())
+    {
+        bail!("{label} violates the application receipt string contract");
+    }
+    Ok(())
+}
+
+fn validate_application_receipt_event(event: &ChatStreamEvent) -> Result<()> {
+    let validate_seq = |label: &str, value: u64| {
+        if value > MAX_APPLICATION_CHAT_SEQUENCE {
+            bail!("{label} exceeds the cross-language application sequence limit");
+        }
+        Ok(())
+    };
+    match event {
+        ChatStreamEvent::UserMessageAccepted {
+            status,
+            conversation_id,
+            seq,
+            message_id,
+            operation_id: Some(operation_id),
+        } => {
+            if *status != orchestrator_core::ChatOperationStatus::UserAccepted {
+                bail!("application accepted receipt has a non-accepted status");
+            }
+            validate_application_protocol_string("conversation_id", conversation_id)?;
+            validate_application_protocol_string("message_id", message_id)?;
+            validate_application_protocol_string("operation_id", operation_id)?;
+            validate_seq("seq", *seq)?;
+        }
+        ChatStreamEvent::TurnCompleted {
+            status,
+            conversation_id,
+            seq,
+            message_id,
+            user_seq,
+            user_message_id,
+            operation_id: Some(operation_id),
+            session_id,
+        } => {
+            if *status != orchestrator_core::ChatOperationStatus::Completed {
+                bail!("application completed receipt has a non-completed status");
+            }
+            for (label, value) in [
+                ("conversation_id", conversation_id.as_str()),
+                ("message_id", message_id.as_str()),
+                ("user_message_id", user_message_id.as_str()),
+                ("operation_id", operation_id.as_str()),
+            ] {
+                validate_application_protocol_string(label, value)?;
+            }
+            if let Some(session_id) = session_id {
+                validate_application_protocol_string("session_id", session_id)?;
+            }
+            validate_seq("seq", *seq)?;
+            validate_seq("user_seq", *user_seq)?;
+        }
+        ChatStreamEvent::TurnFailed {
+            status,
+            conversation_id,
+            user_seq,
+            user_message_id,
+            operation_id: Some(operation_id),
+            error_code,
+            error_message,
+        } => {
+            if !matches!(
+                status,
+                orchestrator_core::ChatOperationStatus::AssistantFailed
+                    | orchestrator_core::ChatOperationStatus::AssistantInterrupted
+            ) {
+                bail!("application failed receipt has a non-failure status");
+            }
+            for (label, value) in [
+                ("conversation_id", conversation_id.as_str()),
+                ("user_message_id", user_message_id.as_str()),
+                ("operation_id", operation_id.as_str()),
+                ("error_code", error_code.as_str()),
+            ] {
+                validate_application_protocol_string(label, value)?;
+            }
+            if error_message.is_empty() || error_message.len() > MAX_APPLICATION_CHAT_ERROR_BYTES {
+                bail!("error_message violates the application receipt error contract");
+            }
+            validate_seq("user_seq", *user_seq)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 impl ChatStreamSink for JsonlStdoutSink {
     fn emit(&mut self, event: &ChatStreamEvent) -> Result<()> {
+        validate_application_receipt_event(event)?;
         let line = serde_json::to_string(event)?;
         println!("{line}");
         Ok(())
@@ -220,5 +319,66 @@ mod tests {
         assert_eq!(value["user_seq"], 4);
         assert_eq!(value["user_message_id"], "msg-user");
         assert_eq!(value["operation_id"], "op-1");
+    }
+
+    #[test]
+    fn application_receipts_match_vendored_shared_limits_and_shapes() {
+        let limits: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../contracts/animus-application-protocol/_limits.json"))
+                .unwrap();
+        assert_eq!(limits["application_protocol_string_max_utf8_bytes"], MAX_APPLICATION_PROTOCOL_STRING_BYTES);
+        assert_eq!(limits["application_chat_error_max_utf8_bytes"], MAX_APPLICATION_CHAT_ERROR_BYTES);
+        assert_eq!(limits["application_chat_sequence_max"], MAX_APPLICATION_CHAT_SEQUENCE);
+
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/animus-application-protocol/ApplicationChatReceiptFrame.json"
+        ))
+        .unwrap();
+        let types = contract["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|schema| schema["properties"]["type"]["const"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(types, ["user_message_accepted", "turn_completed", "turn_failed"]);
+
+        let accepted = ChatStreamEvent::UserMessageAccepted {
+            status: orchestrator_core::ChatOperationStatus::UserAccepted,
+            conversation_id: "chat-1".into(),
+            seq: MAX_APPLICATION_CHAT_SEQUENCE,
+            message_id: "é".repeat(256),
+            operation_id: Some("operation-1".into()),
+        };
+        validate_application_receipt_event(&accepted).unwrap();
+
+        for rejected in [
+            ChatStreamEvent::UserMessageAccepted {
+                status: orchestrator_core::ChatOperationStatus::UserAccepted,
+                conversation_id: "chat-1".into(),
+                seq: MAX_APPLICATION_CHAT_SEQUENCE + 1,
+                message_id: "message-user".into(),
+                operation_id: Some("operation-1".into()),
+            },
+            ChatStreamEvent::UserMessageAccepted {
+                status: orchestrator_core::ChatOperationStatus::UserAccepted,
+                conversation_id: "chat-1".into(),
+                seq: 1,
+                message_id: format!("{}x", "é".repeat(256)),
+                operation_id: Some("operation-1".into()),
+            },
+        ] {
+            assert!(validate_application_receipt_event(&rejected).is_err());
+        }
+
+        let oversized_error = ChatStreamEvent::TurnFailed {
+            status: orchestrator_core::ChatOperationStatus::AssistantFailed,
+            conversation_id: "chat-1".into(),
+            user_seq: 1,
+            user_message_id: "message-user".into(),
+            operation_id: Some("operation-1".into()),
+            error_code: "provider_failed".into(),
+            error_message: format!("{}x", "é".repeat(512)),
+        };
+        assert!(validate_application_receipt_event(&oversized_error).is_err());
     }
 }

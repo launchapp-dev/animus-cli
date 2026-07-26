@@ -1235,6 +1235,7 @@ mod tests {
             r#"{"schema":"animus.chat.application_controls.v1","profile_ref":"../../secret"}"#,
             r#"{"schema":"animus.chat.application_controls.v1","skill_ref":"$TOKEN"}"#,
             r#"{"schema":"animus.chat.application_controls.v2"}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","approvals":null}"#,
         ] {
             assert_eq!(
                 Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", rejected]))
@@ -1284,6 +1285,41 @@ mod tests {
                 .expect_err("application controls require fail-closed shared authority")
                 .kind(),
             ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn application_chat_controls_match_vendored_shared_schema() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../contracts/animus-application-protocol/ApplicationChatControls.json"
+        ))
+        .unwrap();
+        let limits: serde_json::Value =
+            serde_json::from_str(include_str!("../../contracts/animus-application-protocol/_limits.json")).unwrap();
+        assert_eq!(limits["application_chat_controls_schema"], APPLICATION_CHAT_CONTROLS_SCHEMA);
+        assert_eq!(limits["application_chat_controls_max_utf8_bytes"], MAX_APPLICATION_CHAT_CONTROLS_BYTES);
+        assert_eq!(limits["application_chat_control_ref_max_utf8_bytes"], MAX_APPLICATION_CHAT_CONTROL_REF_BYTES);
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["required"], serde_json::json!(["schema"]));
+        let mut fields = schema["properties"].as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        fields.sort();
+        assert_eq!(
+            fields,
+            ["approvals", "permission_intent", "profile_ref", "reasoning_effort", "schema", "skill_ref"]
+        );
+
+        let reasoning =
+            [ApplicationReasoningEffort::Low, ApplicationReasoningEffort::Medium, ApplicationReasoningEffort::High];
+        assert_eq!(serde_json::to_value(reasoning).unwrap(), serde_json::json!(["low", "medium", "high"]));
+        let permissions = [
+            ApplicationPermissionIntent::Default,
+            ApplicationPermissionIntent::Review,
+            ApplicationPermissionIntent::AutoEdit,
+            ApplicationPermissionIntent::Unrestricted,
+        ];
+        assert_eq!(
+            serde_json::to_value(permissions).unwrap(),
+            serde_json::json!(["default", "review", "auto_edit", "unrestricted"])
         );
     }
 

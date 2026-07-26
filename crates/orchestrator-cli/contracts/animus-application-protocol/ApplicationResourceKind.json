@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApplicationResourceKind",
+  "description": "Resource kinds exposed by the application projection boundary.",
+  "oneOf": [
+    {
+      "description": "Configured agent profile.",
+      "type": "string",
+      "const": "agent"
+    },
+    {
+      "description": "Durable chat conversation.",
+      "type": "string",
+      "const": "chat"
+    },
+    {
+      "description": "Workflow definition.",
+      "type": "string",
+      "const": "workflow"
+    },
+    {
+      "description": "Workflow execution.",
+      "type": "string",
+      "const": "run"
+    },
+    {
+      "description": "Backend-owned subject.",
+      "type": "string",
+      "const": "subject"
+    },
+    {
+      "description": "Queue entry.",
+      "type": "string",
+      "const": "queue_entry"
+    },
+    {
+      "description": "Durable operation record.",
+      "type": "string",
+      "const": "operation"
+    },
+    {
+      "description": "Human interaction request.",
+      "type": "string",
+      "const": "interaction"
+    }
+  ]
+}

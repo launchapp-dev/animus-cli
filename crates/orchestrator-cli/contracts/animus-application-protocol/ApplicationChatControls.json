@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApplicationChatControls",
+  "description": "Closed application controls envelope accepted by `animus chat send`.",
+  "type": "object",
+  "properties": {
+    "approvals": {
+      "description": "Request kernel-mediated approvals when authorized by the profile.",
+      "type": "boolean"
+    },
+    "permission_intent": {
+      "description": "Requested provider-neutral permission intent.",
+      "$ref": "#/$defs/ApplicationPermissionIntent"
+    },
+    "profile_ref": {
+      "description": "Assertion of the conversation's canonical configured profile.",
+      "$ref": "#/$defs/ApplicationConfiguredRef"
+    },
+    "reasoning_effort": {
+      "description": "Requested reasoning effort.",
+      "$ref": "#/$defs/ApplicationReasoningEffort"
+    },
+    "schema": {
+      "description": "Exact controls schema discriminator.",
+      "$ref": "#/$defs/ApplicationChatControlsSchema"
+    },
+    "skill_ref": {
+      "description": "Configured skill selected from the profile's authorized options.",
+      "$ref": "#/$defs/ApplicationConfiguredRef"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema"
+  ],
+  "$defs": {
+    "ApplicationChatControlsSchema": {
+      "description": "Stable schema discriminator for [`ApplicationChatControls`].",
+      "oneOf": [
+        {
+          "description": "`animus.chat.application_controls.v1`.",
+          "type": "string",
+          "const": "animus.chat.application_controls.v1"
+        }
+      ]
+    },
+    "ApplicationConfiguredRef": {
+      "description": "A bounded reference to a server-configured agent profile or skill.",
+      "type": "string",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ApplicationPermissionIntent": {
+      "description": "Provider-neutral permission intent selected by an application.",
+      "oneOf": [
+        {
+          "description": "Inherit safe provider defaults.",
+          "type": "string",
+          "const": "default"
+        },
+        {
+          "description": "Review without broad edit permission.",
+          "type": "string",
+          "const": "review"
+        },
+        {
+          "description": "Permit ordinary automated edits.",
+          "type": "string",
+          "const": "auto_edit"
+        },
+        {
+          "description": "Request the profile's explicitly authorized unrestricted mode.",
+          "type": "string",
+          "const": "unrestricted"
+        }
+      ]
+    },
+    "ApplicationReasoningEffort": {
+      "description": "Application-safe reasoning effort requested from an authorized profile.",
+      "oneOf": [
+        {
+          "description": "Low reasoning effort.",
+          "type": "string",
+          "const": "low"
+        },
+        {
+          "description": "Medium reasoning effort.",
+          "type": "string",
+          "const": "medium"
+        },
+        {
+          "description": "High reasoning effort.",
+          "type": "string",
+          "const": "high"
+        }
+      ]
+    }
+  }
+}

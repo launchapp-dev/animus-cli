@@ -7,6 +7,16 @@ pub(crate) const APPLICATION_CHAT_CONTROLS_SCHEMA: &str = "animus.chat.applicati
 pub(crate) const MAX_APPLICATION_CHAT_CONTROLS_BYTES: usize = 2_048;
 pub(crate) const MAX_APPLICATION_CHAT_CONTROL_REF_BYTES: usize = 64;
 
+fn deserialize_non_null_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| serde::de::Error::custom("explicit null is not allowed; omit the field"))
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ApplicationReasoningEffort {
@@ -70,15 +80,15 @@ impl<'de> Deserialize<'de> for ApplicationConfiguredRef {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApplicationChatControls {
     pub(crate) schema: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_null_option")]
     pub(crate) approvals: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_null_option")]
     pub(crate) reasoning_effort: Option<ApplicationReasoningEffort>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_null_option")]
     pub(crate) permission_intent: Option<ApplicationPermissionIntent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_null_option")]
     pub(crate) profile_ref: Option<ApplicationConfiguredRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_non_null_option")]
     pub(crate) skill_ref: Option<ApplicationConfiguredRef>,
 }
 
