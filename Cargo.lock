@@ -2824,6 +2824,7 @@ dependencies = [
  "animus-log-storage-protocol",
  "animus-mcp-oauth",
  "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-runtime",
  "animus-queue-protocol",
  "animus-runtime-shared",
  "animus-session-backend",

@@ -16,56 +16,35 @@
 #[path = "support/test_harness.rs"]
 pub mod test_harness;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use test_harness::CliHarness;
 
-fn target_dir() -> PathBuf {
-    if let Ok(override_dir) = std::env::var("ANIMUS_TESTKIT_BIN_DIR") {
-        let p = PathBuf::from(override_dir);
-        if p.exists() {
-            return p;
-        }
-    }
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.parent().and_then(|p| p.parent()).expect("workspace root");
-    let workspace_target = workspace_root.join("target").join("debug");
-    if workspace_target.exists() {
-        return workspace_target;
-    }
-    manifest_dir.join("target").join("debug")
+fn smoke_plugin_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_animus-plugin-smoke"))
 }
 
-fn ensure_plugin_binary(name: &str) -> Result<PathBuf> {
-    let candidate = target_dir().join(name);
-    if !candidate.exists() {
-        return Err(anyhow!(
-            "{name} not built; set ANIMUS_TESTKIT_BIN_DIR=<path>/animus-plugin-testkit/target/debug \
-             or run `cargo build -p {name}` against the testkit (fixtures/{name}) before running this test"
-        ));
-    }
-    Ok(candidate)
+fn ensure_plugin_binary() -> PathBuf {
+    let candidate = smoke_plugin_binary();
+    assert!(candidate.is_file(), "Cargo-provided smoke plugin fixture is missing: {}", candidate.display());
+    candidate
 }
 
-fn plugin_path_env() -> Result<String> {
-    let dir = target_dir();
-    if !dir.exists() {
-        return Err(anyhow!("workspace target/debug not found: {}", dir.display()));
-    }
-    Ok(dir.to_string_lossy().to_string())
+fn plugin_path_env() -> String {
+    ensure_plugin_binary().parent().unwrap_or_else(|| Path::new(".")).to_string_lossy().into_owned()
 }
 
 fn run_plugin_command(args: &[&str]) -> Result<Value> {
-    let plugin_path = plugin_path_env()?;
+    let plugin_path = plugin_path_env();
     let harness = CliHarness::new()?;
     harness.run_json_ok_with_env(args, &[("ANIMUS_PLUGIN_PATH", plugin_path.as_str())])
 }
 
 #[test]
 fn plugin_list_discovers_smoke_plugin() -> Result<()> {
-    ensure_plugin_binary("animus-plugin-smoke")?;
+    ensure_plugin_binary();
 
     let response = run_plugin_command(&["plugin", "list"])?;
     let plugins = response
@@ -87,8 +66,8 @@ fn plugin_list_discovers_smoke_plugin() -> Result<()> {
 
 #[test]
 fn plugin_info_completes_handshake_for_smoke() -> Result<()> {
-    ensure_plugin_binary("animus-plugin-smoke")?;
-    let response = run_plugin_command(&["plugin", "info", "--name", "animus-plugin-smoke"])?;
+    ensure_plugin_binary();
+    let response = run_plugin_command(&["plugin", "info", "animus-plugin-smoke"])?;
     let init = response.pointer("/data/initialize").context("initialize block missing")?;
     assert_eq!(
         init.pointer("/plugin_info/name").and_then(Value::as_str),
@@ -111,7 +90,7 @@ fn plugin_info_completes_handshake_for_smoke() -> Result<()> {
 
 #[test]
 fn plugin_ping_round_trips() -> Result<()> {
-    ensure_plugin_binary("animus-plugin-smoke")?;
+    ensure_plugin_binary();
     let response = run_plugin_command(&["plugin", "ping", "--name", "animus-plugin-smoke"])?;
     assert_eq!(response.pointer("/data/ok").and_then(Value::as_bool), Some(true));
     Ok(())
@@ -119,7 +98,7 @@ fn plugin_ping_round_trips() -> Result<()> {
 
 #[test]
 fn plugin_call_dispatches_smoke_subject_get() -> Result<()> {
-    ensure_plugin_binary("animus-plugin-smoke")?;
+    ensure_plugin_binary();
     let response = run_plugin_command(&[
         "plugin",
         "call",
@@ -146,10 +125,10 @@ fn plugin_call_dispatches_smoke_subject_get() -> Result<()> {
 
 #[test]
 fn plugin_info_for_unknown_plugin_returns_not_found() -> Result<()> {
-    let plugin_path = plugin_path_env()?;
+    let plugin_path = plugin_path_env();
     let harness = CliHarness::new()?;
     let (payload, status) = harness.run_json_err_with_exit_and_env(
-        &["plugin", "info", "--name", "animus-plugin-does-not-exist"],
+        &["plugin", "info", "animus-plugin-does-not-exist"],
         &[("ANIMUS_PLUGIN_PATH", plugin_path.as_str())],
     )?;
     assert_eq!(status, 3, "missing plugin should map to not_found exit code");

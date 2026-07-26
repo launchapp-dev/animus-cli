@@ -17,6 +17,23 @@ path = "src/bin/animus_mcp_proxy.rs"
 name = "animus-hook"
 path = "src/bin/animus_hook.rs"
 
+# Hermetic binaries used only by the plugin E2E integration tests. Keeping the
+# fixtures in this package lets Cargo provide CARGO_BIN_EXE_* paths from a fresh
+# checkout instead of relying on separately cloned or pre-built repositories.
+[[bin]]
+name = "animus-plugin-smoke"
+path = "tests/fixtures/animus_plugin_smoke.rs"
+test = false
+bench = false
+doc = false
+
+[[bin]]
+name = "animus-provider-mock"
+path = "tests/fixtures/animus_provider_mock.rs"
+test = false
+bench = false
+doc = false
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -28,6 +45,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-ut
 orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-logging = { path = "../orchestrator-logging" }
 orchestrator-plugin-host = { workspace = true }
+animus-plugin-runtime = { path = "../animus-plugin-runtime" }
 animus-plugin-protocol = { workspace = true }
 # v0.7 TASK-166 Phase 2: environment wire types (EnvironmentSpec /
 # HarnessCommand / ExecStream) for the agent-run env-exec seam in
