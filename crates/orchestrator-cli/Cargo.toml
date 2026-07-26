@@ -1,6 +1,6 @@
 [package]
 name = "orchestrator-cli"
-version = "0.7.0-rc.28"
+version = "0.7.0-rc.29"
 edition = "2021"
 license = "Elastic-2.0"
 default-run = "animus"
