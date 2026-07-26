@@ -83,7 +83,7 @@ graph TB
 | Services | `orchestrator-core`, `orchestrator-config` | Bootstrap, config, workflow config, and file-backed state mutation APIs |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `animus-mcp-oauth` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and protected MCP OAuth proxy/token handling |
 | Providers | `orchestrator-plugin-host::session`, external `launchapp-dev/animus-provider-oai-agent` plugin | Provider plugin sessions and the OpenAI-compatible runner binary resolved from installed plugins |
-| Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
+| Plugins | `orchestrator-plugin-host`, `animus-plugin-runtime`, external `animus-plugin-protocol` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
 | Support | `orchestrator-logging`, external `protocol` dependency | Tracing, log plumbing, shared types, config, and repository-scope helpers |
 
 ## Startup Flow

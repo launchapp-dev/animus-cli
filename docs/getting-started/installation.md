@@ -17,6 +17,8 @@ if you are upgrading from an earlier v0.4.x.
 
 Use the installer published from `launchapp-dev/animus-cli`:
 
+Current workspace CLI version: **v0.7.0-rc.30**.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 animus plugin install-defaults
@@ -26,7 +28,7 @@ Options:
 
 ```bash
 # Install a specific release
-ANIMUS_VERSION=v0.6.33 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.7.0-rc.30 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Install into a custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
