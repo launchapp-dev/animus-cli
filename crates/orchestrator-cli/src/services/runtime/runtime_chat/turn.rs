@@ -492,8 +492,19 @@ async fn run_turn_inner(
         .as_ref()
         .map(|op| op.assistant_message_id().to_string())
         .unwrap_or_else(|| format!("msg-{}", uuid::Uuid::new_v4()));
-    let turn =
-        finish_turn(producer, store, sink, &ctx, meta, user_seq, &assistant_message_id, operation_id.as_deref()).await;
+    let assistant_append_fence = operation.as_ref().map(|op| op.assistant_append_fence());
+    let turn = finish_turn(
+        producer,
+        store,
+        sink,
+        &ctx,
+        meta,
+        user_seq,
+        &assistant_message_id,
+        operation_id.as_deref(),
+        assistant_append_fence.as_ref(),
+    )
+    .await;
 
     match turn {
         Ok((assistant_seq, session_id)) => {
@@ -577,6 +588,7 @@ async fn finish_turn(
     user_seq: u64,
     assistant_message_id: &str,
     operation_id: Option<&str>,
+    operation_fence: Option<&animus_plugin_protocol::conversation_store::ConversationOperationAppendFence>,
 ) -> Result<(u64, Option<String>)> {
     // (2) Resume-vs-replay decision. A stored session_id is only valid for
     // the tool that issued it — a tool change forces replay. A backend that
@@ -663,7 +675,7 @@ async fn finish_turn(
 
     // (4) Persist the assistant message and capture continuity pointer.
     let assistant_seq = meta.message_count;
-    store.append_message(
+    store.append_assistant_message(
         ctx.conversation_id,
         &ChatMessage {
             id: Some(assistant_message_id.to_string()),
@@ -677,6 +689,7 @@ async fn finish_turn(
             cost_usd: output.cost_usd,
             blocks: output.blocks.clone(),
         },
+        operation_fence,
     )?;
     meta.message_count += 1;
 

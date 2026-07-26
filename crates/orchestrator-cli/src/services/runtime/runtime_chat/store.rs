@@ -305,6 +305,17 @@ pub(crate) trait ConversationStore: Send + Sync {
     }
     /// Append a turn to the conversation's event log.
     fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()>;
+    /// Append an assistant turn, optionally fenced by a shared operation
+    /// lease. The local file store delegates to its ordinary append path
+    /// because it does not advertise multi-host operation authority.
+    fn append_assistant_message(
+        &self,
+        id: &str,
+        message: &ChatMessage,
+        _operation_fence: Option<&animus_plugin_protocol::conversation_store::ConversationOperationAppendFence>,
+    ) -> Result<()> {
+        self.append_message(id, message)
+    }
     /// Read the full ordered turn history. Used for `chat get` and for the
     /// full-history fallback replay.
     fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>>;

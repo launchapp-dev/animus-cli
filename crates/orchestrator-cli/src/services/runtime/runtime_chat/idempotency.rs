@@ -119,6 +119,16 @@ impl ChatTurnOperation {
         &self.claim.assistant_message_id
     }
 
+    pub(crate) fn assistant_append_fence(
+        &self,
+    ) -> animus_plugin_protocol::conversation_store::ConversationOperationAppendFence {
+        animus_plugin_protocol::conversation_store::ConversationOperationAppendFence {
+            caller_key: self.claim.request().caller_key.clone(),
+            operation_id: self.claim.operation_id.clone(),
+            lease_token: self.claim.lease_token().to_string(),
+        }
+    }
+
     pub(crate) fn bind_execution_hash(&mut self, execution_hash: &str) -> Result<ExecutionHashBinding> {
         if self.claim.execution_hash.as_deref().is_some_and(|stored| stored != execution_hash) {
             return Ok(ExecutionHashBinding::Drifted);
@@ -434,5 +444,39 @@ mod tests {
         let changed = effective_request_hash(serde_json::json!({"a": {"x": 9, "y": 1}, "b": 2})).unwrap();
         assert_eq!(first, reordered);
         assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn assistant_append_fence_uses_exact_claim_identity() {
+        let request = orchestrator_core::ChatOperationRequest {
+            project_scope: "repo-scope".to_string(),
+            workspace_id: "tenant-a".to_string(),
+            actor_id: "alice".to_string(),
+            conversation_id: "conv-1".to_string(),
+            caller_key: "request-42".to_string(),
+            request_hash: "intent-hash".to_string(),
+        };
+        let claim = ChatOperationClaim::from_authority(
+            request,
+            "operation-7".to_string(),
+            "user-message-1".to_string(),
+            "assistant-message-1".to_string(),
+            ChatOperationStatus::UserAccepted,
+            Some(0),
+            Some("execution-hash".to_string()),
+            "secret-lease-token".to_string(),
+            4_000_000_000,
+            false,
+        )
+        .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let operation = ChatTurnOperation::new(
+            ChatOperationAuthority::Local(ChatOperationStore::at_path(temp.path().join("operations.db"), "repo-scope")),
+            Box::new(claim),
+        );
+        let fence = operation.assistant_append_fence();
+        assert_eq!(fence.caller_key, "request-42");
+        assert_eq!(fence.operation_id, "operation-7");
+        assert_eq!(fence.lease_token, "secret-lease-token");
     }
 }

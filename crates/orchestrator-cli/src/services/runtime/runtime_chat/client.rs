@@ -37,16 +37,16 @@ use super::store::{
 const CONVERSATION_STORE_KIND: &str = "conversation_store";
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const SHARED_OPERATION_CAPABILITY: &str = "conversation_operations_shared_v1";
-pub(crate) const FENCED_APPEND_CAPABILITY: &str = "conversation_operation_fenced_append_v1";
+pub(crate) const SHARED_OPERATION_CAPABILITY: &str = proto::CAPABILITY_CONVERSATION_OPERATIONS_SHARED_V1;
+pub(crate) const FENCED_APPEND_CAPABILITY: &str = proto::CAPABILITY_CONVERSATION_OPERATION_FENCED_APPEND_V1;
 const REQUIRED_SHARED_OPERATION_METHODS: [&str; 7] = [
-    "conversation/operation_begin",
-    "conversation/operation_load",
-    "conversation/operation_renew",
-    "conversation/operation_bind_execution",
-    "conversation/operation_release",
-    "conversation/operation_accept_user",
-    "conversation/operation_terminalize",
+    proto::METHOD_CONVERSATION_OPERATION_BEGIN,
+    proto::METHOD_CONVERSATION_OPERATION_LOAD,
+    proto::METHOD_CONVERSATION_OPERATION_RENEW,
+    proto::METHOD_CONVERSATION_OPERATION_BIND_EXECUTION,
+    proto::METHOD_CONVERSATION_OPERATION_RELEASE,
+    proto::METHOD_CONVERSATION_OPERATION_ACCEPT_USER,
+    proto::METHOD_CONVERSATION_OPERATION_TERMINALIZE,
 ];
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
@@ -176,11 +176,18 @@ fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Resul
                     .await?;
                 let _: BoundConversationMetaResponse = serde_json::from_value(value)?;
 
-                let operation_read = BoundOperationKey {
-                    scope: bound_scope(&project_root, &actor),
-                    conversation_id: conversation_id.to_string(),
-                    caller_key: "__animus_readiness_probe__".to_string(),
-                    as_user: actor.user_id.clone(),
+                let scope = bound_scope(&project_root, &actor);
+                let operation_read = proto::ConversationOperationLoadRequest {
+                    key: proto::ConversationOperationKey {
+                        scope: proto::ConversationScope {
+                            tenant_id: Some(scope.tenant_id),
+                            project_root: scope.project_root,
+                            repo_scope: scope.repo_scope,
+                        },
+                        conversation_id: conversation_id.to_string(),
+                        caller_key: "__animus_readiness_probe__".to_string(),
+                        as_user: Some(actor.user_id.clone()),
+                    },
                 };
                 let operation_params = bind_actor_to_params(&actor, &operation_read)?;
                 match host
@@ -188,7 +195,7 @@ fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Resul
                     .await
                 {
                     Ok(value) => {
-                        let _: BoundOperationLoadResponse = serde_json::from_value(value)?;
+                        let _: proto::ConversationOperationLoadResponse = serde_json::from_value(value)?;
                     }
                     // A backend may authorize the conversation before loading
                     // its operation row. The deliberately missing conversation
@@ -457,6 +464,18 @@ impl ConversationStore for ConversationStoreClient {
         }
     }
 
+    fn append_assistant_message(
+        &self,
+        id: &str,
+        message: &ChatMessage,
+        operation_fence: Option<&proto::ConversationOperationAppendFence>,
+    ) -> Result<()> {
+        match self {
+            Self::File(store) => store.append_message(id, message),
+            Self::Plugin(plugin) => plugin.append_message_fenced(id, message, operation_fence),
+        }
+    }
+
     fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>> {
         match self {
             Self::File(store) => store.load_messages(id),
@@ -653,15 +672,6 @@ struct BoundConversationIdRequest {
 }
 
 #[derive(serde::Serialize)]
-struct BoundConversationAppendMessageRequest {
-    #[serde(flatten)]
-    scope: BoundConversationScope,
-    id: String,
-    message: proto::ChatMessage,
-    as_user: String,
-}
-
-#[derive(serde::Serialize)]
 struct BoundConversationListRequest {
     #[serde(flatten)]
     scope: BoundConversationScope,
@@ -673,146 +683,50 @@ struct BoundConversationListResponse {
     conversations: Vec<ConversationSummary>,
 }
 
-const METHOD_OPERATION_BEGIN: &str = "conversation/operation_begin";
-const METHOD_OPERATION_LOAD: &str = "conversation/operation_load";
-const METHOD_OPERATION_RENEW: &str = "conversation/operation_renew";
-const METHOD_OPERATION_BIND_EXECUTION: &str = "conversation/operation_bind_execution";
-const METHOD_OPERATION_RELEASE: &str = "conversation/operation_release";
-const METHOD_OPERATION_ACCEPT_USER: &str = "conversation/operation_accept_user";
-const METHOD_OPERATION_TERMINALIZE: &str = "conversation/operation_terminalize";
+const METHOD_OPERATION_BEGIN: &str = proto::METHOD_CONVERSATION_OPERATION_BEGIN;
+const METHOD_OPERATION_LOAD: &str = proto::METHOD_CONVERSATION_OPERATION_LOAD;
+const METHOD_OPERATION_RENEW: &str = proto::METHOD_CONVERSATION_OPERATION_RENEW;
+const METHOD_OPERATION_BIND_EXECUTION: &str = proto::METHOD_CONVERSATION_OPERATION_BIND_EXECUTION;
+const METHOD_OPERATION_RELEASE: &str = proto::METHOD_CONVERSATION_OPERATION_RELEASE;
+const METHOD_OPERATION_ACCEPT_USER: &str = proto::METHOD_CONVERSATION_OPERATION_ACCEPT_USER;
+const METHOD_OPERATION_TERMINALIZE: &str = proto::METHOD_CONVERSATION_OPERATION_TERMINALIZE;
 
-#[derive(Clone, serde::Serialize)]
-struct BoundOperationKey {
-    #[serde(flatten)]
-    scope: BoundConversationScope,
-    conversation_id: String,
-    caller_key: String,
-    as_user: String,
-}
-
-#[derive(serde::Serialize)]
-struct BoundOperationBeginRequest {
-    #[serde(flatten)]
-    key: BoundOperationKey,
-    request_hash: String,
-}
-
-#[derive(serde::Serialize)]
-struct BoundOperationLeaseRequest {
-    #[serde(flatten)]
-    key: BoundOperationKey,
-    operation_id: String,
-    lease_token: String,
-}
-
-#[derive(serde::Serialize)]
-struct BoundOperationBindRequest {
-    #[serde(flatten)]
-    lease: BoundOperationLeaseRequest,
-    execution_hash: String,
-    allow_rebind: bool,
-}
-
-#[derive(serde::Serialize)]
-struct BoundOperationAcceptRequest {
-    #[serde(flatten)]
-    lease: BoundOperationLeaseRequest,
-    user_seq: u64,
-}
-
-#[derive(serde::Serialize)]
-struct BoundOperationTerminalRequest {
-    #[serde(flatten)]
-    lease: BoundOperationLeaseRequest,
-    status: ChatOperationStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    assistant_seq: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_message: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum BoundOperationBeginOutcome {
-    Acquired,
-    Replay,
-    InProgress,
-    Conflict,
-}
-
-#[derive(Clone, Debug, serde::Deserialize)]
-struct BoundOperation {
-    operation_id: String,
-    conversation_id: String,
-    caller_key: String,
-    user_message_id: String,
-    assistant_message_id: String,
-    status: ChatOperationStatus,
-    execution_hash: Option<String>,
-    user_seq: Option<u64>,
-    assistant_seq: Option<u64>,
-    error_code: Option<String>,
-    error_message: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct BoundOperationClaim {
-    #[serde(flatten)]
-    operation: BoundOperation,
-    lease_token: String,
-    lease_expires_at: i64,
-    #[serde(default)]
-    recovered: bool,
-}
-
-impl std::fmt::Debug for BoundOperationClaim {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("BoundOperationClaim")
-            .field("operation", &self.operation)
-            .field("lease_token", &"<redacted>")
-            .field("lease_expires_at", &self.lease_expires_at)
-            .field("recovered", &self.recovered)
-            .finish()
+fn operation_status_from_protocol(status: proto::ConversationOperationStatus) -> ChatOperationStatus {
+    match status {
+        proto::ConversationOperationStatus::Pending => ChatOperationStatus::Pending,
+        proto::ConversationOperationStatus::UserAccepted => ChatOperationStatus::UserAccepted,
+        proto::ConversationOperationStatus::Completed => ChatOperationStatus::Completed,
+        proto::ConversationOperationStatus::AssistantFailed => ChatOperationStatus::AssistantFailed,
+        proto::ConversationOperationStatus::AssistantInterrupted => ChatOperationStatus::AssistantInterrupted,
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct BoundOperationBeginResponse {
-    outcome: BoundOperationBeginOutcome,
-    claim: Option<BoundOperationClaim>,
-    operation: Option<BoundOperation>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct BoundOperationLoadResponse {
-    operation: Option<BoundOperation>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct BoundOperationMutationResponse {
-    changed: bool,
-}
-
-impl BoundOperation {
-    fn receipt(self) -> Result<ChatOperationReceipt> {
-        if !self.status.is_terminal() {
-            return Err(anyhow!("shared chat operation receipt is not terminal"));
-        }
-        Ok(ChatOperationReceipt {
-            operation_id: self.operation_id,
-            conversation_id: self.conversation_id,
-            user_message_id: self.user_message_id,
-            user_seq: self.user_seq,
-            assistant_message_id: self.assistant_message_id,
-            assistant_seq: self.assistant_seq,
-            status: self.status,
-            error_code: self.error_code,
-            error_message: self.error_message,
-        })
+fn operation_status_to_protocol(status: ChatOperationStatus) -> proto::ConversationOperationStatus {
+    match status {
+        ChatOperationStatus::Pending => proto::ConversationOperationStatus::Pending,
+        ChatOperationStatus::UserAccepted => proto::ConversationOperationStatus::UserAccepted,
+        ChatOperationStatus::Completed => proto::ConversationOperationStatus::Completed,
+        ChatOperationStatus::AssistantFailed => proto::ConversationOperationStatus::AssistantFailed,
+        ChatOperationStatus::AssistantInterrupted => proto::ConversationOperationStatus::AssistantInterrupted,
     }
+}
+
+fn operation_receipt(operation: proto::ConversationOperation) -> Result<ChatOperationReceipt> {
+    let status = operation_status_from_protocol(operation.status);
+    if !status.is_terminal() {
+        return Err(anyhow!("shared chat operation receipt is not terminal"));
+    }
+    Ok(ChatOperationReceipt {
+        operation_id: operation.operation_id,
+        conversation_id: operation.conversation_id,
+        user_message_id: operation.user_message_id,
+        user_seq: operation.user_seq,
+        assistant_message_id: operation.assistant_message_id,
+        assistant_seq: operation.assistant_seq,
+        status,
+        error_code: operation.error_code,
+        error_message: operation.error_message,
+    })
 }
 
 /// Cloneable RPC authority used by the provider heartbeat thread. It carries
@@ -848,30 +762,39 @@ impl SharedOperationClient {
         bound_scope(&self.project_root, &self.actor)
     }
 
-    fn key(&self, request: &ChatOperationRequest) -> Result<BoundOperationKey> {
+    fn key(&self, request: &ChatOperationRequest) -> Result<proto::ConversationOperationKey> {
         let tenant = self.actor.tenant_id.as_deref().unwrap_or_default();
         if request.workspace_id != tenant || request.actor_id != self.actor.user_id {
             return Err(crate::invalid_input_error(
                 "shared chat operation scope must match the authenticated conversation actor",
             ));
         }
-        Ok(BoundOperationKey {
-            scope: self.scope(),
+        let scope = self.scope();
+        Ok(proto::ConversationOperationKey {
+            scope: proto::ConversationScope {
+                tenant_id: Some(scope.tenant_id),
+                project_root: scope.project_root,
+                repo_scope: scope.repo_scope,
+            },
             conversation_id: request.conversation_id.clone(),
             caller_key: request.caller_key.clone(),
-            as_user: self.actor.user_id.clone(),
+            as_user: Some(self.actor.user_id.clone()),
         })
     }
 
-    fn lease_request(&self, claim: &ChatOperationClaim) -> Result<BoundOperationLeaseRequest> {
-        Ok(BoundOperationLeaseRequest {
+    fn renew_request(&self, claim: &ChatOperationClaim) -> Result<proto::ConversationOperationRenewRequest> {
+        Ok(proto::ConversationOperationRenewRequest {
             key: self.key(claim.request())?,
             operation_id: claim.operation_id.clone(),
             lease_token: claim.lease_token().to_string(),
         })
     }
 
-    fn validate_response_key(&self, request: &ChatOperationRequest, operation: &BoundOperation) -> Result<()> {
+    fn validate_response_key(
+        &self,
+        request: &ChatOperationRequest,
+        operation: &proto::ConversationOperation,
+    ) -> Result<()> {
         // Re-validate actor/tenant assertions as well as the durable key. A
         // compromised or buggy shared backend must never redirect a replay or
         // load across a conversation/key boundary.
@@ -884,18 +807,25 @@ impl SharedOperationClient {
 
     pub(crate) fn begin(&self, request: ChatOperationRequest) -> Result<ChatOperationBegin> {
         request.validate()?;
-        let wire = BoundOperationBeginRequest { key: self.key(&request)?, request_hash: request.request_hash.clone() };
-        let response: BoundOperationBeginResponse = self.call(METHOD_OPERATION_BEGIN, &wire)?;
+        let key = self.key(&request)?;
+        let wire = proto::ConversationOperationBeginRequest {
+            scope: key.scope,
+            conversation_id: key.conversation_id,
+            caller_key: key.caller_key,
+            request_hash: request.request_hash.clone(),
+            as_user: key.as_user,
+        };
+        let response: proto::ConversationOperationBeginResponse = self.call(METHOD_OPERATION_BEGIN, &wire)?;
         match response.outcome {
-            BoundOperationBeginOutcome::InProgress => Ok(ChatOperationBegin::InProgress),
-            BoundOperationBeginOutcome::Conflict => Ok(ChatOperationBegin::Conflict),
-            BoundOperationBeginOutcome::Replay => {
+            proto::ConversationOperationBeginOutcome::InProgress => Ok(ChatOperationBegin::InProgress),
+            proto::ConversationOperationBeginOutcome::Conflict => Ok(ChatOperationBegin::Conflict),
+            proto::ConversationOperationBeginOutcome::Replay => {
                 let operation =
                     response.operation.ok_or_else(|| anyhow!("shared operation replay omitted operation"))?;
                 self.validate_response_key(&request, &operation)?;
-                Ok(ChatOperationBegin::Replay(Box::new(operation.receipt()?)))
+                Ok(ChatOperationBegin::Replay(Box::new(operation_receipt(operation)?)))
             }
-            BoundOperationBeginOutcome::Acquired => {
+            proto::ConversationOperationBeginOutcome::Acquired => {
                 let claim = response.claim.ok_or_else(|| anyhow!("shared operation acquire omitted claim"))?;
                 self.validate_response_key(&request, &claim.operation)?;
                 Ok(ChatOperationBegin::Acquired(Box::new(ChatOperationClaim::from_authority(
@@ -903,7 +833,7 @@ impl SharedOperationClient {
                     claim.operation.operation_id,
                     claim.operation.user_message_id,
                     claim.operation.assistant_message_id,
-                    claim.operation.status,
+                    operation_status_from_protocol(claim.operation.status),
                     claim.operation.user_seq,
                     claim.operation.execution_hash,
                     claim.lease_token,
@@ -915,8 +845,8 @@ impl SharedOperationClient {
     }
 
     pub(crate) fn renew(&self, claim: &ChatOperationClaim) -> Result<bool> {
-        let response: BoundOperationMutationResponse =
-            self.call(METHOD_OPERATION_RENEW, &self.lease_request(claim)?)?;
+        let response: proto::ConversationOperationMutationResponse =
+            self.call(METHOD_OPERATION_RENEW, &self.renew_request(claim)?)?;
         Ok(response.changed)
     }
 
@@ -926,12 +856,16 @@ impl SharedOperationClient {
         execution_hash: &str,
         allow_rebind: bool,
     ) -> Result<bool> {
-        let request = BoundOperationBindRequest {
-            lease: self.lease_request(claim)?,
+        let lease = self.renew_request(claim)?;
+        let request = proto::ConversationOperationBindExecutionRequest {
+            key: lease.key,
+            operation_id: lease.operation_id,
+            lease_token: lease.lease_token,
             execution_hash: execution_hash.to_string(),
             allow_rebind,
         };
-        let response: BoundOperationMutationResponse = self.call(METHOD_OPERATION_BIND_EXECUTION, &request)?;
+        let response: proto::ConversationOperationMutationResponse =
+            self.call(METHOD_OPERATION_BIND_EXECUTION, &request)?;
         if response.changed {
             claim.execution_hash = Some(execution_hash.to_string());
         }
@@ -939,14 +873,26 @@ impl SharedOperationClient {
     }
 
     pub(crate) fn release(&self, claim: &ChatOperationClaim) -> Result<bool> {
-        let response: BoundOperationMutationResponse =
-            self.call(METHOD_OPERATION_RELEASE, &self.lease_request(claim)?)?;
+        let lease = self.renew_request(claim)?;
+        let request = proto::ConversationOperationReleaseRequest {
+            key: lease.key,
+            operation_id: lease.operation_id,
+            lease_token: lease.lease_token,
+        };
+        let response: proto::ConversationOperationMutationResponse = self.call(METHOD_OPERATION_RELEASE, &request)?;
         Ok(response.changed)
     }
 
     pub(crate) fn accept_user(&self, claim: &mut ChatOperationClaim, user_seq: u64) -> Result<bool> {
-        let request = BoundOperationAcceptRequest { lease: self.lease_request(claim)?, user_seq };
-        let response: BoundOperationMutationResponse = self.call(METHOD_OPERATION_ACCEPT_USER, &request)?;
+        let lease = self.renew_request(claim)?;
+        let request = proto::ConversationOperationAcceptUserRequest {
+            key: lease.key,
+            operation_id: lease.operation_id,
+            lease_token: lease.lease_token,
+            user_seq,
+        };
+        let response: proto::ConversationOperationMutationResponse =
+            self.call(METHOD_OPERATION_ACCEPT_USER, &request)?;
         if response.changed {
             claim.status = ChatOperationStatus::UserAccepted;
             claim.user_seq = Some(user_seq);
@@ -962,22 +908,27 @@ impl SharedOperationClient {
         error_code: Option<&str>,
         error_message: Option<&str>,
     ) -> Result<bool> {
-        let request = BoundOperationTerminalRequest {
-            lease: self.lease_request(claim)?,
-            status,
+        let lease = self.renew_request(claim)?;
+        let request = proto::ConversationOperationTerminalizeRequest {
+            key: lease.key,
+            operation_id: lease.operation_id,
+            lease_token: lease.lease_token,
+            status: operation_status_to_protocol(status),
             assistant_seq,
             error_code: error_code.map(ToOwned::to_owned),
             error_message: error_message.map(ToOwned::to_owned),
         };
-        let response: BoundOperationMutationResponse = self.call(METHOD_OPERATION_TERMINALIZE, &request)?;
+        let response: proto::ConversationOperationMutationResponse =
+            self.call(METHOD_OPERATION_TERMINALIZE, &request)?;
         Ok(response.changed)
     }
 
     pub(crate) fn receipt(&self, claim: &ChatOperationClaim) -> Result<ChatOperationReceipt> {
-        let response: BoundOperationLoadResponse = self.call(METHOD_OPERATION_LOAD, &self.key(claim.request())?)?;
+        let request = proto::ConversationOperationLoadRequest { key: self.key(claim.request())? };
+        let response: proto::ConversationOperationLoadResponse = self.call(METHOD_OPERATION_LOAD, &request)?;
         let operation = response.operation.ok_or_else(|| anyhow!("shared chat operation disappeared"))?;
         self.validate_response_key(claim.request(), &operation)?;
-        operation.receipt()
+        operation_receipt(operation)
     }
 
     fn call<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
@@ -1081,11 +1032,26 @@ impl PluginConversationStore {
     }
 
     fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()> {
-        let request = BoundConversationAppendMessageRequest {
-            scope: self.scope(),
+        self.append_message_fenced(id, message, None)
+    }
+
+    fn append_message_fenced(
+        &self,
+        id: &str,
+        message: &ChatMessage,
+        operation_fence: Option<&proto::ConversationOperationAppendFence>,
+    ) -> Result<()> {
+        let scope = self.scope();
+        let request = proto::ConversationAppendMessageRequest {
+            scope: proto::ConversationScope {
+                tenant_id: Some(scope.tenant_id),
+                project_root: scope.project_root,
+                repo_scope: scope.repo_scope,
+            },
             id: id.to_string(),
             message: to_proto_message(message)?,
-            as_user: self.acting_user(),
+            operation_fence: operation_fence.cloned(),
+            as_user: Some(self.acting_user()),
         };
         let _: proto::ConversationAppendMessageResponse =
             self.call(proto::METHOD_CONVERSATION_APPEND_MESSAGE, &request)?;
@@ -1433,25 +1399,6 @@ mod tests {
         assert!(state.calls.iter().any(|(method, _)| method == METHOD_OPERATION_BIND_EXECUTION));
         assert!(state.calls.iter().any(|(method, _)| method == METHOD_OPERATION_ACCEPT_USER));
         assert!(state.calls.iter().any(|(method, _)| method == METHOD_OPERATION_TERMINALIZE));
-    }
-
-    #[test]
-    fn bound_claim_debug_redacts_lease_authority() {
-        let claim: BoundOperationClaim = serde_json::from_value(serde_json::json!({
-            "operation_id":"op-1",
-            "conversation_id":"conv-1",
-            "caller_key":"request-1",
-            "user_message_id":"msg-user-1",
-            "assistant_message_id":"msg-assistant-1",
-            "status":"pending",
-            "lease_token":"do-not-print-this-secret",
-            "lease_expires_at":4_000_000_000_i64,
-            "recovered":false
-        }))
-        .unwrap();
-        let debug = format!("{claim:?}");
-        assert!(!debug.contains("do-not-print-this-secret"));
-        assert!(debug.contains("<redacted>"));
     }
 
     #[test]

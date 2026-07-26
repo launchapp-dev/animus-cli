@@ -220,7 +220,7 @@ dependencies = [
 name = "animus-plugin-runtime"
 version = "0.1.0"
 dependencies = [
- "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18",
  "animus-session-backend",
  "anyhow",
  "async-trait",
@@ -248,7 +248,7 @@ version = "0.1.0"
 dependencies = [
  "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-environment-protocol",
- "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18",
  "anyhow",
  "async-trait",
  "chrono",
@@ -2823,7 +2823,7 @@ dependencies = [
  "animus-environment-protocol",
  "animus-log-storage-protocol",
  "animus-mcp-oauth",
- "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18",
  "animus-plugin-runtime",
  "animus-queue-protocol",
  "animus-runtime-shared",
@@ -2896,7 +2896,7 @@ dependencies = [
  "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-environment-protocol",
  "animus-journal-protocol",
- "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18",
  "anyhow",
  "argon2",
  "async-trait",
@@ -2935,7 +2935,7 @@ dependencies = [
  "animus-config-protocol",
  "animus-control-protocol",
  "animus-log-storage-protocol",
- "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18",
  "animus-runtime-shared",
  "animus-subject-protocol 0.1.16",
  "anyhow",
@@ -2984,7 +2984,7 @@ name = "orchestrator-plugin-host"
 version = "0.1.0"
 dependencies = [
  "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
- "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18",
  "animus-session-backend",
  "animus-subject-protocol 0.2.0",
  "anyhow",
