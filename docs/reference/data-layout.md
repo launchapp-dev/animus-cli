@@ -19,9 +19,10 @@ graph TD
         SC --> SCdb["workflow.db"]
         SC --> SCcore["core-state.json"]
         SC --> SCconf["config/*.v2.json + state-machines.v1.json"]
-        SC --> SCd["daemon/ (pm-config.json, daemon.log)"]
+        SC --> SCd["daemon/ (pm-config.json, daemon.log, daemon-state.json, daemon.pid)"]
+        SC --> SCchat["chat/ + docs/"]
         SC --> SCr["runs/ + artifacts/"]
-        SC --> SCst["state/ + logs/"]
+        SC --> SCst["state/ + logs/ + metrics/ + secrets/ + worktrees/"]
     end
 
     subgraph Machine["machine-wide — ~/.animus/"]
@@ -89,6 +90,8 @@ Mutable runtime state lives outside the repo:
 │   └── agent-runtime-config.v2.json
 ├── daemon/
 │   ├── daemon.log
+│   ├── daemon-state.json
+│   ├── daemon.pid
 │   └── pm-config.json
 ├── chat/
 │   └── <conversation-id>/
@@ -131,6 +134,9 @@ Key points:
 - `config/agent-runtime-config.v2.json` stores compiled agent runtime config when a compile/write
   flow persists it under the scoped runtime root
 - `daemon/pm-config.json` stores persisted daemon settings
+- `daemon/daemon-state.json` stores mutable daemon runtime state such as pause/shutdown flags and the last recorded daemon pid
+- `daemon/daemon.pid` is the liveness probe file for the current daemon process
+- `daemon/daemon.lock` and the top-level `control.sock` may appear as ephemeral daemon runtime coordination artifacts; they are intentionally omitted from the main layout above because they are not portable state
 - `chat/<conversation-id>/meta.json` stores the continuity pointer for a conversation, and `chat/<conversation-id>/messages.jsonl` stores the append-only portable transcript; assistant lines may include a `blocks` timeline for text, thinking, and tool activity
 - `daemon/daemon.log` is the autonomous daemon process log file
 - `logs/events.jsonl` stores redacted structured runtime events under the
@@ -235,6 +241,9 @@ Use Animus commands or Animus MCP tools instead.
 | `~/.animus/<repo-scope>/config/state-machines.v1.json` | Repo-scoped state-machine config |
 | `~/.animus/<repo-scope>/config/workflow-config.v2.json` | Compiled repo-scoped workflow config |
 | `~/.animus/<repo-scope>/config/agent-runtime-config.v2.json` | Compiled repo-scoped agent runtime config |
+| `~/.animus/<repo-scope>/daemon/pm-config.json` | Persisted daemon settings |
+| `~/.animus/<repo-scope>/daemon/daemon-state.json` | Mutable daemon runtime state snapshot |
+| `~/.animus/<repo-scope>/daemon/daemon.pid` | Live daemon pid hint / liveness file |
 | `~/.animus/<repo-scope>/daemon/daemon.log` | Autonomous daemon process log |
 | `~/.animus/<repo-scope>/logs/events.jsonl` | Redacted structured runtime event log |
 | `~/.animus/<repo-scope>/state/pack-selection.v1.json` | Repo-scoped pack selection state |

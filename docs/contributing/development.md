@@ -76,11 +76,11 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 ```bash
 npm install
 npm run docs:check-sync
-cargo test -p orchestrator-cli cli_reference_top_level_tree_matches_live_clap_commands -- --exact
-cargo test -p orchestrator-cli agents_guide_top_level_commands_match_live_clap_commands -- --exact
-cargo test -p orchestrator-cli crate_map_matches_live_workspace_members -- --exact
-cargo test -p orchestrator-cli mcp_reference_table_matches_live_builtin_tools -- --exact
-cargo test -p orchestrator-cli mcp_docs_publish_the_live_builtin_tool_count -- --exact
+cargo test -p orchestrator-cli cli_types::tests::cli_reference_top_level_tree_matches_live_clap_commands -- --exact
+cargo test -p orchestrator-cli cli_types::tests::agents_guide_top_level_commands_match_live_clap_commands -- --exact
+cargo test -p orchestrator-cli cli_types::tests::crate_map_matches_live_workspace_members -- --exact
+cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_reference_table_matches_live_builtin_tools -- --exact
+cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_docs_publish_the_live_builtin_tool_count -- --exact
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
@@ -104,22 +104,29 @@ pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper
 runs the sync check directly, uses the repo-local `vitepress` binary from
-`node_modules/.bin` for the site build, then prefers a repo-local or cached
-`vercel` binary before falling back to `npx vercel --yes --prod`. When it
-does need `npx`, it points npm at a temporary cache directory so the deploy
-command does not depend on a writable `~/.npm/`.
+`node_modules/.bin` for the site build, then prefers a directly installed
+`vercel` binary and falls back to `npx vercel --yes --prod` through
+`timeout`/`gtimeout`. The `npx` fallback points npm at a temporary cache
+directory so the deploy command does not depend on a writable `~/.npm/`.
+`npm run docs:build` and `npm run docs:deploy` both use the same helper. If
+VitePress hits the transient missing `.vitepress/.temp/*.js` render
+failure, that helper clears temp/cache state and retries the local build once
+before failing.
+The deploy timeout defaults to `300` seconds and can be raised with
+`ANIMUS_VERCEL_TIMEOUT_SECONDS=<seconds> npm run docs:deploy`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
-falling back to `npx`, it also assumes the runner can reach
-`registry.npmjs.org` to resolve `vercel`. In restricted environments, expect
-the deploy phase to fail once it needs fresh network access, even when the
-docs are otherwise in sync.
-If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` now also
-checks the active Node install's sibling `bin/`, common `nvm`/`volta`/`fnm`/
-`asdf` locations, and Homebrew paths before giving up. If none of those
-locations contain `npx`, the local sync/build preflight can still run when
-`node_modules` or a cached Vercel CLI is already installed, but the final
-Vercel deploy still cannot proceed without usable credentials and network.
+using the `npx` fallback, it also assumes the runner can reach
+`registry.npmjs.org` to
+resolve `vercel`. In restricted environments, expect the deploy phase to fail
+once it needs fresh network access, even when the docs are otherwise in sync.
+If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` also checks
+the repo-local `node_modules/.bin`, the active Node install's sibling `bin/`,
+common `nvm`/`volta`/`fnm`/`asdf` locations, and Homebrew paths before giving
+up. The same PATH search applies to a directly installed `vercel` binary
+before the script falls back to `npx`. If neither route is available, the
+final Vercel deploy cannot proceed. The script also requires `timeout` (GNU
+coreutils) or `gtimeout` to bound the Vercel deploy step.
 
 Protocol schema exports live at the repo root:
 

@@ -57,7 +57,7 @@ animus --as release-bot auth whoami
 
 (v0.5.9) Bypass hot-path read caches for this invocation.
 
-Animus caches three hot-path reads for performance:
+Animus currently wires `--no-cache` into three hot-path reads for performance:
 
 - **CI status cache** — file at `~/.animus/<repo-scope>/cache/ci-status.json`,
   default TTL 60s. Read by `animus status` to avoid re-running `gh run list`.
@@ -71,7 +71,9 @@ Animus caches three hot-path reads for performance:
 
 `--no-cache` skips the read step on all of the above for the current
 invocation. The on-disk caches stay in place; the next call without the flag
-will use them as normal.
+will use them as normal. The flag is invocation-scoped: it sets process-global
+toggles during CLI startup so downstream library code does not have to thread a
+cache-bypass parameter through every call site.
 
 Per-cache environment overrides:
 
@@ -79,6 +81,13 @@ Per-cache environment overrides:
 - `ANIMUS_CI_CACHE_TTL_SECS=<n>` — override the 60s default TTL.
 - `ANIMUS_DISABLE_WORKFLOW_CACHE=1` — disable the workflow compile cache
   (read + write).
+
+Related but separate cache controls:
+
+- `ANIMUS_DISABLE_PROJECT_ROOT_CACHE=1` disables the project-root resolver's
+  process-local cache. This is **not** currently toggled by `--no-cache`.
+- `ANIMUS_DISABLE_MANIFEST_CACHE=1` disables the plugin-host manifest cache.
+  This is also separate from the global CLI `--no-cache` flag.
 
 All caches are best-effort. Any deserialize, I/O, hash, or schema mismatch
 silently falls through to a fresh live read so a corrupt cache file never

@@ -17,6 +17,18 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  docs-sync:
+    name: docs-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Check docs/code sync
+        run: bash scripts/check-doc-sync.sh
+
   rustfmt:
     name: rustfmt
     runs-on: ubuntu-latest

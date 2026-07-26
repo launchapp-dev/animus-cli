@@ -9,7 +9,7 @@ Complete reference of every `animus` command, subcommand, and key flag. This tre
 | `--json` | Machine-readable JSON output (`animus.cli.v1` envelope) |
 | `--project-root <PATH>` | Override project root resolution for the current command |
 | `--as <PRINCIPAL>` | Impersonate a declared principal for daemon-backed operations. Honor-system on local sockets, warned loudly, accepted as-is when the active RBAC policy is `single-user`, and constrained by peer-credential checks under `enforce` |
-| `--no-cache` | (v0.5.9) Bypass hot-path read caches for this invocation. Mirrors `ANIMUS_DISABLE_CI_CACHE=1` and `ANIMUS_DISABLE_WORKFLOW_CACHE=1`. Caches remain best-effort and fall through to live source on any error |
+| `--no-cache` | (v0.5.9) Bypass the invocation-scoped hot-path read caches wired by the CLI: CI status, workflow compile, and daemon health snapshots. Caches remain best-effort and fall through to live source on any error |
 
 ### `--json` envelope coverage
 

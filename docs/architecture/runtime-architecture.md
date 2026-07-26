@@ -91,10 +91,14 @@ graph TB
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
 especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
-current runtime mixes workspace-wide `v0.1.24` config/session/provider pins,
-legacy CLI wire crates at `v0.1.13`, `animus-queue-protocol` /
-`animus-subject-protocol-v05` at `v0.5.10`, and
-`animus-workflow-runner-protocol` at `v0.5.3`.
+current runtime pins the main protocol family (`protocol`,
+`animus-config-protocol`, `animus-subject-protocol`,
+`animus-provider-protocol`, `animus-session-backend`,
+`animus-journal-protocol`, and `animus-actor`) to `v0.1.26`. The CLI-specific
+`animus-control-protocol`, `animus-log-storage-protocol`,
+`animus-subject-protocol-wire`, and `animus-workflow-runner-protocol` crates
+are also pinned to `v0.1.26`, while `animus-queue-protocol` and the separate
+`animus-subject-protocol-v05` compatibility line remain on `v0.5.10`.
 
 1. Parse global flags and top-level command in `orchestrator-cli`.
 2. Resolve the project root with this precedence:
@@ -124,16 +128,21 @@ Scoped runtime state in `~/.animus/<repo-scope>/`:
 - `core-state.json`
 - `resume-config.json`
 - `workflow.db`
+- `chat/`
 - `config/`
 - `daemon/`
 - `docs/`
 - `logs/`
-- `runner/`
+- `metrics/`
+- `runs/`
+- `artifacts/`
+- `secrets/`
 - `state/`
 - `worktrees/`
 
-Global state in `protocol::Config::global_config_dir()` includes credentials,
-daemon events, CLI tracker state, plugin registry, and runner sockets.
+Global state in `protocol::Config::global_config_dir()` includes
+`config.json`, `credentials.json`, `daemon-events.jsonl`, `cli-tracker.json`,
+and `runner-sessions/`.
 
 `<repo-scope>` is derived from the sanitized repository name plus a 12-character
 SHA256 prefix of the canonical root. Managed worktrees live under the scoped

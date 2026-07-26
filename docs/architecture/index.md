@@ -6,10 +6,15 @@ helpers, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,
 and web UI integrations run as external stdio plugins rather than in-process
 desktop or web shell frameworks. The workspace also depends on external
-`launchapp-dev/animus-protocol` crates. The current pins mix the workspace-wide
-`v0.1.21` config/session/provider set, legacy CLI wire crates at `v0.1.13`,
-`animus-queue-protocol` / `animus-subject-protocol-v05` at `v0.5.10`, and
-`animus-workflow-runner-protocol` at `v0.5.3`.
+`launchapp-dev/animus-protocol` crates. The root `Cargo.toml` now pins the main
+protocol family (`protocol`, `animus-config-protocol`,
+`animus-subject-protocol`, `animus-provider-protocol`,
+`animus-session-backend`, `animus-journal-protocol`, and `animus-actor`) to
+the unified `v0.1.26` tag; `crates/orchestrator-cli/Cargo.toml` also pins the
+CLI-side `animus-control-protocol`, `animus-log-storage-protocol`,
+`animus-subject-protocol-wire`, and `animus-workflow-runner-protocol` crates to
+`v0.1.26`, while `animus-queue-protocol` and the separate
+`animus-subject-protocol-v05` compatibility line remain on `v0.5.10`.
 
 Trust code and generated references over hand-maintained summaries when they
 disagree. Start with:
@@ -120,7 +125,10 @@ graph TB
     PHOST --> WEBUI
 ```
 
-The plugin extraction is complete: 18 standalone repositories at `launchapp-dev` cover the protocol, providers, subject backends, transports, web UI, triggers, log storage, the conformance testkit, and release tooling.
+The plugin extraction is complete: provider, subject, transport, trigger, web
+UI, and workflow-runner integrations now live out-of-tree under
+`launchapp-dev`, while this workspace stays focused on the Rust kernel and its
+shared runtime plumbing.
 
 ## Architecture Decision Records
 
