@@ -1428,11 +1428,8 @@ mod export_tests {
             "application_chat_controls": {},
         }))
         .unwrap();
-        application_controls_policy_precondition(
-            &schema_only,
-            Some(&("reviewer".to_string(), explicit_policy)),
-        )
-        .unwrap();
+        application_controls_policy_precondition(&schema_only, Some(&("reviewer".to_string(), explicit_policy)))
+            .unwrap();
     }
 
     #[test]
