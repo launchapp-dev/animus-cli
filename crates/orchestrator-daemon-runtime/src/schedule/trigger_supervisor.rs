@@ -732,8 +732,23 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
 
-    fn write_plugin_trigger_config(project_root: &Path, trigger_id: &str) {
+    fn write_plugin_trigger_config(
+        project_root: &Path,
+        trigger_id: &str,
+    ) -> orchestrator_config::workflow_config::config_source_client::test_seam::TestBaseGuard {
         let mut config = orchestrator_core::builtin_workflow_config();
+        config.phase_catalog.insert(
+            "requirements".to_string(),
+            orchestrator_core::PhaseUiDefinition {
+                label: "requirements".to_string(),
+                description: String::new(),
+                category: String::new(),
+                icon: None,
+                docs_url: None,
+                tags: Vec::new(),
+                visible: true,
+            },
+        );
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "plugin-flow".to_string(),
             name: "Plugin Flow".to_string(),
@@ -754,6 +769,7 @@ mod tests {
             input: None,
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("write workflow config");
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root)
     }
 
     #[test]
@@ -761,6 +777,18 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
         let mut config = orchestrator_core::builtin_workflow_config();
+        config.phase_catalog.insert(
+            "requirements".to_string(),
+            orchestrator_core::PhaseUiDefinition {
+                label: "requirements".to_string(),
+                description: String::new(),
+                category: String::new(),
+                icon: None,
+                docs_url: None,
+                tags: Vec::new(),
+                visible: true,
+            },
+        );
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "plugin-flow".to_string(),
             name: "Plugin Flow".to_string(),
@@ -797,6 +825,8 @@ mod tests {
             input: None,
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("write workflow config");
+        let _seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root);
 
         let payload = collect_plugin_trigger_config(project_root);
         let triggers = payload.get("triggers").and_then(|v| v.as_array()).expect("triggers array");
@@ -811,7 +841,7 @@ mod tests {
     fn route_event_queues_payload_for_known_plugin_trigger() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _seam = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-1".to_string(),
@@ -848,7 +878,7 @@ mod tests {
     fn routes_event_with_subject_id_into_payload() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "linear-incoming");
+        let _seam = write_plugin_trigger_config(project_root, "linear-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-linear-1".to_string(),
@@ -873,7 +903,7 @@ mod tests {
     fn routes_event_with_action_hint_into_payload() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _seam = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-mention-1".to_string(),
@@ -985,7 +1015,7 @@ mod tests {
 
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "noisy-trigger");
+        let _seam = write_plugin_trigger_config(project_root, "noisy-trigger");
 
         let total_pushes = observed_cap + 2;
         for i in 0..total_pushes {
@@ -1016,7 +1046,7 @@ mod tests {
     fn route_event_drops_event_without_trigger_id() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _seam = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-bare".to_string(),
@@ -1038,7 +1068,7 @@ mod tests {
     fn route_event_drops_event_for_unknown_trigger_id() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _seam = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-orphan".to_string(),
@@ -1061,6 +1091,18 @@ mod tests {
         // Hand-craft a config with a file_watcher trigger named the same as
         // the plugin event's trigger_id — events should refuse to route there.
         let mut config = orchestrator_core::builtin_workflow_config();
+        config.phase_catalog.insert(
+            "requirements".to_string(),
+            orchestrator_core::PhaseUiDefinition {
+                label: "requirements".to_string(),
+                description: String::new(),
+                category: String::new(),
+                icon: None,
+                docs_url: None,
+                tags: Vec::new(),
+                visible: true,
+            },
+        );
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "fw-flow".to_string(),
             name: "FW".to_string(),
@@ -1081,6 +1123,8 @@ mod tests {
             input: None,
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("write");
+        let _seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root);
 
         let event = TriggerEvent {
             event_id: "evt-fw".to_string(),

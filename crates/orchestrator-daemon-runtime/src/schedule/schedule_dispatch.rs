@@ -641,6 +641,20 @@ mod tests {
         let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
         let mut config = orchestrator_core::builtin_workflow_config();
         config.default_workflow_ref = "standard-workflow".to_string();
+        for phase_id in ["requirements", "implementation", "code-review", "testing"] {
+            config.phase_catalog.insert(
+                phase_id.to_string(),
+                orchestrator_core::PhaseUiDefinition {
+                    label: phase_id.to_string(),
+                    description: String::new(),
+                    category: String::new(),
+                    icon: None,
+                    docs_url: None,
+                    tags: Vec::new(),
+                    visible: true,
+                },
+            );
+        }
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "standard-workflow".to_string(),
             name: "Standard Workflow".to_string(),
@@ -668,6 +682,8 @@ mod tests {
             claims: Vec::new(),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+        let _seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root);
 
         let pipeline_calls = Arc::new(Mutex::new(Vec::new()));
         let pipeline_calls_ref = pipeline_calls.clone();
@@ -886,6 +902,20 @@ mod tests {
 
         let mut config = orchestrator_core::builtin_workflow_config();
         config.default_workflow_ref = "standard-workflow".to_string();
+        for phase_id in ["requirements", "implementation"] {
+            config.phase_catalog.insert(
+                phase_id.to_string(),
+                orchestrator_core::PhaseUiDefinition {
+                    label: phase_id.to_string(),
+                    description: String::new(),
+                    category: String::new(),
+                    icon: None,
+                    docs_url: None,
+                    tags: Vec::new(),
+                    visible: true,
+                },
+            );
+        }
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "standard-workflow".to_string(),
             name: "Standard Workflow".to_string(),
@@ -912,6 +942,8 @@ mod tests {
             claims: Vec::new(),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+        let _seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root);
 
         let first = ScheduleDispatch::next_schedule_deadline(&root_str, now).expect("deadline should exist");
         assert_eq!(first, "2026-03-04T13:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
@@ -928,6 +960,9 @@ mod tests {
             claims: Vec::new(),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be rewritten");
+        drop(_seam);
+        let _seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root);
 
         let second = ScheduleDispatch::next_schedule_deadline(&root_str, now).expect("deadline should exist");
         assert_eq!(second, "2026-03-04T12:45:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());

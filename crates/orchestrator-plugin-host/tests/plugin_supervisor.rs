@@ -13,72 +13,41 @@ use orchestrator_plugin_host::HostError;
 use serde_json::json;
 
 #[cfg(unix)]
-fn python_plugin_source(mode: &str, state_path: &Path) -> String {
+fn shell_plugin_source(mode: &str, state_path: &Path) -> String {
     format!(
-        r#"#!/usr/bin/env python3
-import json, sys
-
-MODE = "{mode}"
-STATE = r"{state}"
-
-def send(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
-
-def main():
-    try:
-        count = int(open(STATE).read().strip())
-    except Exception:
-        count = 0
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            msg = json.loads(line)
-        except Exception:
-            continue
-        method = msg.get("method")
-        msg_id = msg.get("id")
-        if method == "initialize":
-            send({{
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {{
-                    "protocol_version": "1.0.0",
-                    "plugin_info": {{"name": "supervisor-test", "version": "0.1.0", "plugin_kind": "provider"}},
-                    "capabilities": {{"streaming": False, "progress": False, "cancellation": False, "methods": []}}
-                }}
-            }})
-        elif method == "initialized":
-            pass
-        elif method == "shutdown":
-            send({{"jsonrpc": "2.0", "id": msg_id, "result": None}})
-            return
-        elif method == "exit":
-            return
-        elif method == "agent/run" or method == "agent/resume":
-            count += 1
-            with open(STATE, "w") as f:
-                f.write(str(count))
-            if MODE == "die_on_first_run" and count == 1:
-                sys.exit(99)
-            if MODE == "always_die":
-                sys.exit(99)
-            if MODE == "structured_error":
-                send({{
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {{"code": -32602, "message": "bad params from plugin"}}
-                }})
-            else:
-                send({{
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {{"output": "ok-after-retry", "exit_code": 0}}
-                }})
-
-main()
+        r#"#!/bin/sh
+MODE="{mode}"
+STATE="{state}"
+count=0
+if [ -f "$STATE" ]; then count=$(cat "$STATE" 2>/dev/null | tr -d '[:space:]'); fi
+[ -z "$count" ] && count=0
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    msg_id=$(printf '%s' "$line" | grep -o '"id":[0-9]*' | cut -d: -f2)
+    method=$(printf '%s' "$line" | grep -o '"method":"[^"]*"' | cut -d'"' -f4)
+    case "$method" in
+        initialize)
+            printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":"1.0.0","plugin_info":{{"name":"supervisor-test","version":"0.1.0","plugin_kind":"provider"}},"capabilities":{{"streaming":false,"progress":false,"cancellation":false,"methods":[]}}}}}}\n' "$msg_id"
+            ;;
+        initialized) ;;
+        shutdown)
+            printf '{{"jsonrpc":"2.0","id":%s,"result":null}}\n' "$msg_id"
+            exit 0
+            ;;
+        exit) exit 0 ;;
+        agent/run|agent/resume)
+            count=$((count + 1))
+            printf '%s' "$count" > "$STATE"
+            if [ "$MODE" = "die_on_first_run" ] && [ "$count" = "1" ]; then exit 99; fi
+            if [ "$MODE" = "always_die" ]; then exit 99; fi
+            if [ "$MODE" = "structured_error" ]; then
+                printf '{{"jsonrpc":"2.0","id":%s,"error":{{"code":-32602,"message":"bad params from plugin"}}}}\n' "$msg_id"
+            else
+                printf '{{"jsonrpc":"2.0","id":%s,"result":{{"output":"ok-after-retry","exit_code":0}}}}\n' "$msg_id"
+            fi
+            ;;
+    esac
+done
 "#,
         mode = mode,
         state = state_path.display()
@@ -86,10 +55,10 @@ main()
 }
 
 #[cfg(unix)]
-fn write_python_plugin(dir: &Path, mode: &str, state_path: &Path) -> PathBuf {
+fn write_shell_plugin(dir: &Path, mode: &str, state_path: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let plugin = dir.join(format!("supervisor-test-plugin-{mode}"));
-    std::fs::write(&plugin, python_plugin_source(mode, state_path)).expect("write plugin script");
+    std::fs::write(&plugin, shell_plugin_source(mode, state_path)).expect("write plugin script");
     let mut perms = std::fs::metadata(&plugin).unwrap().permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&plugin, perms).unwrap();
@@ -183,7 +152,7 @@ async fn dispatch_returns_plugin_disabled_when_supervisor_disabled() {
     use animus_session_backend::session::session_backend::SessionBackend;
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state.txt");
-    let plugin = write_python_plugin(dir.path(), "happy", &state);
+    let plugin = write_shell_plugin(dir.path(), "happy", &state);
 
     let backend = PluginSessionBackend::new("supervisor-test", plugin, "test");
     backend.supervisor().force_disable_for_test_public(Duration::from_mins(1));
@@ -201,7 +170,7 @@ async fn dispatch_retries_once_on_io_error_then_succeeds() {
     use animus_session_backend::session::session_backend::SessionBackend;
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state.txt");
-    let plugin = write_python_plugin(dir.path(), "die_on_first_run", &state);
+    let plugin = write_shell_plugin(dir.path(), "die_on_first_run", &state);
 
     let backend = PluginSessionBackend::new("supervisor-test", plugin, "test");
     let supervisor = backend.supervisor();
@@ -226,7 +195,7 @@ async fn dispatch_does_not_retry_on_structured_jsonrpc_error() {
     use animus_session_backend::session::session_backend::SessionBackend;
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state.txt");
-    let plugin = write_python_plugin(dir.path(), "structured_error", &state);
+    let plugin = write_shell_plugin(dir.path(), "structured_error", &state);
 
     let backend = PluginSessionBackend::new("supervisor-test", plugin, "test");
     let supervisor = backend.supervisor();
@@ -251,7 +220,7 @@ async fn dispatch_propagates_when_retry_also_dies() {
     use animus_session_backend::session::session_backend::SessionBackend;
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state.txt");
-    let plugin = write_python_plugin(dir.path(), "always_die", &state);
+    let plugin = write_shell_plugin(dir.path(), "always_die", &state);
 
     let backend =
         PluginSessionBackend::new("supervisor-test", plugin, "test").with_supervisor(Arc::new(PluginSupervisor::new(

@@ -1185,6 +1185,9 @@ mod tests {
             "phases:\n  research:\n    mode: agent\n    skills:\n      - deep-search\n      - ghost-skill\nworkflows:\n  - id: research-only\n    name: Research Only\n    phases:\n      - research\n",
         )
         .expect("write workflows.yaml");
+        let _seam = orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+            temp_dir.path(),
+        );
 
         let json = super::workflow_skills_env_payload(project_root)
             .expect("project with declared phase skills must produce a payload");
