@@ -189,6 +189,7 @@ impl EnvironmentBroker {
         std::fs::create_dir_all(&records_dir)?;
         let socket_path = broker_socket_path(&records_dir);
 
+        ensure_socket_parent(&socket_path)?;
         let listener = bind_listener(&socket_path)?;
 
         let inner = Arc::new(Inner {
@@ -678,6 +679,18 @@ fn broker_socket_path(records_dir: &Path) -> String {
         .join("broker.sock")
         .to_string_lossy()
         .into_owned()
+}
+
+/// Ensure a filesystem-backed local socket can be bound. The short-path
+/// fallback may live outside `records_dir`, so creating only that directory is
+/// insufficient on a clean machine.
+fn ensure_socket_parent(socket_path: &str) -> std::io::Result<()> {
+    if looks_like_filesystem(socket_path) {
+        if let Some(parent) = Path::new(socket_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_record_atomic(path: &Path, record: &LeaseRecord) -> std::io::Result<()> {

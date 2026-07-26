@@ -76,6 +76,9 @@ pub use tick::{
 pub(crate) mod test_env {
     use std::sync::OnceLock;
 
+    pub type WorkflowConfigFixtureGuard =
+        orchestrator_config::workflow_config::config_source_client::test_seam::TestBaseGuard;
+
     /// Returns the per-process test home directory and pins HOME to it on
     /// first call. Tests that resolve `protocol::scoped_state_root` (or any
     /// other `$HOME`-derived path) must call this before touching scoped
@@ -89,5 +92,43 @@ pub(crate) mod test_env {
             std::env::set_var("HOME", &home_dir);
             home_dir
         })
+    }
+
+    /// Add the UI metadata required for every phase referenced by a workflow
+    /// fixture. The purified kernel intentionally ships an empty catalog, so
+    /// tests must declare the phase ids they author instead of relying on the
+    /// historical built-in pipeline.
+    pub fn declare_phase_catalog(config: &mut orchestrator_core::WorkflowConfig, phase_ids: &[&str]) {
+        for phase_id in phase_ids {
+            config.phase_catalog.entry((*phase_id).to_string()).or_insert_with(|| {
+                orchestrator_core::PhaseUiDefinition {
+                    label: (*phase_id).to_string(),
+                    description: String::new(),
+                    category: "test".to_string(),
+                    icon: None,
+                    docs_url: None,
+                    tags: Vec::new(),
+                    visible: true,
+                }
+            });
+        }
+    }
+
+    /// Persist one canonical workflow fixture and expose it through the same
+    /// config-source seam production loads use. Keep the returned guard alive
+    /// for every read of the fixture.
+    pub fn write_workflow_config_fixture(
+        project_root: &std::path::Path,
+        config: &mut orchestrator_core::WorkflowConfig,
+        phase_ids: &[&str],
+    ) -> WorkflowConfigFixtureGuard {
+        declare_phase_catalog(config, phase_ids);
+        orchestrator_core::write_workflow_config(project_root, config).expect("write workflow config fixture");
+        install_yaml_config_source_fixture(project_root)
+    }
+
+    /// Expose hand-authored YAML through the config-source test seam.
+    pub fn install_yaml_config_source_fixture(project_root: &std::path::Path) -> WorkflowConfigFixtureGuard {
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root)
     }
 }

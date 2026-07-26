@@ -667,7 +667,11 @@ mod tests {
             owner_id: None,
             claims: Vec::new(),
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+        let _config = crate::test_env::write_workflow_config_fixture(
+            project_root,
+            &mut config,
+            &["requirements", "implementation", "code-review", "testing"],
+        );
 
         let pipeline_calls = Arc::new(Mutex::new(Vec::new()));
         let pipeline_calls_ref = pipeline_calls.clone();
@@ -911,7 +915,11 @@ mod tests {
             owner_id: None,
             claims: Vec::new(),
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+        let config_guard = crate::test_env::write_workflow_config_fixture(
+            project_root,
+            &mut config,
+            &["requirements", "implementation"],
+        );
 
         let first = ScheduleDispatch::next_schedule_deadline(&root_str, now).expect("deadline should exist");
         assert_eq!(first, "2026-03-04T13:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
@@ -927,7 +935,12 @@ mod tests {
             owner_id: None,
             claims: Vec::new(),
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be rewritten");
+        drop(config_guard);
+        let _config_guard = crate::test_env::write_workflow_config_fixture(
+            project_root,
+            &mut config,
+            &["requirements", "implementation"],
+        );
 
         let second = ScheduleDispatch::next_schedule_deadline(&root_str, now).expect("deadline should exist");
         assert_eq!(second, "2026-03-04T12:45:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());

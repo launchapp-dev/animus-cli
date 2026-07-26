@@ -544,6 +544,7 @@ fn flavor_stub_slugs(parsed: &FlavorManifestStub) -> BTreeSet<String> {
     for section in [
         &parsed.workflow_runner,
         &parsed.queue,
+        &parsed.config_source,
         &parsed.providers,
         &parsed.subjects,
         &parsed.transports,
@@ -626,6 +627,8 @@ struct FlavorManifestStub {
     workflow_runner: FlavorSectionStub,
     #[serde(default)]
     queue: FlavorSectionStub,
+    #[serde(default)]
+    config_source: FlavorSectionStub,
     #[serde(default)]
     providers: FlavorSectionStub,
     #[serde(default)]
@@ -992,7 +995,12 @@ required = ["acme/animus-provider-enterprise"]
 
     #[test]
     fn bundled_default_flavor_slugs_is_non_empty() {
-        assert!(!bundled_default_flavor_slugs().is_empty(), "the embedded default flavor must resolve some plugins");
+        let slugs = bundled_default_flavor_slugs();
+        assert!(!slugs.is_empty(), "the embedded default flavor must resolve some plugins");
+        assert!(
+            slugs.contains("animus-config-yaml"),
+            "every declared role, including config_source, must contribute to the admit set"
+        );
     }
 
     #[test]
