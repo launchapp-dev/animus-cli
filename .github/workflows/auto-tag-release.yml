@@ -33,14 +33,26 @@ jobs:
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Auto-tagging: ${VERSION}"
 
-      - name: Check tag doesn't already exist
+      - name: Check whether tag already exists
+        id: tag
+        shell: bash
         run: |
-          if git rev-parse "${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          if git rev-parse --verify --quiet "refs/tags/${{ steps.version.outputs.version }}" >/dev/null; then
             echo "Tag ${{ steps.version.outputs.version }} already exists, skipping"
-            exit 0
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
+      # This workflow is loaded from the default branch for pull_request events,
+      # so a stale release branch cannot bypass the guard by lacking the script.
+      - name: Validate release candidate lineage before tagging
+        if: steps.tag.outputs.exists != 'true'
+        shell: bash
+        run: scripts/check-release-lineage.sh "${{ steps.version.outputs.version }}" HEAD
+
       - name: Create and push tag
+        if: steps.tag.outputs.exists != 'true'
         run: |
           git config user.name "AO Release Bot"
           git config user.email "noreply@launchapp.dev"
