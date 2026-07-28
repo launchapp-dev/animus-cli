@@ -1449,6 +1449,62 @@ mod tests {
         );
     }
 
+    /// A kindless auxiliary subject backend must not poison health when another
+    /// configured backend contributes a routable kind. Health is about whether
+    /// the resolved router can serve requests, not whether every discovered
+    /// subject-backend manifest independently declares a kind.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_not_degraded_when_any_backend_serves_a_kind() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let make_plugin = |name: &str, capabilities: serde_json::Value| {
+            let bin = temp.path().join(name);
+            let manifest = serde_json::json!({
+                "name": name,
+                "version": "0.1.0",
+                "plugin_kind": "subject_backend",
+                "description": format!("fake {name}"),
+                "protocol_version": "1.0.0",
+                "capabilities": capabilities
+            });
+            std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+            let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&bin, perms).expect("chmod");
+            bin
+        };
+
+        let serving = make_plugin("animus-postgres", serde_json::json!(["subject_kind:task"]));
+        let auxiliary = make_plugin("animus-subject-auxiliary", serde_json::json!([]));
+        std::fs::write(
+            config_dir.join("plugins.yaml"),
+            format!(
+                "plugins:\n  animus-postgres:\n    binary: {}\n  animus-subject-auxiliary:\n    binary: {}\n",
+                serving.display(),
+                auxiliary.display()
+            ),
+        )
+        .expect("write plugins.yaml");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_none(),
+            "a router with a serving consolidated backend must remain healthy, got: {reason:?}"
+        );
+    }
+
     /// Two `subject_backend` plugins that both declare `subject_kind:task` cause
     /// `SubjectRouter::from_lazy_specs` to fail with a duplicate-kind error.
     /// The probe must surface this as a degraded reason so the operator can
