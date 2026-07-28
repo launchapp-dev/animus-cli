@@ -569,6 +569,30 @@ mod tests {
         assert!(cp.environment.expect("binding").torn_down, "torn_down stays set on the second mark");
     }
 
+    // TASK-811: terminalizing a dead delegation must not discard the durable
+    // handle or its cleanup state. Reconciliation can fail the checkpoint
+    // after teardown, and operators still need the retained binding for audit
+    // while later scans must see that the node has already been reaped.
+    #[test]
+    fn failing_checkpoint_preserves_torn_down_environment_binding() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-3", "phase-a", "claude", "run-3", None).expect("pending");
+
+        let binding = sample_binding();
+        update_session_environment(scoped_root, "wf-env-3", "phase-a", binding.clone()).expect("persist binding");
+        mark_environment_torn_down(scoped_root, "wf-env-3", "phase-a").expect("mark torn down");
+        update_session_failed(scoped_root, "wf-env-3", "phase-a", "delegated node died").expect("fail checkpoint");
+
+        let cp = read_checkpoint(scoped_root, "wf-env-3", "phase-a").expect("read").expect("present");
+        assert_eq!(cp.status, SessionCheckpointStatus::Failed);
+        assert_eq!(cp.blocked_reason.as_deref(), Some("delegated node died"));
+        let environment = cp.environment.expect("terminal checkpoint retains environment binding");
+        assert_eq!(environment.handle, binding.handle);
+        assert_eq!(environment.environment_id, binding.environment_id);
+        assert!(environment.torn_down, "terminal mutation retains the completed cleanup marker");
+    }
+
     // Backward-compat: a checkpoint JSON written by an OLDER runner that does
     // not know the `environment` field must still deserialize (serde ignores
     // unknown fields; the struct is not deny_unknown_fields), with
