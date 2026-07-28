@@ -19,7 +19,6 @@ use orchestrator_daemon_runtime::control::{DaemonOpsRouting, PluginRouting, Queu
 use orchestrator_daemon_runtime::{
     discover_installed_plugins, run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 

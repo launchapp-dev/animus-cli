@@ -998,8 +998,7 @@ mod tests {
             workspace_root: "/workspace".to_string(),
             metadata: json!({"relay": "opaque"}),
         };
-        bind_running_phase_checkpoint(&project_root, "wf-resume", "railway", &handle)
-            .expect("persist broker binding");
+        bind_running_phase_checkpoint(&project_root, "wf-resume", "railway", &handle).expect("persist broker binding");
         let record = LeaseRecord {
             run_id: "wf-resume".to_string(),
             daemon_instance_id: "prior-daemon".to_string(),
@@ -1012,18 +1011,10 @@ mod tests {
         };
 
         assert!(prior_record_is_claimed_for_resume(&record));
-        for state in [
-            LeaseState::Preparing,
-            LeaseState::TearingDown,
-            LeaseState::TornDown,
-            LeaseState::Failed,
-        ] {
+        for state in [LeaseState::Preparing, LeaseState::TearingDown, LeaseState::TornDown, LeaseState::Failed] {
             let mut non_ready = record.clone();
             non_ready.state = state;
-            assert!(
-                !prior_record_is_claimed_for_resume(&non_ready),
-                "{state:?} record was claimed"
-            );
+            assert!(!prior_record_is_claimed_for_resume(&non_ready), "{state:?} record was claimed");
         }
     }
 

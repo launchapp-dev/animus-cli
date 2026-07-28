@@ -691,16 +691,7 @@ fn run_environment_pipeline(
             }
         }
     };
-    run_exec_and_teardown(
-        backend,
-        &handle,
-        command,
-        stdin,
-        timeout,
-        backend_label,
-        events,
-        Some(&record_teardown),
-    );
+    run_exec_and_teardown(backend, &handle, command, stdin, timeout, backend_label, events, Some(&record_teardown));
 }
 
 /// TASK-933 resume entry: drive a delegated run's harness command against an
@@ -1550,8 +1541,7 @@ environment_routing:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn successful_normal_teardown_marks_the_persisted_binding_torn_down() {
         let backend = Arc::new(FakeBackend::new());
-        *backend.exec_stream_outcome.lock().unwrap() =
-            Some(StreamOutcome::Deltas(Vec::new(), Ok(ok_response(0))));
+        *backend.exec_stream_outcome.lock().unwrap() = Some(StreamOutcome::Deltas(Vec::new(), Ok(ok_response(0))));
         let temp = tempfile::tempdir().expect("tempdir");
         let scoped_root = temp.path().to_path_buf();
         animus_runtime_shared::phase_session::write_session_pending(
@@ -1580,13 +1570,10 @@ environment_routing:
         );
         let _events = drain(run).await;
 
-        let checkpoint = animus_runtime_shared::phase_session::read_checkpoint(
-            &scoped_root,
-            "wf-normal-cleanup",
-            "phase-code",
-        )
-        .expect("read checkpoint")
-        .expect("checkpoint exists");
+        let checkpoint =
+            animus_runtime_shared::phase_session::read_checkpoint(&scoped_root, "wf-normal-cleanup", "phase-code")
+                .expect("read checkpoint")
+                .expect("checkpoint exists");
         assert!(
             checkpoint.environment.expect("binding persisted").torn_down,
             "successful normal teardown must retire the durable binding"

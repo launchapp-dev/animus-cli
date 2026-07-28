@@ -2004,8 +2004,11 @@ mod tests {
         assert_eq!(reloaded.status, WorkflowStatus::Running, "unverifiable delegate stays Running");
     }
 
-    // TASK-811: terminalize_dead_delegation drives the checkpoint Failed (so it
-    // never re-surfaces for auto-resume) and cancels the workflow.
+    // TASK-811: after the delegated node has been successfully reaped,
+    // terminalize_dead_delegation drives the checkpoint Failed (so it never
+    // re-surfaces for auto-resume) and cancels the workflow. Marking the
+    // fixture binding torn down models that successful cleanup without making
+    // this unit test depend on an installed environment plugin.
     #[tokio::test]
     async fn terminalize_dead_delegation_fails_checkpoint_and_cancels_workflow() {
         let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
@@ -2013,6 +2016,8 @@ mod tests {
         let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
         let (scoped_root, phase_id) =
             bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-dead")).await;
+        animus_runtime_shared::phase_session::mark_environment_torn_down(&scoped_root, &workflow_id, &phase_id)
+            .expect("model successful delegated-node teardown");
         let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
 
         let cancelled = super::terminalize_dead_delegation(hub.clone(), &project_root, &scoped_root, &workflow).await;
