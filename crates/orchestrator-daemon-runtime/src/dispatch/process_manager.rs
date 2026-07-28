@@ -12,6 +12,7 @@ use protocol::SubjectDispatch;
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 
+use super::{build_runner_command_with_id, build_runner_command_with_resume};
 #[cfg(unix)]
 use crate::control::WorkflowEventBroadcaster;
 use crate::dispatch::environment_broker::{
@@ -20,7 +21,7 @@ use crate::dispatch::environment_broker::{
 };
 #[cfg(unix)]
 use crate::dispatch::event_pipe::SubprocessEventPipe;
-use crate::{build_runner_command_with_resume, CompletedProcess, RunnerEvent};
+use crate::{CompletedProcess, RunnerEvent};
 
 #[cfg(unix)]
 #[allow(unsafe_code)]
@@ -168,13 +169,11 @@ struct WorkflowProcess {
     event_pipe: Option<SubprocessEventPipe>,
     agent_session_id: Option<String>,
     project_root: Option<std::path::PathBuf>,
-    /// BU-4 journal-resume: the EXISTING workflow id this runner was spawned to
-    /// continue (via `execute --workflow-id`), if any. Used as the
-    /// `workflow_id` fallback in completion reconciliation so an early runner
-    /// exit (before any `workflow_events` is emitted) still fails/cancels the
-    /// TARGETED run rather than leaving it Running — which would otherwise let
-    /// the resume sweep re-dispatch it every tick in an endless loop.
-    resume_workflow_id: Option<String>,
+    /// Kernel-selected workflow id for either idempotent fresh creation or
+    /// journal resume. Used as the completion fallback when the runner exits
+    /// before emitting an event, keeping queue and journal reconciliation on
+    /// the same identity.
+    target_workflow_id: Option<String>,
     /// REQ-048 cross-phase environment broker: the broker `run_id` this spawn
     /// was bound to (the workflow run id), set ONLY when the dispatch routes to
     /// a non-local environment and a broker is wired. The daemon tears the run's
@@ -302,7 +301,18 @@ impl ProcessManager {
     }
 
     pub fn spawn_workflow_runner(&mut self, dispatch: &SubjectDispatch, project_root: &str) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, None)
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, None)
+    }
+
+    /// Start a fresh queue-backed workflow using the kernel-selected durable id.
+    /// The runner creates the journal row idempotently with this exact value.
+    pub fn spawn_workflow_runner_with_id(
+        &mut self,
+        dispatch: &SubjectDispatch,
+        project_root: &str,
+        workflow_id: &str,
+    ) -> Result<()> {
+        self.spawn_workflow_runner_inner(dispatch, project_root, Some(workflow_id), None)
     }
 
     /// BU-4 journal-resume re-dispatch: spawn a runner that CONTINUES the
@@ -316,13 +326,14 @@ impl ProcessManager {
         project_root: &str,
         resume_workflow_id: &str,
     ) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, Some(resume_workflow_id))
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, Some(resume_workflow_id))
     }
 
     fn spawn_workflow_runner_inner(
         &mut self,
         dispatch: &SubjectDispatch,
         project_root: &str,
+        new_workflow_id: Option<&str>,
         resume_workflow_id: Option<&str>,
     ) -> Result<()> {
         if let Some(cap) = self.workflow_concurrency_max {
@@ -331,13 +342,24 @@ impl ProcessManager {
             }
         }
 
-        let std_cmd = build_runner_command_with_resume(
-            dispatch,
-            project_root,
-            self.phase_routing.as_ref(),
-            self.mcp_config.as_ref(),
-            resume_workflow_id,
-        );
+        debug_assert!(new_workflow_id.is_none() || resume_workflow_id.is_none());
+        let target_workflow_id = new_workflow_id.or(resume_workflow_id);
+        let std_cmd = match new_workflow_id {
+            Some(workflow_id) => build_runner_command_with_id(
+                dispatch,
+                project_root,
+                self.phase_routing.as_ref(),
+                self.mcp_config.as_ref(),
+                workflow_id,
+            ),
+            None => build_runner_command_with_resume(
+                dispatch,
+                project_root,
+                self.phase_routing.as_ref(),
+                self.mcp_config.as_ref(),
+                resume_workflow_id,
+            ),
+        };
         let command_line: Vec<String> = std::iter::once(std_cmd.get_program().to_string_lossy().into_owned())
             .chain(std_cmd.get_args().map(|a| a.to_string_lossy().into_owned()))
             .collect();
@@ -447,7 +469,7 @@ impl ProcessManager {
         // the run's SHARED node from the daemon instead of preparing its own.
         // Returns the broker run_id so the completion path can tear it down.
         let environment_run_id =
-            self.configure_environment_broker(dispatch, project_root, resume_workflow_id, &mut command);
+            self.configure_environment_broker(dispatch, project_root, target_workflow_id, &mut command);
 
         // Bind the subprocess workflow_events back-channel before fork so the
         // env var we set on the child points to a listener that's already
@@ -531,7 +553,7 @@ impl ProcessManager {
             event_pipe,
             agent_session_id,
             project_root: Some(project_root_path),
-            resume_workflow_id: resume_workflow_id.map(String::from),
+            target_workflow_id: target_workflow_id.map(String::from),
             environment_run_id,
         });
 
@@ -544,19 +566,14 @@ impl ProcessManager {
     /// broker `run_id` (the workflow run id) when brokered, else `None` (the
     /// runner then uses its legacy owned-environment path).
     ///
-    /// The run_id must be STABLE across every phase of a workflow run so all
-    /// phases acquire the SAME node. It is keyed on the SUBJECT: every phase is a
-    /// separate dispatch for the same subject, so `subject_id()` is identical
-    /// across phases and known before phase 1. Keying on a workflow id does NOT
-    /// work — the runner mints its own id and `--workflow-id` means "resume an
-    /// EXISTING workflow", so a daemon-minted id cannot be handed down for a
-    /// fresh phase. A subjectless adhoc run falls back to the resume id / a fresh
-    /// mint (single-phase only — no cross-phase sharing without a subject).
+    /// The run_id must be STABLE across every phase. Queue-backed dispatch now
+    /// supplies the authoritative workflow id before spawn, so use it first;
+    /// legacy ad-hoc callers fall back to the subject or a fresh local id.
     fn configure_environment_broker(
         &self,
         dispatch: &SubjectDispatch,
         project_root: &str,
-        resume_workflow_id: Option<&str>,
+        target_workflow_id: Option<&str>,
         command: &mut Command,
     ) -> Option<String> {
         let broker = self.environment_broker.as_ref()?;
@@ -584,13 +601,12 @@ impl ProcessManager {
         if is_local_environment(&environment_id) {
             return None;
         }
-        let run_id = match dispatch.subject_id() {
-            Some(subject) if !subject.is_empty() => format!("run-{subject}"),
-            _ => match resume_workflow_id {
-                Some(id) => id.to_string(),
-                None => format!("wf-{}", uuid::Uuid::new_v4().simple()),
-            },
-        };
+        let run_id = target_workflow_id
+            .map(str::to_string)
+            .or_else(|| {
+                dispatch.subject_id().filter(|subject| !subject.is_empty()).map(|subject| format!("run-{subject}"))
+            })
+            .unwrap_or_else(|| format!("wf-{}", uuid::Uuid::new_v4().simple()));
         broker.register_run(&run_id, project_root, &environment_id);
         command.env(ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, broker.socket_path());
         command.env(ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV, broker.token());
@@ -696,7 +712,7 @@ impl ProcessManager {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
-                        workflow_id: process.resume_workflow_id.take(),
+                        workflow_id: process.target_workflow_id.take(),
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status: Some(WorkflowStatus::Failed),
                         schedule_id: process.schedule_id,
@@ -719,7 +735,7 @@ impl ProcessManager {
                             subject_id: process.subject_key,
                             subject_kind: Some(process.subject_kind),
                             task_id: process.task_id,
-                            workflow_id: process.resume_workflow_id.take(),
+                            workflow_id: process.target_workflow_id.take(),
                             workflow_ref: Some(process.workflow_ref),
                             workflow_status: None,
                             schedule_id: process.schedule_id,
@@ -748,11 +764,11 @@ impl ProcessManager {
                     cleanup_agent_record(&process);
                     let exit_code = status.code();
                     let events = parse_runner_events(&process.stderr_lines);
-                    // Prefer the runner-reported id; fall back to the resume
-                    // target so an early exit before any event still reconciles
-                    // the known run (BU-4: prevents endless re-dispatch).
-                    let resume_target = process.resume_workflow_id.take();
-                    let workflow_id = latest_runner_workflow_id(&events).or_else(|| resume_target.clone());
+                    // Prefer the runner-reported id; fall back to the kernel
+                    // target so an early exit still reconciles the exact queue
+                    // and journal identity.
+                    let workflow_target = process.target_workflow_id.take();
+                    let workflow_id = latest_runner_workflow_id(&events).or_else(|| workflow_target.clone());
                     let mut workflow_status = latest_runner_workflow_status(&events);
                     let (success, failure_reason) = if status.success() {
                         (true, None)
@@ -766,9 +782,9 @@ impl ProcessManager {
                     // the TARGETED run as Failed. Otherwise the projector only
                     // blocks the task, the workflow stays Running, and the
                     // journal-resume sweep re-dispatches it every tick
-                    // (livelock). Scoped to resume spawns so normal dispatch
-                    // behavior is byte-identical.
-                    if workflow_status.is_none() && !status.success() && resume_target.is_some() {
+                    // (livelock). This is safe for both resume and preallocated
+                    // fresh spawns because each has an authoritative journal id.
+                    if workflow_status.is_none() && !status.success() && workflow_target.is_some() {
                         workflow_status = Some(WorkflowStatus::Failed);
                     }
 
@@ -817,7 +833,7 @@ impl ProcessManager {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
-                        workflow_id: process.resume_workflow_id.take(),
+                        workflow_id: process.target_workflow_id.take(),
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status: None,
                         schedule_id: process.schedule_id,
