@@ -1125,6 +1125,46 @@ mod tests {
         );
     }
 
+    /// Capability-aware discovery must still enforce executability. A
+    /// consolidated backend with the right manifest but no execute bit cannot
+    /// serve RPCs and therefore must not clear the degraded reason.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_degraded_for_non_executable_consolidated_backend() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let bin = plugin_dir.join("animus-postgres");
+        let manifest = serde_json::json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "Non-executable consolidated PostgreSQL backend",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"]
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.as_deref().is_some_and(|r| r.contains("no executable subject-backend plugin")),
+            "a non-executable consolidated backend must not make the router healthy, got: {reason:?}"
+        );
+    }
+
     /// Manifest kind is authoritative in both directions: a legacy-looking
     /// `animus-subject-*` executable must not make the router appear routable
     /// when it actually declares a different plugin kind.
