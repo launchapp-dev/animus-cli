@@ -1125,6 +1125,46 @@ mod tests {
         );
     }
 
+    /// Manifest kind is authoritative in both directions: a legacy-looking
+    /// `animus-subject-*` executable must not make the router appear routable
+    /// when it actually declares a different plugin kind.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_degraded_for_subject_prefixed_non_backend() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let bin = plugin_dir.join("animus-subject-not-a-backend");
+        let manifest = serde_json::json!({
+            "name": "animus-subject-not-a-backend",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "Provider with a misleading legacy-style name",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"]
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.as_deref().is_some_and(|r| r.contains("no executable subject-backend plugin")),
+            "a filename prefix must not override a non-subject manifest kind, got: {reason:?}"
+        );
+    }
+
     /// Project-scoped plugin configuration is the first discovery tier used at
     /// daemon boot. Keep the health reconciliation on that same path so a
     /// consolidated backend configured only for one project is not mistaken
