@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use animus_runtime_shared::phase_session::{list_running_checkpoints, update_session_environment, EnvironmentBinding};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -236,6 +237,7 @@ impl EnvironmentBroker {
 
     /// Idempotently dispose the node for `run_id`: `Ready -> TearingDown ->
     /// TornDown`, delete the durable record, forget the run's pending context.
+    /// A failed teardown retains a retryable durable record.
     /// A no-op when no lease exists (already torn down, or never prepared).
     pub async fn teardown(&self, run_id: &str) {
         let lease = self.inner.leases.lock().await.remove(run_id);
@@ -252,8 +254,17 @@ impl EnvironmentBroker {
                     target: "animus.runtime.environment_broker",
                     run_id,
                     %error,
-                    "environment teardown failed; deleting lease record anyway (node may be reclaimed by the plugin GC sweep)"
+                    "environment teardown failed; retaining lease record for startup retry"
                 );
+                self.write_record(
+                    run_id,
+                    &lease.environment_id,
+                    &lease.project_root,
+                    LeaseState::TearingDown,
+                    Some(&handle),
+                );
+                self.forget_run(run_id);
+                return;
             }
         }
         self.delete_record(run_id);
@@ -290,7 +301,8 @@ impl EnvironmentBroker {
 
         // Slow path: prepare the node ONCE. Record BEFORE prepare so a crash
         // mid-prepare still leaves a durable marker for the startup reaper.
-        self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None);
+        self.write_record_required(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None)
+            .with_context(|| format!("persisting preparing lease for run {run_id}"))?;
 
         let mut spec = spec;
         set_run_id_metadata(&mut spec, run_id);
@@ -310,7 +322,46 @@ impl EnvironmentBroker {
 
         match prepared {
             Ok((client, handle)) => {
-                self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Ready, Some(&handle));
+                if let Err(error) = self.write_record_required(
+                    run_id,
+                    environment_id,
+                    &pending.project_root,
+                    LeaseState::Ready,
+                    Some(&handle),
+                ) {
+                    // Never expose/execute a prepared node whose complete
+                    // handle is not durable. Best-effort rollback keeps the
+                    // failure contained to acquire.
+                    let cleanup = client.teardown(&handle).err();
+                    return Err(error).with_context(|| {
+                        format!(
+                            "persisting ready lease for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
+                if let Err(error) =
+                    bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
+                {
+                    // The lease record is sufficient for cold reaping, but
+                    // restart resume and liveness reconciliation use the phase
+                    // checkpoint as their recovery oracle. Never let the
+                    // runner execute until that binding is durable too.
+                    let cleanup = client.teardown(&handle).err();
+                    if cleanup.is_none() {
+                        self.delete_record(run_id);
+                    }
+                    return Err(error).with_context(|| {
+                        format!(
+                            "persisting phase environment binding for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
                 let response = (handle.workspace_root.clone(), handle.id.clone());
                 self.inner.leases.lock().await.insert(
                     run_id.to_string(),
@@ -393,6 +444,28 @@ impl EnvironmentBroker {
         }
     }
 
+    fn write_record_required(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        project_root: &str,
+        state: LeaseState,
+        handle: Option<&EnvironmentHandle>,
+    ) -> std::io::Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = LeaseRecord {
+            run_id: run_id.to_string(),
+            daemon_instance_id: self.inner.daemon_instance_id.clone(),
+            environment_id: environment_id.to_string(),
+            project_root: project_root.to_string(),
+            state,
+            handle: handle.cloned(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        write_record_atomic(&self.record_path(run_id), &record)
+    }
+
     fn delete_record(&self, run_id: &str) {
         let _ = std::fs::remove_file(self.record_path(run_id));
     }
@@ -422,6 +495,18 @@ impl EnvironmentBroker {
             if record.daemon_instance_id == self.inner.daemon_instance_id {
                 continue;
             }
+            // A Running delegated checkpoint is a durable claim on this exact
+            // node. Preserve it until startup reconciliation can probe/resume
+            // it; otherwise broker startup destroys the node before TASK-933
+            // recovery runs. Unclaimed records retain the cold-reap behavior.
+            if prior_record_is_claimed_for_resume(&record) {
+                tracing::info!(
+                    target: "animus.runtime.environment_broker",
+                    run_id = %record.run_id,
+                    "startup reap: preserving prior node claimed by a running delegated checkpoint"
+                );
+                continue;
+            }
             if let Some(handle) = record.handle.clone() {
                 let environment_id = record.environment_id.clone();
                 let project_root = record.project_root.clone();
@@ -432,24 +517,88 @@ impl EnvironmentBroker {
                     let client = EnvironmentClient::resolve(Path::new(&project_root), &environment_id)?;
                     client.teardown(&handle)
                 })();
-                if let Err(error) = outcome {
-                    tracing::warn!(
-                        target: "animus.runtime.environment_broker",
-                        run_id = %run_id,
-                        %error,
-                        "startup reap: cold teardown of an orphaned node failed; deleting the record anyway"
-                    );
-                } else {
-                    tracing::info!(
-                        target: "animus.runtime.environment_broker",
-                        run_id = %run_id,
-                        "startup reap: cold tore down a node leaked by a prior daemon instance"
-                    );
+                match outcome {
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "animus.runtime.environment_broker",
+                            run_id = %run_id,
+                            %error,
+                            "startup reap: cold teardown failed; retaining the lease record for retry"
+                        );
+                        continue;
+                    }
+                    Ok(()) => {
+                        tracing::info!(
+                            target: "animus.runtime.environment_broker",
+                            run_id = %run_id,
+                            "startup reap: cold tore down a node leaked by a prior daemon instance"
+                        );
+                    }
                 }
             }
             let _ = std::fs::remove_file(&path);
         }
     }
+}
+
+/// Persist the production broker's prepared handle into the phase checkpoint
+/// before the acquire response exposes the node to a runner. A workflow has at
+/// most one Running phase checkpoint; refusing ambiguous/missing ownership
+/// closes the prepare-to-persistence crash window instead of executing work
+/// that restart reconciliation cannot resume or reap by handle.
+fn bind_running_phase_checkpoint(
+    project_root: &str,
+    run_id: &str,
+    environment_id: &str,
+    handle: &EnvironmentHandle,
+) -> Result<()> {
+    let scoped_root = protocol::repository_scope::scoped_state_root(Path::new(project_root))
+        .ok_or_else(|| anyhow!("project has no scoped state root"))?;
+    let mut matches = list_running_checkpoints(&scoped_root)
+        .context("listing running phase checkpoints")?
+        .into_iter()
+        .map(|(_, checkpoint)| checkpoint)
+        .filter(|checkpoint| checkpoint.workflow_id == run_id);
+    let checkpoint =
+        matches.next().ok_or_else(|| anyhow!("no Running phase checkpoint found for brokered workflow"))?;
+    if matches.next().is_some() {
+        bail!("multiple Running phase checkpoints found for brokered workflow");
+    }
+    update_session_environment(
+        &scoped_root,
+        &checkpoint.workflow_id,
+        &checkpoint.phase_id,
+        EnvironmentBinding {
+            environment_id: environment_id.to_string(),
+            handle: handle.clone(),
+            bound_at: chrono::Utc::now().to_rfc3339(),
+            torn_down: false,
+        },
+    )
+    .context("writing delegated environment binding")
+}
+
+fn prior_record_is_claimed_for_resume(record: &LeaseRecord) -> bool {
+    // Only a fully prepared lease can be resumed. In particular, preserving a
+    // TearingDown record would allow already-completed coding work to be
+    // reattached after restart instead of letting startup finish reaping it.
+    if record.state != LeaseState::Ready {
+        return false;
+    }
+    let Some(handle) = record.handle.as_ref() else {
+        return false;
+    };
+    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(Path::new(&record.project_root)) else {
+        return false;
+    };
+    animus_runtime_shared::phase_session::list_running_checkpoints(&scoped_root).ok().into_iter().flatten().any(
+        |(_, checkpoint)| {
+            checkpoint.workflow_id == record.run_id
+                && checkpoint.environment.as_ref().is_some_and(|binding| {
+                    !binding.torn_down && binding.environment_id == record.environment_id && binding.handle == *handle
+                })
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -796,6 +945,86 @@ mod tests {
         assert_eq!(decoded.run_id, "wf-1");
         assert_eq!(decoded.state, LeaseState::Ready);
         assert_eq!(decoded.handle.unwrap().id, "node-1");
+    }
+
+    #[test]
+    fn broker_binding_is_written_to_the_running_phase_checkpoint() {
+        use animus_runtime_shared::phase_session::{read_checkpoint, update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(
+            &scoped_root,
+            "wf-bound",
+            "implementation",
+            "claude",
+            "agent-run",
+            Some(json!({"context": {"prompt": "continue"}})),
+        )
+        .expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-bound", "implementation").expect("running checkpoint");
+        let handle = EnvironmentHandle {
+            id: "node-bound".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+
+        bind_running_phase_checkpoint(&project_root, "wf-bound", "railway", &handle).expect("persist broker binding");
+
+        let checkpoint = read_checkpoint(&scoped_root, "wf-bound", "implementation")
+            .expect("read checkpoint")
+            .expect("checkpoint exists");
+        let binding = checkpoint.environment.expect("environment binding");
+        assert_eq!(binding.environment_id, "railway");
+        assert_eq!(binding.handle, handle);
+        assert!(!binding.torn_down);
+    }
+
+    #[test]
+    fn only_ready_prior_record_is_claimed_for_resume() {
+        use animus_runtime_shared::phase_session::{update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(&scoped_root, "wf-resume", "implementation", "claude", "agent-run", None)
+            .expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-resume", "implementation").expect("running checkpoint");
+        let handle = EnvironmentHandle {
+            id: "node-resume".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+        bind_running_phase_checkpoint(&project_root, "wf-resume", "railway", &handle)
+            .expect("persist broker binding");
+        let record = LeaseRecord {
+            run_id: "wf-resume".to_string(),
+            daemon_instance_id: "prior-daemon".to_string(),
+            environment_id: "railway".to_string(),
+            project_root,
+            state: LeaseState::Ready,
+            handle: Some(handle),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:01Z".to_string(),
+        };
+
+        assert!(prior_record_is_claimed_for_resume(&record));
+        for state in [
+            LeaseState::Preparing,
+            LeaseState::TearingDown,
+            LeaseState::TornDown,
+            LeaseState::Failed,
+        ] {
+            let mut non_ready = record.clone();
+            non_ready.state = state;
+            assert!(
+                !prior_record_is_claimed_for_resume(&non_ready),
+                "{state:?} record was claimed"
+            );
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

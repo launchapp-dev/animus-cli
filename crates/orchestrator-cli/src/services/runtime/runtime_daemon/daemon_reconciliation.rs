@@ -310,7 +310,7 @@ fn current_delegate_binding(
 
 /// Liveness of a delegated node, as observed by a trivial exec probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DelegateLiveness {
+pub(crate) enum DelegateLiveness {
     /// The node answered a trivial exec — it is up and reusable.
     Alive,
     /// The node/plugin failed every probe with a definitive death signal.
@@ -351,7 +351,7 @@ fn probe_error_is_transient(err: &anyhow::Error) -> bool {
 /// `true`, RETRIED up to [`PROBE_ATTEMPTS`] times: the first success => Alive;
 /// an unresolvable plugin => Unknown; all attempts failing => Unknown when the
 /// last failure looked transient (preserve + re-probe next sweep), else Dead.
-fn probe_delegate(project_root: &str, binding: &EnvironmentBinding) -> DelegateLiveness {
+pub(crate) fn probe_delegate(project_root: &str, binding: &EnvironmentBinding) -> DelegateLiveness {
     let client = match EnvironmentClient::resolve(Path::new(project_root), &binding.environment_id) {
         Ok(client) => client,
         Err(_) => return DelegateLiveness::Unknown,
@@ -406,35 +406,50 @@ fn delegate_is_dead(scoped_root: Option<&Path>, project_root: &str, workflow: &O
 /// gone), and `mark_environment_torn_down` is only written on success, so a
 /// failed reap is retried on the next sweep. Inert when there is no
 /// (un-torn-down) binding.
-fn teardown_delegated_node(project_root: &str, scoped_root: Option<&Path>, workflow: &OrchestratorWorkflow) {
-    let Some(scoped_root) = scoped_root else { return };
-    let Some((phase_id, binding)) = current_delegate_binding(scoped_root, workflow) else { return };
+fn teardown_delegated_node(project_root: &str, scoped_root: Option<&Path>, workflow: &OrchestratorWorkflow) -> bool {
+    let Some(scoped_root) = scoped_root else { return true };
+    let Some((phase_id, binding)) = current_delegate_binding(scoped_root, workflow) else { return true };
     match EnvironmentClient::resolve(Path::new(project_root), &binding.environment_id) {
         Ok(client) => match client.teardown(&binding.handle) {
             Ok(()) => {
-                let _ = mark_environment_torn_down(scoped_root, &workflow.id, &phase_id);
+                if let Err(error) = mark_environment_torn_down(scoped_root, &workflow.id, &phase_id) {
+                    warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %workflow.id,
+                        %error,
+                        "node was reaped but its checkpoint could not be updated; idempotent teardown will retry"
+                    );
+                    return false;
+                }
                 info!(
                     actor = protocol::ACTOR_DAEMON,
                     workflow_id = %workflow.id,
                     node = %binding.handle.id,
                     "reaped delegated node by persisted handle during orphan reconciliation"
                 );
+                true
             }
-            Err(error) => warn!(
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow.id,
+                    node = %binding.handle.id,
+                    %error,
+                    "env teardown of delegated node failed; will retry on the next sweep"
+                );
+                false
+            }
+        },
+        Err(error) => {
+            warn!(
                 actor = protocol::ACTOR_DAEMON,
                 workflow_id = %workflow.id,
-                node = %binding.handle.id,
+                environment = %binding.environment_id,
                 %error,
-                "env teardown of delegated node failed; will retry on the next sweep"
-            ),
-        },
-        Err(error) => warn!(
-            actor = protocol::ACTOR_DAEMON,
-            workflow_id = %workflow.id,
-            environment = %binding.environment_id,
-            %error,
-            "cannot resolve environment plugin to reap delegated node; will retry on the next sweep"
-        ),
+                "cannot resolve environment plugin to reap delegated node; will retry on the next sweep"
+            );
+            false
+        }
     }
 }
 
@@ -451,7 +466,12 @@ async fn terminalize_dead_delegation(
     workflow: &OrchestratorWorkflow,
 ) -> bool {
     let phase_id = current_phase_id(workflow).unwrap_or_default();
-    teardown_delegated_node(project_root, Some(scoped_root), workflow);
+    if !teardown_delegated_node(project_root, Some(scoped_root), workflow) {
+        // Keep both checkpoint and workflow Running. A terminal checkpoint is
+        // omitted from future sweeps, so terminalizing here would permanently
+        // suppress the promised cleanup retry and leak the node.
+        return false;
+    }
     let _ = update_session_failed(
         scoped_root,
         &workflow.id,
@@ -711,6 +731,13 @@ pub async fn recover_orphaned_running_workflows(
         let age_secs = (now - workflow.started_at).num_seconds();
         let within_grace = age_secs < ORPHAN_RECONCILIATION_GRACE_SECS;
         let resumable = is_resumable_orphan(&workflow);
+        // A persisted binding is stronger evidence than current routing
+        // intent. In particular startup deliberately does not load routing,
+        // and configuration may have changed since this run was dispatched.
+        // Always liveness-gate such a delegate before the generic
+        // journal-resume preserve branch, otherwise a dead node is preserved
+        // forever across every daemon restart.
+        let dead_delegate = !within_grace && delegate_is_dead(scoped_root.as_deref(), project_root, &workflow);
 
         let decision = if workflow.machine_state == WorkflowMachineState::MergeConflict {
             ReconcileDecision::MergeConflict
@@ -718,19 +745,16 @@ pub async fn recover_orphaned_running_workflows(
             ReconcileDecision::WaitingManual
         } else if in_runner_registry {
             ReconcileDecision::ProtectedLiveRunner
+        } else if dead_delegate {
+            ReconcileDecision::TerminalizeDeadDelegate
         } else if in_active_subjects {
             ReconcileDecision::ProtectedActiveSubject
         } else if is_delegated {
-            // TASK-793: refine rc.24's intent-based skip with the node's ACTUAL
-            // liveness. Only a delegate PAST GRACE whose persisted node probes
-            // DEAD is terminalized; alive / unverifiable / no-binding (and any
-            // within-grace delegate) keep rc.24's skip. `delegate_is_dead` is
-            // inert (false) until the companion runner persists a binding.
-            if !within_grace && delegate_is_dead(scoped_root.as_deref(), project_root, &workflow) {
-                ReconcileDecision::TerminalizeDeadDelegate
-            } else {
-                ReconcileDecision::SkippedDelegated
-            }
+            // Alive / unverifiable / no-binding (and any within-grace
+            // delegate) keep rc.24's fail-safe skip. Definitively dead
+            // persisted bindings were handled above, including at startup
+            // where routing is intentionally unavailable.
+            ReconcileDecision::SkippedDelegated
         } else if within_grace {
             ReconcileDecision::WithinGrace
         } else if resume_orphans && resumable {
@@ -827,7 +851,19 @@ pub async fn recover_orphaned_running_workflows(
                 // cancel so an orphan (e.g. a dead delegate handled at startup,
                 // where intent-gating is off) does not leak its node. Inert for
                 // local runs and until the companion runner persists a binding.
-                teardown_delegated_node(project_root, scoped_root.as_deref(), &workflow);
+                if !teardown_delegated_node(project_root, scoped_root.as_deref(), &workflow) {
+                    // Cancellation makes the workflow/checkpoint terminal and
+                    // removes it from subsequent orphan sweeps. Keep it Running
+                    // when cleanup fails so the persisted binding remains a
+                    // retryable cleanup obligation instead of becoming a
+                    // permanently leaked node.
+                    error!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %workflow.id,
+                        "delegated node cleanup failed; deferring orphan cancellation so teardown can retry"
+                    );
+                    continue;
+                }
                 let cancelled = cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
                 if cancelled {
                     recovered = recovered.saturating_add(1);
@@ -994,6 +1030,7 @@ pub(crate) async fn resumable_orphans_for_redispatch(
     // delegating runner's QUALIFIED active/orphan ids (see `bare_subject_id`).
     let active_subject_bare: HashSet<&str> = active_subject_ids.iter().map(|s| bare_subject_id(s)).collect();
     let live_orphan_bare: HashSet<&str> = live_orphan_subjects.iter().map(|s| bare_subject_id(s)).collect();
+    let scoped_root = protocol::scoped_state_root(Path::new(project_root));
 
     let mut candidates = Vec::new();
     let mut evaluated = 0usize;
@@ -1024,6 +1061,7 @@ pub(crate) async fn resumable_orphans_for_redispatch(
         let age_secs = (now - workflow.started_at).num_seconds();
         let within_grace = age_secs < ORPHAN_RECONCILIATION_GRACE_SECS;
         let resumable = is_resumable_orphan(&workflow);
+        let dead_delegate = !within_grace && delegate_is_dead(scoped_root.as_deref(), project_root, &workflow);
 
         let decision = if workflow.machine_state == WorkflowMachineState::MergeConflict {
             ReconcileDecision::MergeConflict
@@ -1031,6 +1069,8 @@ pub(crate) async fn resumable_orphans_for_redispatch(
             ReconcileDecision::WaitingManual
         } else if in_runner_registry {
             ReconcileDecision::ProtectedLiveRunner
+        } else if dead_delegate {
+            ReconcileDecision::TerminalizeDeadDelegate
         } else if in_active_subjects {
             ReconcileDecision::ProtectedActiveSubject
         } else if is_delegated {
@@ -1079,17 +1119,27 @@ pub(crate) async fn resumable_orphans_for_redispatch(
                 selected += 1;
                 candidates.push(workflow);
             }
+            ReconcileDecision::TerminalizeDeadDelegate => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow.id,
+                    workflow_ref = workflow.workflow_ref.as_deref().unwrap_or_default(),
+                    "dead delegated node reached redispatch sweep; terminalizing instead of spawning a replacement"
+                );
+                if let Some(scoped_root) = scoped_root.as_deref() {
+                    let _ = terminalize_dead_delegation(hub.clone(), project_root, scoped_root, &workflow).await;
+                }
+            }
             // All other outcomes exclude the run from re-dispatch (no-op). A
-            // dead delegate is terminalized by the cancel leg (which sets it
-            // Cancelled, so it never reaches this Running-only leg); the variant
-            // is matched exhaustively but never arises here.
+            // dead delegate normally gets terminalized by the cancel leg first,
+            // but this leg independently applies the same gate so callers
+            // cannot re-dispatch-and-leak when invoked on its own.
             ReconcileDecision::MergeConflict
             | ReconcileDecision::WaitingManual
             | ReconcileDecision::SkippedLiveOrphan
             | ReconcileDecision::SkippedBlockedResume
             | ReconcileDecision::WithinGrace
             | ReconcileDecision::NotResumable
-            | ReconcileDecision::TerminalizeDeadDelegate
             | ReconcileDecision::PreservedResumable
             | ReconcileDecision::CancelledOrphan => {}
         }

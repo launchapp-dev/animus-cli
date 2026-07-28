@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::{persist_agent_event, persist_json_output, print_agent_event, print_value, run_dir, AgentRunArgs};
 
 use super::provider_client::{session_request_from_args, start_session, to_agent_event};
+use animus_runtime_shared::phase_session::list_running_checkpoints;
 
 pub(super) async fn handle_agent_run(
     args: AgentRunArgs,
@@ -26,7 +27,13 @@ pub(super) async fn handle_agent_run(
     // The default resolution is `None`, taking the unchanged local path.
     let run = match super::environment_exec::resolve_exec_environment(project_root_path, &request.tool) {
         Some(environment) => {
-            super::environment_exec::start_environment_session(project_root_path, &environment, &request)?
+            let checkpoint_target = environment_checkpoint_target(project_root_path, &run_id)?;
+            super::environment_exec::start_environment_session(
+                project_root_path,
+                &environment,
+                &request,
+                checkpoint_target,
+            )?
         }
         None => start_session(project_root_path, request).await?,
     };
@@ -75,6 +82,31 @@ pub(super) async fn handle_agent_run(
         if args.save_jsonl { Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref())) } else { None };
 
     stream_events(run, run_id, &args, run_dir_path, json).await
+}
+
+fn environment_checkpoint_target(
+    project_root: &Path,
+    run_id: &RunId,
+) -> Result<Option<super::environment_exec::EnvironmentCheckpointTarget>> {
+    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(project_root) else {
+        return Ok(None);
+    };
+    let checkpoint = list_running_checkpoints(&scoped_root)?
+        .into_iter()
+        .map(|(_, checkpoint)| checkpoint)
+        .find(|checkpoint| checkpoint.run_id == run_id.0);
+    let Some(checkpoint) = checkpoint else {
+        // Ad-hoc agent runs have no phase checkpoint. Their normal pipeline
+        // still tears down; workflow-linked runs must always have been
+        // checkpointed before their agent child is launched.
+        tracing::debug!(run_id = %run_id.0, "prepared environment belongs to an ad-hoc run; no phase checkpoint to bind");
+        return Ok(None);
+    };
+    Ok(Some(super::environment_exec::EnvironmentCheckpointTarget {
+        scoped_root,
+        workflow_id: checkpoint.workflow_id,
+        phase_id: checkpoint.phase_id,
+    }))
 }
 
 async fn stream_events(

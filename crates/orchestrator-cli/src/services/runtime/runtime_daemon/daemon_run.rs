@@ -29,18 +29,21 @@ use super::daemon_run_host::DefaultDaemonRunHost;
 use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver};
 use animus_runtime_shared::persist_resumed_phase_completion;
 use animus_runtime_shared::phase_session::{
-    list_running_checkpoints, update_session_blocked, update_session_completed, update_session_running_after_resume,
-    SessionCheckpoint,
+    list_running_checkpoints, mark_environment_torn_down, update_session_blocked, update_session_completed,
+    update_session_running_after_resume, SessionCheckpoint,
 };
 use orchestrator_plugin_host::session::{
     canonical_tool_alias, discover_provider_plugins, PluginSessionBackend, ResumeAgentOutcome,
 };
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) enum ResumeLookup {
     NotInstalled,
     Outcome(ResumeAgentOutcome),
+    /// The delegated node could not be verified this sweep. Keep the
+    /// checkpoint Running so liveness can be retried later.
+    Deferred,
 }
 
 #[async_trait::async_trait(?Send)]
@@ -160,6 +163,7 @@ fn phase_requires_explicit_decision_for_resume_in_workflow(
 
 struct ProductionResumeProviderRegistry {
     providers: HashMap<String, Arc<PluginSessionBackend>>,
+    project_root: PathBuf,
 }
 
 impl ProductionResumeProviderRegistry {
@@ -168,7 +172,7 @@ impl ProductionResumeProviderRegistry {
             .into_iter()
             .map(|plugin| (plugin.provider_tool.to_ascii_lowercase(), plugin.into_backend()))
             .collect();
-        Self { providers }
+        Self { providers, project_root: project_root.to_path_buf() }
     }
 }
 
@@ -191,6 +195,56 @@ fn resolve_resume_provider_key(provider_keys: &[String], checkpoint_provider: &s
 #[async_trait::async_trait(?Send)]
 impl ResumeProviderRegistry for ProductionResumeProviderRegistry {
     async fn try_resume(&self, checkpoint: &SessionCheckpoint) -> ResumeLookup {
+        if let Some(binding) = checkpoint.environment.as_ref() {
+            match super::daemon_reconciliation::probe_delegate(self.project_root.to_string_lossy().as_ref(), binding) {
+                super::daemon_reconciliation::DelegateLiveness::Unknown => {
+                    tracing::warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %checkpoint.workflow_id,
+                        phase_id = %checkpoint.phase_id,
+                        "delegated node liveness is unknown; preserving Running checkpoint for retry"
+                    );
+                    return ResumeLookup::Deferred;
+                }
+                super::daemon_reconciliation::DelegateLiveness::Dead => {
+                    // Reconciliation owns dead-delegate terminalization because
+                    // it can reap the handle and cancel the workflow as one
+                    // retryable transition. Mapping this to a generic resume
+                    // failure would mark the checkpoint Blocked and shield the
+                    // ghost from every later cleanup sweep.
+                    tracing::warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %checkpoint.workflow_id,
+                        phase_id = %checkpoint.phase_id,
+                        "delegated node is dead; deferring to orphan reconciliation for reap and terminalization"
+                    );
+                    return ResumeLookup::Deferred;
+                }
+                super::daemon_reconciliation::DelegateLiveness::Alive => {}
+            }
+            return match super::super::runtime_agent::environment_exec::resume_environment_checkpoint(
+                &self.project_root,
+                checkpoint,
+            )
+            .await
+            {
+                super::super::runtime_agent::environment_exec::EnvironmentCheckpointResume::Outcome(outcome) => {
+                    ResumeLookup::Outcome(outcome)
+                }
+                super::super::runtime_agent::environment_exec::EnvironmentCheckpointResume::CleanupPending {
+                    reason,
+                } => {
+                    tracing::warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %checkpoint.workflow_id,
+                        phase_id = %checkpoint.phase_id,
+                        %reason,
+                        "delegated node cleanup is pending; preserving Running checkpoint for teardown retry"
+                    );
+                    ResumeLookup::Deferred
+                }
+            };
+        }
         // Codex round 8 P2 #2: historical workflows wrote
         // `checkpoint.provider = "oai-runner"` (or `"animus-oai-runner"`),
         // but the installed first-party plugin registers under
@@ -416,8 +470,9 @@ pub(super) async fn apply_resumed_outcome_in_tree(
 }
 
 // Returns the set of workflow_ids that have a Running session checkpoint
-// with a captured provider_session_id — i.e. workflows that
-// auto_resume_running_checkpoints can actually attempt to resume. These
+// which auto_resume_running_checkpoints can recover. Local providers require
+// a captured provider_session_id; a delegated checkpoint can also recover
+// without one by re-running the command on its still-live prepared node. These
 // must be excluded from orphan recovery at daemon startup; otherwise
 // recover_orphaned_running_workflows would cancel them before the resume
 // pass ever runs. Returns an empty set when the scoped state root is
@@ -436,7 +491,8 @@ pub(super) fn resumable_workflow_ids_for_project(project_root: &str) -> std::col
         .filter_map(|(_, checkpoint)| {
             let has_sid =
                 checkpoint.provider_session_id.as_deref().map(str::trim).as_ref().is_some_and(|s| !s.is_empty());
-            if has_sid {
+            let has_reusable_environment = checkpoint.environment.as_ref().is_some_and(|binding| !binding.torn_down);
+            if has_sid || has_reusable_environment {
                 Some(checkpoint.workflow_id)
             } else {
                 None
@@ -460,25 +516,6 @@ where
         Err(_) => return report,
     };
     for (_path, checkpoint) in running {
-        // TASK-933: a DELEGATED coding phase's provider session lives INSIDE the
-        // remote node prepared by an `environment` plugin, NOT in a local
-        // provider plugin. The daemon must not try to resume it against a local
-        // plugin — that plugin never issued the session id and would reject it,
-        // mis-blocking the checkpoint with a misleading reinstall hint. Leave it
-        // Running so the companion runner re-dispatch reuses the node (skip
-        // prepare + `--resume` on the live handle); a dead node was already
-        // terminalized by `recover_orphaned_running_workflows`. This branch is
-        // inert until the companion runner persists `environment` (the field is
-        // `None` for every local run and for every runner without the change).
-        if checkpoint.environment.is_some() {
-            tracing::info!(
-                actor = protocol::ACTOR_DAEMON,
-                workflow_id = %checkpoint.workflow_id,
-                phase_id = %checkpoint.phase_id,
-                "delegated phase: skipping local provider resume; preserved for runner re-dispatch to reuse the node (TASK-933)"
-            );
-            continue;
-        }
         // Guard rail: provider plugins can only resume an external session
         // they themselves issued. If no provider_session_id was captured
         // before the daemon crashed, dispatching ANY id (the run_id, an
@@ -487,7 +524,7 @@ where
         // block with an actionable, --force-aware reason instead.
         let provider_sid_present =
             checkpoint.provider_session_id.as_deref().map(str::trim).as_ref().is_some_and(|sid| !sid.is_empty());
-        if !provider_sid_present {
+        if !provider_sid_present && checkpoint.environment.is_none() {
             let reason =
                 "no provider session_id captured before crash; phase will re-run from scratch on resume --force"
                     .to_string();
@@ -497,6 +534,9 @@ where
         }
         match registry.try_resume(&checkpoint).await {
             ResumeLookup::Outcome(ResumeAgentOutcome::Resumed { session_id }) => {
+                if checkpoint.environment.is_some() {
+                    let _ = mark_environment_torn_down(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
+                }
                 // Codex round-7 P1: the resumed agent has finished, but
                 // until we apply the outcome back through the workflow
                 // service the run stays stuck in Running with no
@@ -538,6 +578,7 @@ where
                 let _ = update_session_blocked(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id, &reason);
                 report.blocked_uninstalled += 1;
             }
+            ResumeLookup::Deferred => {}
         }
     }
     report
@@ -1315,7 +1356,8 @@ mod tests {
         use super::super::resumable_workflow_ids_for_project;
         use super::*;
         use animus_runtime_shared::phase_session::{
-            update_provider_session_id, update_session_running, write_session_pending,
+            update_provider_session_id, update_session_environment, update_session_running, write_session_pending,
+            EnvironmentBinding,
         };
         use serde_json::json;
 
@@ -1365,6 +1407,22 @@ mod tests {
             )
             .expect("seed noid pending");
             update_session_running(&scoped_root, "wf-noid", "impl").expect("seed noid running");
+            update_session_environment(
+                &scoped_root,
+                "wf-noid",
+                "impl",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: animus_environment_protocol::EnvironmentHandle {
+                        id: "node-live".to_string(),
+                        workspace_root: "/workspace".to_string(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("bind reusable delegated environment");
 
             let shielded = resumable_workflow_ids_for_project(&project_root);
             assert!(
@@ -1372,10 +1430,10 @@ mod tests {
                 "workflow with provider_session_id MUST be shielded from orphan cancellation"
             );
             assert!(
-                !shielded.contains("wf-noid"),
-                "workflow without provider_session_id MUST NOT be shielded (nothing to resume)"
+                shielded.contains("wf-noid"),
+                "live delegated workflow without a provider session id must reach on-node fresh resume"
             );
-            assert_eq!(shielded.len(), 1, "shield set contains exactly the resumable workflows");
+            assert_eq!(shielded.len(), 2, "shield set contains both recoverable workflows");
         }
 
         #[test]
@@ -1398,8 +1456,9 @@ mod tests {
             ResumedOutcomeApplyResult,
         };
         use animus_runtime_shared::phase_session::{
-            read_checkpoint, update_provider_session_id, update_session_running, update_session_running_after_resume,
-            write_session_pending, SessionCheckpoint, SessionCheckpointStatus,
+            read_checkpoint, update_provider_session_id, update_session_environment, update_session_running,
+            update_session_running_after_resume, write_session_pending, EnvironmentBinding, SessionCheckpoint,
+            SessionCheckpointStatus,
         };
         use async_trait::async_trait;
         use orchestrator_plugin_host::session::ResumeAgentOutcome;
@@ -1608,6 +1667,48 @@ mod tests {
                 "expected explicit 'no provider session_id captured' guidance, got: {reason}"
             );
             assert!(applier.calls().is_empty(), "applier must NOT be invoked when provider_session_id is missing");
+        }
+
+        #[tokio::test]
+        async fn auto_resume_dispatches_delegated_checkpoint_without_provider_session_id() {
+            let temp = TempDir::new().expect("tempdir");
+            let scoped = temp.path();
+            write_session_pending(
+                scoped,
+                "wf-delegated-noid",
+                "impl",
+                "claude",
+                "run-delegated",
+                Some(json!({"context": {"prompt": "continue", "model": "claude-sonnet-4-6"}})),
+            )
+            .expect("pending");
+            update_session_running(scoped, "wf-delegated-noid", "impl").expect("running");
+            update_session_environment(
+                scoped,
+                "wf-delegated-noid",
+                "impl",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: animus_environment_protocol::EnvironmentHandle {
+                        id: "live-node".to_string(),
+                        workspace_root: "/workspace".to_string(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("environment binding");
+
+            let registry = ScriptedRegistry::new(vec![("claude", Script::Resumed { new_session_id: None })]);
+            let applier = RecordingApplier::new(ResumedOutcomeApplyResult::Advanced, false, scoped.to_path_buf());
+
+            let report = auto_resume_running_checkpoints(scoped, &registry, &applier).await;
+            assert_eq!(report.resumed, 1);
+            assert_eq!(report.blocked_on_failure, 0);
+            assert_eq!(applier.calls(), vec![("wf-delegated-noid".to_string(), "impl".to_string(), None)]);
+            let after = read_checkpoint(scoped, "wf-delegated-noid", "impl").expect("read").expect("present");
+            assert!(after.environment.expect("binding retained").torn_down);
         }
 
         #[tokio::test]
