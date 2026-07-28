@@ -691,7 +691,17 @@ fn run_environment_pipeline(
             }
         }
     };
-    run_exec_and_teardown(backend, &handle, command, stdin, timeout, backend_label, events, Some(&record_teardown));
+    run_exec_and_teardown(
+        backend,
+        &handle,
+        command,
+        stdin,
+        timeout,
+        backend_label,
+        events,
+        true,
+        Some(&record_teardown),
+    );
 }
 
 /// TASK-933 resume entry: drive a delegated run's harness command against an
@@ -718,7 +728,7 @@ pub(super) fn spawn_environment_resume(
     timeout: Option<Duration>,
     backend_label: String,
 ) -> SessionRun {
-    spawn_environment_resume_tracked(backend, handle, command, stdin, timeout, backend_label).0
+    spawn_environment_resume_tracked(backend, handle, command, stdin, timeout, backend_label, true).0
 }
 
 fn spawn_environment_resume_tracked(
@@ -728,6 +738,7 @@ fn spawn_environment_resume_tracked(
     stdin: Option<String>,
     timeout: Option<Duration>,
     backend_label: String,
+    teardown_after_exec: bool,
 ) -> (SessionRun, tokio::sync::oneshot::Receiver<bool>) {
     let (events_tx, events_rx) = mpsc::channel::<SessionEvent>(256);
     let (pipeline_tx, mut pipeline_rx) = mpsc::unbounded_channel::<SessionEvent>();
@@ -746,7 +757,10 @@ fn spawn_environment_resume_tracked(
             let _ = pipeline_tx.send(event);
         };
         send(SessionEvent::Started { backend: backend_label.clone(), session_id: None, pid: None });
-        // NO prepare — reuse the persisted handle for exec_stream + teardown.
+        // NO prepare — reuse the persisted handle. A broker-owned restart
+        // lease remains alive for later workflow phases and is torn down only
+        // at terminal workflow completion; legacy standalone callers retain
+        // the previous exec-then-teardown behavior.
         let torn_down = run_exec_and_teardown(
             backend.as_ref(),
             &handle,
@@ -755,6 +769,7 @@ fn spawn_environment_resume_tracked(
             timeout,
             &backend_label,
             &pipeline_tx,
+            teardown_after_exec,
             None,
         );
         let _ = teardown_tx.send(torn_down);
@@ -779,6 +794,7 @@ pub(crate) enum EnvironmentCheckpointResume {
 pub(crate) async fn resume_environment_checkpoint(
     project_root: &Path,
     checkpoint: &animus_runtime_shared::phase_session::SessionCheckpoint,
+    retain_for_later_phases: bool,
 ) -> EnvironmentCheckpointResume {
     use orchestrator_plugin_host::session::ResumeAgentOutcome;
 
@@ -846,6 +862,7 @@ pub(crate) async fn resume_environment_checkpoint(
         None,
         Some(Duration::from_secs(DEFAULT_ENVIRONMENT_RUN_TIMEOUT_SECS)),
         backend_label,
+        !retain_for_later_phases,
     );
 
     let mut outcome = None;
@@ -892,6 +909,7 @@ fn run_exec_and_teardown(
     timeout: Option<Duration>,
     backend_label: &str,
     events: &mpsc::UnboundedSender<SessionEvent>,
+    teardown_after_exec: bool,
     on_teardown_success: Option<&dyn Fn()>,
 ) -> bool {
     let send = |event: SessionEvent| {
@@ -925,21 +943,26 @@ fn run_exec_and_teardown(
         result => result,
     };
 
-    // Teardown regardless of exec outcome; a teardown failure is surfaced as a
-    // recoverable frame (the run's verdict is the exec result, not cleanup).
-    let torn_down = match backend.teardown(handle) {
-        Ok(()) => {
-            if let Some(on_teardown_success) = on_teardown_success {
-                on_teardown_success();
+    // Standalone leases teardown regardless of exec outcome. Broker-owned
+    // restart leases deliberately stay ready across phase boundaries; their
+    // terminal workflow transition calls EnvironmentBroker::teardown once.
+    let torn_down = if !teardown_after_exec {
+        true
+    } else {
+        match backend.teardown(handle) {
+            Ok(()) => {
+                if let Some(on_teardown_success) = on_teardown_success {
+                    on_teardown_success();
+                }
+                true
             }
-            true
-        }
-        Err(err) => {
-            send(SessionEvent::Error {
-                message: format!("environment teardown failed for {backend_label} (handle {}): {err:#}", handle.id),
-                recoverable: true,
-            });
-            false
+            Err(err) => {
+                send(SessionEvent::Error {
+                    message: format!("environment teardown failed for {backend_label} (handle {}): {err:#}", handle.id),
+                    recoverable: true,
+                });
+                false
+            }
         }
     };
 
@@ -1745,6 +1768,28 @@ environment_routing:
             backend.prepare_result.lock().unwrap().is_some(),
             "prepare must not be invoked on the resume path (the node already exists)"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_owned_resume_keeps_node_for_later_phases() {
+        let backend = Arc::new(FakeBackend::new());
+        *backend.prepare_result.lock().unwrap() = Some(Err(anyhow!("prepare must not be called on resume")));
+        *backend.exec_stream_outcome.lock().unwrap() = Some(StreamOutcome::Deltas(Vec::new(), Ok(ok_response(0))));
+
+        let (run, retained_rx) = spawn_environment_resume_tracked(
+            backend.clone(),
+            sample_handle(),
+            command_for_test(),
+            None,
+            None,
+            "environment:container".to_string(),
+            false,
+        );
+        let events = drain(run).await;
+        assert!(matches!(events.last(), Some(SessionEvent::Finished { exit_code: Some(0) })));
+        assert!(retained_rx.await.expect("retention result"));
+        assert!(!backend.torn_down.load(Ordering::SeqCst), "broker-owned resume retains the node");
+        assert!(backend.prepare_result.lock().unwrap().is_some(), "resume does not prepare a replacement node");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
