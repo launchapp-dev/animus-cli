@@ -52,6 +52,9 @@ pub(super) enum ResumeLookup {
 #[async_trait::async_trait(?Send)]
 pub(super) trait ResumeProviderRegistry {
     async fn try_resume(&self, checkpoint: &SessionCheckpoint) -> ResumeLookup;
+    /// Release the broker-owned workflow lease after an adopted final phase
+    /// reaches terminal workflow state. Implementations must be idempotent.
+    async fn teardown_retained_environment(&self, workflow_id: &str);
 }
 
 // Applies a resumed phase outcome back to durable workflow state once the
@@ -69,12 +72,19 @@ pub(super) trait ResumedOutcomeApplier {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ResumedOutcomeApplyResult {
-    // Workflow state was advanced and session checkpoint flipped to Completed.
+    // Workflow state advanced to another phase/paused handoff and the session
+    // checkpoint flipped to Completed. Retain a broker-owned lease.
     Advanced,
+    // Workflow state advanced to a terminal status. A broker-owned retained
+    // lease must now be torn down because no WorkflowProcess exists to do it.
+    AdvancedTerminal,
     // The workflow had already advanced past this phase (durable marker was
     // already on disk from a previous restart). We still flipped the session
     // checkpoint to Completed but did not double-advance.
     AlreadyAdvanced,
+    // Idempotent replay discovered that the workflow was already terminal;
+    // cleanup may have been the crash boundary, so retry broker teardown.
+    AlreadyAdvancedTerminal,
     // The phase is decision-gated (review/QA/testing/etc.) so we refuse to
     // synthesize an `Advance` verdict from the resumed session. The session
     // checkpoint is marked Blocked with an actionable reason so the operator
@@ -296,6 +306,12 @@ impl ResumeProviderRegistry for ProductionResumeProviderRegistry {
         };
         ResumeLookup::Outcome(backend.resume_agent_for_restart(session_id, request).await)
     }
+
+    async fn teardown_retained_environment(&self, workflow_id: &str) {
+        if let Some(broker) = &self.environment_broker {
+            broker.teardown(workflow_id).await;
+        }
+    }
 }
 
 // Production wiring of `ResumedOutcomeApplier` that drives the in-tree
@@ -408,7 +424,11 @@ pub(super) async fn apply_resumed_outcome_in_tree(
                 "workflow already advanced past phase '{phase_id}' but failed to mark session completed: {err}"
             ));
         }
-        return ResumedOutcomeApplyResult::AlreadyAdvanced;
+        return if workflow_terminal {
+            ResumedOutcomeApplyResult::AlreadyAdvancedTerminal
+        } else {
+            ResumedOutcomeApplyResult::AlreadyAdvanced
+        };
     }
 
     // Decision-gated phases (review/QA/testing), phases that own a
@@ -490,7 +510,11 @@ pub(super) async fn apply_resumed_outcome_in_tree(
         ));
     }
 
-    ResumedOutcomeApplyResult::Advanced
+    if workflow_terminal_after {
+        ResumedOutcomeApplyResult::AdvancedTerminal
+    } else {
+        ResumedOutcomeApplyResult::Advanced
+    }
 }
 
 // Returns the set of workflow_ids that have a Running session checkpoint
@@ -574,6 +598,15 @@ where
                 // don't pick it back up.
                 match applier.apply(&checkpoint, session_id.as_deref()).await {
                     ResumedOutcomeApplyResult::Advanced | ResumedOutcomeApplyResult::AlreadyAdvanced => {
+                        report.resumed += 1;
+                    }
+                    ResumedOutcomeApplyResult::AdvancedTerminal
+                    | ResumedOutcomeApplyResult::AlreadyAdvancedTerminal => {
+                        if retained_environment {
+                            registry.teardown_retained_environment(&checkpoint.workflow_id).await;
+                            let _ =
+                                mark_environment_torn_down(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
+                        }
                         report.resumed += 1;
                     }
                     ResumedOutcomeApplyResult::BlockedAwaitingDecision => {
@@ -1496,9 +1529,9 @@ mod tests {
             ResumedOutcomeApplyResult,
         };
         use animus_runtime_shared::phase_session::{
-            read_checkpoint, update_provider_session_id, update_session_environment, update_session_running,
-            update_session_running_after_resume, write_session_pending, EnvironmentBinding, SessionCheckpoint,
-            SessionCheckpointStatus,
+            read_checkpoint, update_provider_session_id, update_session_completed, update_session_environment,
+            update_session_running, update_session_running_after_resume, write_session_pending, EnvironmentBinding,
+            SessionCheckpoint, SessionCheckpointStatus,
         };
         use async_trait::async_trait;
         use orchestrator_plugin_host::session::ResumeAgentOutcome;
@@ -1515,12 +1548,17 @@ mod tests {
 
         struct ScriptedRegistry {
             scripts: Mutex<HashMap<String, Script>>,
+            teardowns: Mutex<Vec<String>>,
         }
 
         impl ScriptedRegistry {
             fn new(entries: Vec<(&str, Script)>) -> Self {
                 let scripts = entries.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-                Self { scripts: Mutex::new(scripts) }
+                Self { scripts: Mutex::new(scripts), teardowns: Mutex::new(Vec::new()) }
+            }
+
+            fn teardown_calls(&self) -> Vec<String> {
+                self.teardowns.lock().expect("teardowns mutex").clone()
             }
         }
 
@@ -1540,6 +1578,10 @@ mod tests {
                     Some(Script::Failed { reason }) => ResumeLookup::Outcome(ResumeAgentOutcome::Failed { reason }),
                     None => ResumeLookup::NotInstalled,
                 }
+            }
+
+            async fn teardown_retained_environment(&self, workflow_id: &str) {
+                self.teardowns.lock().expect("teardowns mutex").push(workflow_id.to_string());
             }
         }
 
@@ -1593,6 +1635,12 @@ mod tests {
                         &checkpoint.phase_id,
                         new_session_id,
                     );
+                }
+                if matches!(
+                    &self.result,
+                    ResumedOutcomeApplyResult::AdvancedTerminal | ResumedOutcomeApplyResult::AlreadyAdvancedTerminal
+                ) {
+                    let _ = update_session_completed(&self.scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
                 }
                 self.result.clone()
             }
@@ -1759,6 +1807,55 @@ mod tests {
                 !after.environment.expect("binding retained").torn_down,
                 "broker-owned node binding remains live for the next phase"
             );
+            assert!(registry.teardown_calls().is_empty(), "a non-terminal resumed phase retains the adopted lease");
+        }
+
+        #[tokio::test]
+        async fn terminal_retained_environment_resume_tears_down_adopted_lease_once() {
+            let temp = TempDir::new().expect("tempdir");
+            let scoped = temp.path();
+            write_session_pending(
+                scoped,
+                "wf-delegated-final",
+                "publish",
+                "claude",
+                "run-delegated-final",
+                Some(json!({"context": {"prompt": "publish", "model": "claude-sonnet-4-6"}})),
+            )
+            .expect("pending");
+            update_session_running(scoped, "wf-delegated-final", "publish").expect("running");
+            update_session_environment(
+                scoped,
+                "wf-delegated-final",
+                "publish",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: animus_environment_protocol::EnvironmentHandle {
+                        id: "adopted-h1".to_string(),
+                        workspace_root: "/workspace".to_string(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("environment binding");
+
+            let registry =
+                ScriptedRegistry::new(vec![("claude", Script::RetainedEnvironmentResumed { new_session_id: None })]);
+            let applier =
+                RecordingApplier::new(ResumedOutcomeApplyResult::AdvancedTerminal, false, scoped.to_path_buf());
+
+            let first = auto_resume_running_checkpoints(scoped, &registry, &applier).await;
+            assert_eq!(first.resumed, 1);
+            assert_eq!(registry.teardown_calls(), vec!["wf-delegated-final".to_string()]);
+            let after =
+                read_checkpoint(scoped, "wf-delegated-final", "publish").expect("read").expect("checkpoint present");
+            assert!(after.environment.expect("binding").torn_down, "terminal resume records cleanup");
+
+            let second = auto_resume_running_checkpoints(scoped, &registry, &applier).await;
+            assert_eq!(second.resumed, 0, "completed checkpoint is not resumed twice");
+            assert_eq!(registry.teardown_calls().len(), 1, "terminal lease teardown occurs exactly once");
         }
 
         #[tokio::test]
@@ -2093,7 +2190,7 @@ mod tests {
                 Some("sess-rotated"),
             )
             .await;
-            assert_eq!(result, ResumedOutcomeApplyResult::Advanced);
+            assert_eq!(result, ResumedOutcomeApplyResult::AdvancedTerminal);
 
             let after = read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("present");
             assert_eq!(after.status, SessionCheckpointStatus::Completed);
@@ -2143,7 +2240,7 @@ mod tests {
             let result =
                 apply_resumed_outcome_in_tree(&project_root, &scoped_root, hub.clone(), &checkpoint, Some("sess-x"))
                     .await;
-            assert_eq!(result, ResumedOutcomeApplyResult::Advanced);
+            assert_eq!(result, ResumedOutcomeApplyResult::AdvancedTerminal);
 
             let after = hub.workflows().get(&workflow_id).await.expect("workflow after");
             let advanced = after.current_phase_index > before_index
@@ -2209,7 +2306,7 @@ mod tests {
             let first =
                 apply_resumed_outcome_in_tree(&project_root, &scoped_root, hub.clone(), &checkpoint, Some("sess-1"))
                     .await;
-            assert_eq!(first, ResumedOutcomeApplyResult::Advanced);
+            assert_eq!(first, ResumedOutcomeApplyResult::AdvancedTerminal);
 
             // Re-read the checkpoint (it's now Completed) but pretend a
             // crash left the OLD Running checkpoint for the same phase.
@@ -2228,7 +2325,7 @@ mod tests {
             .await;
             assert_eq!(
                 second,
-                ResumedOutcomeApplyResult::AlreadyAdvanced,
+                ResumedOutcomeApplyResult::AlreadyAdvancedTerminal,
                 "second apply MUST NOT double-advance the workflow"
             );
 

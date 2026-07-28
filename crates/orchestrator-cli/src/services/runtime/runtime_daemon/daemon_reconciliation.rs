@@ -308,11 +308,12 @@ fn current_delegate_binding(
     Some((phase_id, binding))
 }
 
-/// Release the exact delegated node retained by a workflow before an external
-/// cancellation is committed. The teardown happens first and the durable
-/// binding is marked only after it succeeds, so a failed cleanup leaves the
-/// workflow and checkpoint retryable. Repeated calls are idempotent because a
-/// marked binding is no longer returned by `current_delegate_binding`.
+/// Release every distinct delegated node retained by a workflow before an
+/// external cancellation is committed. Bindings are scanned across all phase
+/// checkpoints because the current phase may be manual/local while an earlier
+/// delegated phase still owns the workflow-scoped lease. Teardown happens
+/// first and every checkpoint referring to that handle is marked only after it
+/// succeeds, so failed cleanup remains retryable.
 pub(crate) fn teardown_retained_environment_for_cancel(
     project_root: &str,
     workflow: &OrchestratorWorkflow,
@@ -343,25 +344,57 @@ fn teardown_retained_environment_with<F>(
     teardown: F,
 ) -> anyhow::Result<()>
 where
-    F: FnOnce(&EnvironmentBinding) -> anyhow::Result<()>,
+    F: FnMut(&EnvironmentBinding) -> anyhow::Result<()>,
 {
-    let Some((phase_id, binding)) = current_delegate_binding(scoped_root, workflow) else {
-        return Ok(());
-    };
-    teardown(&binding)?;
-    mark_environment_torn_down(scoped_root, &workflow.id, &phase_id).with_context(|| {
-        format!(
-            "node {} was torn down but its retained binding could not be marked for workflow {}/{}",
-            binding.handle.id, workflow.id, phase_id
-        )
-    })?;
-    info!(
-        actor = protocol::ACTOR_DAEMON,
-        workflow_id = %workflow.id,
-        node = %binding.handle.id,
-        "released retained delegated node before external workflow cancellation"
-    );
+    let mut teardown = teardown;
+    for (binding, phase_ids) in retained_delegate_bindings(scoped_root, workflow) {
+        teardown(&binding)?;
+        for phase_id in &phase_ids {
+            mark_environment_torn_down(scoped_root, &workflow.id, phase_id).with_context(|| {
+                format!(
+                    "node {} was torn down but its retained binding could not be marked for workflow {}/{}",
+                    binding.handle.id, workflow.id, phase_id
+                )
+            })?;
+        }
+        info!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %workflow.id,
+            node = %binding.handle.id,
+            phases = ?phase_ids,
+            "released retained delegated node before external workflow cancellation"
+        );
+    }
     Ok(())
+}
+
+/// Group every untorn-down phase binding by exact environment handle. A
+/// healthy brokered workflow normally has one group (the same handle repeated
+/// by later phases); grouping also prevents duplicate teardown if several
+/// checkpoints reference it and safely exposes any historical extra lease.
+fn retained_delegate_bindings(
+    scoped_root: &Path,
+    workflow: &OrchestratorWorkflow,
+) -> Vec<(EnvironmentBinding, Vec<String>)> {
+    let mut groups: Vec<(EnvironmentBinding, Vec<String>)> = Vec::new();
+    for phase in &workflow.phases {
+        let Some(binding) = read_checkpoint(scoped_root, &workflow.id, &phase.phase_id)
+            .ok()
+            .flatten()
+            .and_then(|checkpoint| checkpoint.environment)
+            .filter(|binding| !binding.torn_down)
+        else {
+            continue;
+        };
+        if let Some((_, phase_ids)) = groups.iter_mut().find(|(candidate, _)| {
+            candidate.environment_id == binding.environment_id && candidate.handle == binding.handle
+        }) {
+            phase_ids.push(phase.phase_id.clone());
+        } else {
+            groups.push((binding, vec![phase.phase_id.clone()]));
+        }
+    }
+    groups
 }
 
 /// Liveness of a delegated node, as observed by a trivial exec probe.
@@ -2088,6 +2121,48 @@ mod tests {
         let checkpoint =
             read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
         assert!(checkpoint.environment.expect("binding").torn_down, "successful cleanup releases the hold");
+    }
+
+    #[tokio::test]
+    async fn external_cancel_finds_retained_binding_from_earlier_phase() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+        let (scoped_root, retained_phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-from-earlier-phase")).await;
+
+        // Model cancellation after the workflow has advanced to a later
+        // manual/local phase whose checkpoint has no environment binding.
+        let (later_index, later_phase) = workflow
+            .phases
+            .iter()
+            .enumerate()
+            .find(|(_, phase)| phase.phase_id != retained_phase_id)
+            .expect("fixture has a later phase");
+        let mut later_workflow = workflow.clone();
+        later_workflow.current_phase_index = later_index;
+        later_workflow.current_phase = Some(later_phase.phase_id.clone());
+
+        let teardown_calls = AtomicUsize::new(0);
+        super::teardown_retained_environment_with(&scoped_root, &later_workflow, |binding| {
+            assert_eq!(binding.handle.id, "node-from-earlier-phase");
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("earlier retained binding is released");
+        super::teardown_retained_environment_with(&scoped_root, &later_workflow, |_| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("repeated cleanup is inert");
+
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "earlier retained handle tears down exactly once");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &retained_phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "earlier binding is marked torn down");
     }
 
     #[tokio::test]
