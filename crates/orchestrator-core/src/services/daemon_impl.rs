@@ -289,8 +289,8 @@ fn subject_plugins_disabled() -> bool {
 ///
 /// Consolidated backends (e.g. `animus-postgres`) whose binary name does NOT
 /// begin with `animus-subject-` are correctly recognized from their manifest's
-/// `plugin_kind = "subject_backend"`, whether found in the canonical plugin
-/// directory or registered in `plugins.yaml`.
+/// primary `plugin_kind` or secondary `plugin_kinds` roles, whether found in
+/// the canonical plugin directory or registered in `plugins.yaml`.
 ///
 /// Install-time kind renames recorded in `plugins.lock` are applied before
 /// the duplicate-kind check, matching the logic in `resolve_subject_dispatch`.
@@ -1141,6 +1141,55 @@ mod tests {
             reason.is_none(),
             "scanned consolidated subject backend must be routable without a plugins.yaml entry, got: {reason:?}"
         );
+    }
+
+    /// Multi-kind consolidated plugins may expose subject storage as a
+    /// secondary role. Health must use the same role-aware discovery as daemon
+    /// boot instead of requiring `subject_backend` to be the primary kind.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_not_degraded_for_secondary_subject_backend_role() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let bin = plugin_dir.join("animus-postgres");
+        let manifest = serde_json::json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "plugin_kinds": ["subject_backend"],
+            "description": "Consolidated PostgreSQL provider and subject backend",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"]
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_none(),
+            "a consolidated plugin with a secondary subject_backend role must be routable, got: {reason:?}"
+        );
+
+        for status in [DaemonStatus::Running, DaemonStatus::Paused] {
+            let reasons = degraded_reasons_for(&project_root, &status);
+            assert!(
+                reasons.is_empty(),
+                "a live daemon ({status:?}) with a secondary-role subject backend must remain healthy, got: {reasons:?}"
+            );
+        }
     }
 
     /// Capability-aware discovery must still enforce executability. A

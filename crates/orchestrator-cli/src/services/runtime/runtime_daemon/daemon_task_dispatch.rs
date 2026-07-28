@@ -23,9 +23,13 @@ pub async fn dispatch_queued_entries_via_runner(
     let project_root_path = std::path::Path::new(root);
 
     let exclude_subjects: Vec<QueueSubjectId> = active_subject_ids.iter().cloned().map(QueueSubjectId::new).collect();
+    // TASK-1072: mint the durable ids BEFORE the atomic lease. The queue stores
+    // these exact ids and the runner creates/loads the journal rows with them,
+    // eliminating the previous queue-UUID / runner-UUID split.
+    let workflow_ids: Vec<String> = (0..limit).map(|_| uuid::Uuid::new_v4().to_string()).collect();
     let lease_req = QueueLeaseRequest {
         max: limit,
-        workflow_ids: None,
+        workflow_ids: Some(workflow_ids),
         exclude_subjects: if exclude_subjects.is_empty() { None } else { Some(exclude_subjects) },
     };
     match plugin_clients::call_queue_lease(project_root_path, &lease_req).await {
@@ -46,6 +50,15 @@ pub async fn dispatch_queued_entries_via_runner(
                         undecodable_entry_ids.push(entry.entry_id.clone());
                         continue;
                     }
+                };
+                let Some(workflow_id) = entry.workflow_id.clone() else {
+                    warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        entry_id = %entry.entry_id,
+                        "queue/lease returned an assigned entry without workflow_id; closing it as failed"
+                    );
+                    undecodable_entry_ids.push(entry.entry_id.clone());
+                    continue;
                 };
                 // Within-batch dedupe: the queue's `exclude_subjects` filter
                 // honors the snapshot we sent at lease time, but multiple
@@ -74,8 +87,11 @@ pub async fn dispatch_queued_entries_via_runner(
                     plugin_owned_subject_keys.insert(subject_key);
                 }
                 leased_entry_ids.push(entry.entry_id.clone());
-                planned_starts
-                    .push(PlannedDispatchStart { dispatch, selection_source: DispatchSelectionSource::DispatchQueue });
+                planned_starts.push(PlannedDispatchStart {
+                    dispatch,
+                    workflow_id: Some(workflow_id),
+                    selection_source: DispatchSelectionSource::DispatchQueue,
+                });
             }
         }
         Ok(None) => {

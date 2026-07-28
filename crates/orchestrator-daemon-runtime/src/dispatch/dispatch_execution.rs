@@ -24,7 +24,13 @@ where
             break;
         }
 
-        match process_manager.spawn_workflow_runner(&planned_start.dispatch, project_root) {
+        let spawn = match planned_start.workflow_id.as_deref() {
+            Some(workflow_id) => {
+                process_manager.spawn_workflow_runner_with_id(&planned_start.dispatch, project_root, workflow_id)
+            }
+            None => process_manager.spawn_workflow_runner(&planned_start.dispatch, project_root),
+        };
+        match spawn {
             Ok(()) => {
                 notice_sink.notice(DispatchNotice::Started {
                     dispatch: planned_start.dispatch.clone(),
@@ -32,7 +38,7 @@ where
                 });
                 started_workflows.push(DispatchWorkflowStart {
                     dispatch: planned_start.dispatch.clone(),
-                    workflow_id: None,
+                    workflow_id: planned_start.workflow_id.clone(),
                     selection_source: planned_start.selection_source,
                 });
             }
@@ -79,6 +85,7 @@ mod tests {
         let mut manager = ProcessManager::new().with_workflow_concurrency_max(Some(0));
         let starts = vec![PlannedDispatchStart {
             dispatch: SubjectDispatch::for_task("TASK-DEFER", "standard"),
+            workflow_id: Some("wf-defer".to_string()),
             selection_source: DispatchSelectionSource::DispatchQueue,
         }];
         let mut sink = RecordingSink { notices: Vec::new() };
@@ -114,6 +121,7 @@ mod tests {
         let mut manager = ProcessManager::new().with_workflow_concurrency_max(None);
         let starts = vec![PlannedDispatchStart {
             dispatch: SubjectDispatch::for_task("TASK-FAIL", "standard"),
+            workflow_id: Some("wf-fail".to_string()),
             selection_source: DispatchSelectionSource::DispatchQueue,
         }];
         let mut sink = RecordingSink { notices: Vec::new() };

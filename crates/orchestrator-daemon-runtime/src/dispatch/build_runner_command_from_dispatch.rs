@@ -13,7 +13,19 @@ pub fn build_runner_command(
     phase_routing: Option<&PhaseRoutingConfig>,
     mcp_config: Option<&McpRuntimeConfig>,
 ) -> std::process::Command {
-    build_runner_command_with_resume(dispatch, project_root, phase_routing, mcp_config, None)
+    build_runner_command_with_target(dispatch, project_root, phase_routing, mcp_config, None, None)
+}
+
+/// Build a fresh runner command whose workflow row is created idempotently
+/// with the kernel-selected `workflow_id`.
+pub fn build_runner_command_with_id(
+    dispatch: &SubjectDispatch,
+    project_root: &str,
+    phase_routing: Option<&PhaseRoutingConfig>,
+    mcp_config: Option<&McpRuntimeConfig>,
+    workflow_id: &str,
+) -> std::process::Command {
+    build_runner_command_with_target(dispatch, project_root, phase_routing, mcp_config, Some(workflow_id), None)
 }
 
 /// Build the `execute` command for the workflow runner.
@@ -31,6 +43,18 @@ pub fn build_runner_command_with_resume(
     mcp_config: Option<&McpRuntimeConfig>,
     resume_workflow_id: Option<&str>,
 ) -> std::process::Command {
+    build_runner_command_with_target(dispatch, project_root, phase_routing, mcp_config, None, resume_workflow_id)
+}
+
+fn build_runner_command_with_target(
+    dispatch: &SubjectDispatch,
+    project_root: &str,
+    phase_routing: Option<&PhaseRoutingConfig>,
+    mcp_config: Option<&McpRuntimeConfig>,
+    new_workflow_id: Option<&str>,
+    resume_workflow_id: Option<&str>,
+) -> std::process::Command {
+    debug_assert!(new_workflow_id.is_none() || resume_workflow_id.is_none());
     let mut cmd = std::process::Command::new(resolve_workflow_runner_binary_for(Some(project_root)));
     cmd.arg("execute");
 
@@ -72,7 +96,9 @@ pub fn build_runner_command_with_resume(
         }
     }
 
-    if let Some(workflow_id) = resume_workflow_id {
+    if let Some(workflow_id) = new_workflow_id {
+        cmd.arg("--new-workflow-id").arg(workflow_id);
+    } else if let Some(workflow_id) = resume_workflow_id {
         cmd.arg("--workflow-id").arg(workflow_id);
     }
 
@@ -478,7 +504,16 @@ mod tests {
     use protocol::{SubjectDispatch, SubjectDispatchExt};
     use serde_json::json;
 
-    use super::build_runner_command_from_dispatch;
+    use super::{build_runner_command_from_dispatch, build_runner_command_with_id};
+
+    #[test]
+    fn queue_dispatch_passes_kernel_selected_workflow_id_as_fresh_bootstrap() {
+        let dispatch = SubjectDispatch::for_task("TASK-ONE-ID", "coding");
+        let command = build_runner_command_with_id(&dispatch, "/tmp/project", None, None, "wf-authoritative");
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(args.windows(2).any(|pair| pair == ["--new-workflow-id", "wf-authoritative"]));
+        assert!(!args.iter().any(|arg| arg == "--workflow-id"));
+    }
 
     #[test]
     fn runner_command_uses_subject_workflow_ref_and_input_from_dispatch() {

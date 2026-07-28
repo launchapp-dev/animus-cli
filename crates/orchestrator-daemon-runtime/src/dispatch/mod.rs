@@ -29,7 +29,8 @@ mod ready_dispatch_plan;
 pub mod reattach;
 
 pub use build_runner_command_from_dispatch::{
-    build_runner_command, build_runner_command_from_dispatch, build_runner_command_with_resume,
+    build_runner_command, build_runner_command_from_dispatch, build_runner_command_with_id,
+    build_runner_command_with_resume,
 };
 pub use completed_process::CompletedProcess;
 pub use completion_reconciliation_plan::{
