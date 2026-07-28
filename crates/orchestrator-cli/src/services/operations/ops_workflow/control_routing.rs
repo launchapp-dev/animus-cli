@@ -299,6 +299,8 @@ impl WorkflowRouting for WorkflowRoutingImpl {
     async fn workflow_cancel(&self, request: WireCancelRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
         let root = self.project_root_str();
+        let workflow = hub.workflows().get(&request.id).await.map_err(internal)?;
+        crate::services::runtime::teardown_retained_environment_for_cancel(&root, &workflow).map_err(internal)?;
         let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(&root, hub.clone()).await;
         let _ =
             dispatch_workflow_event(hub, task_store.as_ref(), &root, WorkflowEvent::Cancel { workflow_id: request.id })

@@ -17,7 +17,8 @@
 //!   (one relay = one node), pinned across prepare / exec / teardown.
 //! - [`Self::teardown`] disposes the node once, at terminal workflow state.
 //! - Durable JSON lease records under the scoped state root let a fresh daemon
-//!   reap nodes leaked by a PRIOR daemon instance (its relay is dead) on startup.
+//!   adopt the exact Ready lease still claimed by a Running checkpoint, while
+//!   cold-reaping unclaimed nodes leaked by a PRIOR daemon instance.
 //!
 //! ## IPC
 //!
@@ -33,12 +34,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
+use animus_runtime_shared::phase_session::{list_running_checkpoints, update_session_environment, EnvironmentBinding};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex as AsyncMutex;
 
-use orchestrator_core::environment::{EnvironmentHandle, EnvironmentSpec, ExecStream, HarnessCommand};
+use orchestrator_core::environment::{EnvironmentHandle, EnvironmentSpec, ExecResponse, ExecStream, HarnessCommand};
 use orchestrator_core::EnvironmentClient;
 
 /// Local-socket path the per-phase runner dials to reach the broker.
@@ -91,8 +93,8 @@ enum BrokerRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Durable lease record (survives a daemon restart so the reaper can cold-tear
-// down a node the prior daemon instance leaked).
+// Durable lease record (survives a daemon restart so the new broker can adopt
+// an exact claimed lease or cold-tear down an unclaimed leaked node).
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,9 +129,56 @@ struct LeaseRecord {
 struct ReadyLease {
     environment_id: String,
     project_root: String,
-    client: Arc<EnvironmentClient>,
+    client: Arc<dyn EnvironmentLeaseClient>,
     handle: EnvironmentHandle,
 }
+
+/// Object-safe surface the broker needs from an environment client. Keeping
+/// resolution behind this seam lets the restart lifecycle be tested as one
+/// broker-to-broker sequence without installing or spawning a real plugin.
+trait EnvironmentLeaseClient: Send + Sync {
+    fn prepare(&self, spec: EnvironmentSpec) -> Result<EnvironmentHandle>;
+    fn exec_stream(
+        &self,
+        handle: &EnvironmentHandle,
+        command: HarnessCommand,
+        stdin: Option<String>,
+        timeout: Option<Duration>,
+        on_output: &(dyn Fn(ExecStream, &str) + Send + Sync),
+    ) -> Result<ExecResponse>;
+    fn teardown(&self, handle: &EnvironmentHandle) -> Result<()>;
+}
+
+impl EnvironmentLeaseClient for EnvironmentClient {
+    fn prepare(&self, spec: EnvironmentSpec) -> Result<EnvironmentHandle> {
+        EnvironmentClient::prepare(self, spec)
+    }
+
+    fn exec_stream(
+        &self,
+        handle: &EnvironmentHandle,
+        command: HarnessCommand,
+        stdin: Option<String>,
+        timeout: Option<Duration>,
+        on_output: &(dyn Fn(ExecStream, &str) + Send + Sync),
+    ) -> Result<ExecResponse> {
+        EnvironmentClient::exec_stream(
+            self,
+            handle,
+            command,
+            std::collections::BTreeMap::new(),
+            stdin,
+            timeout,
+            on_output,
+        )
+    }
+
+    fn teardown(&self, handle: &EnvironmentHandle) -> Result<()> {
+        EnvironmentClient::teardown(self, handle)
+    }
+}
+
+type ClientResolver = dyn Fn(&Path, &str) -> Result<Arc<dyn EnvironmentLeaseClient>> + Send + Sync;
 
 /// Context the daemon registers at spawn time (it, not the runner, is the
 /// authority on `project_root`). `acquire` resolves the [`EnvironmentClient`]
@@ -153,6 +202,7 @@ struct Inner {
     key_locks: StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// run_id -> spawn-time context (project_root + expected environment id).
     pending: StdMutex<HashMap<String, PendingContext>>,
+    client_resolver: Arc<ClientResolver>,
     /// The socket acceptor task; aborted + socket unlinked on drop.
     acceptor: StdMutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -178,13 +228,24 @@ pub struct EnvironmentBroker {
 
 impl EnvironmentBroker {
     /// Bind the broker's local socket under `project_root`'s scoped state root,
-    /// start the accept loop on the current Tokio runtime, and reap any lease
-    /// records owned by a PRIOR daemon instance (their relay is dead).
+    /// start the accept loop on the current Tokio runtime, adopt any exact
+    /// Ready lease still claimed by a Running checkpoint, and reap unclaimed
+    /// records owned by a prior daemon instance.
     ///
     /// Must be called from within the daemon's multi-threaded runtime: the
     /// resident [`EnvironmentClient`] the broker drives spawns its warm plugin
     /// host onto THIS runtime and is pinned there for the run's lifetime.
     pub async fn start(project_root: &str) -> std::io::Result<Self> {
+        Self::start_with_resolver(
+            project_root,
+            Arc::new(|project_root, environment_id| {
+                Ok(Arc::new(EnvironmentClient::resolve(project_root, environment_id)?))
+            }),
+        )
+        .await
+    }
+
+    async fn start_with_resolver(project_root: &str, client_resolver: Arc<ClientResolver>) -> std::io::Result<Self> {
         let records_dir = broker_records_dir(project_root);
         std::fs::create_dir_all(&records_dir)?;
         let socket_path = broker_socket_path(&records_dir);
@@ -200,6 +261,7 @@ impl EnvironmentBroker {
             leases: AsyncMutex::new(HashMap::new()),
             key_locks: StdMutex::new(HashMap::new()),
             pending: StdMutex::new(HashMap::new()),
+            client_resolver,
             acceptor: StdMutex::new(None),
         });
 
@@ -234,8 +296,32 @@ impl EnvironmentBroker {
         );
     }
 
+    /// Whether this daemon owns the exact durable lease a restart checkpoint
+    /// names. Resume callers use this as a fail-closed gate: a live node is not
+    /// enough; the new broker must have adopted its client + handle so later
+    /// phases and terminal cleanup stay on the same workflow-scoped lease.
+    pub async fn owns_ready_lease(&self, run_id: &str, environment_id: &str, handle: &EnvironmentHandle) -> bool {
+        self.inner
+            .leases
+            .lock()
+            .await
+            .get(run_id)
+            .is_some_and(|lease| lease.environment_id == environment_id && lease.handle == *handle)
+    }
+
+    #[cfg(test)]
+    fn stop_acceptor_for_restart_test(&self) {
+        if let Some(handle) = self.inner.acceptor.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            handle.abort();
+        }
+        if looks_like_filesystem(&self.inner.socket_path) {
+            let _ = std::fs::remove_file(&self.inner.socket_path);
+        }
+    }
+
     /// Idempotently dispose the node for `run_id`: `Ready -> TearingDown ->
     /// TornDown`, delete the durable record, forget the run's pending context.
+    /// A failed teardown retains a retryable durable record.
     /// A no-op when no lease exists (already torn down, or never prepared).
     pub async fn teardown(&self, run_id: &str) {
         let lease = self.inner.leases.lock().await.remove(run_id);
@@ -252,8 +338,17 @@ impl EnvironmentBroker {
                     target: "animus.runtime.environment_broker",
                     run_id,
                     %error,
-                    "environment teardown failed; deleting lease record anyway (node may be reclaimed by the plugin GC sweep)"
+                    "environment teardown failed; retaining lease record for startup retry"
                 );
+                self.write_record(
+                    run_id,
+                    &lease.environment_id,
+                    &lease.project_root,
+                    LeaseState::TearingDown,
+                    Some(&handle),
+                );
+                self.forget_run(run_id);
+                return;
             }
         }
         self.delete_record(run_id);
@@ -281,16 +376,29 @@ impl EnvironmentBroker {
         let _guard = key_lock.lock().await;
 
         // Fast path: an already-prepared lease is reused by every later phase.
-        if let Some(lease) = self.inner.leases.lock().await.get(run_id) {
-            if lease.environment_id != environment_id {
-                bail!("run {run_id} is already bound to environment '{}'", lease.environment_id);
+        let existing = self
+            .inner
+            .leases
+            .lock()
+            .await
+            .get(run_id)
+            .map(|lease| (lease.environment_id.clone(), lease.handle.clone()));
+        if let Some((lease_environment_id, handle)) = existing {
+            if lease_environment_id != environment_id {
+                bail!("run {run_id} is already bound to environment '{lease_environment_id}'");
             }
-            return Ok((lease.handle.workspace_root.clone(), lease.handle.id.clone()));
+            // Every phase gets its own checkpoint. Reusing an existing
+            // workflow lease must bind the current Running phase too, or a
+            // second restart after the phase boundary cannot prove ownership.
+            bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
+                .with_context(|| format!("persisting reused phase environment binding for run {run_id}"))?;
+            return Ok((handle.workspace_root.clone(), handle.id.clone()));
         }
 
         // Slow path: prepare the node ONCE. Record BEFORE prepare so a crash
         // mid-prepare still leaves a durable marker for the startup reaper.
-        self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None);
+        self.write_record_required(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None)
+            .with_context(|| format!("persisting preparing lease for run {run_id}"))?;
 
         let mut spec = spec;
         set_run_id_metadata(&mut spec, run_id);
@@ -301,16 +409,54 @@ impl EnvironmentBroker {
         // (its own `block_in_place`), so both are called directly — the daemon
         // worker is handed off for the duration of the prepare RPC by the client.
         let prepared = (|| {
-            let client = EnvironmentClient::resolve(Path::new(&project_root), &environment_id_owned)
+            let client = (self.inner.client_resolver)(Path::new(&project_root), &environment_id_owned)
                 .with_context(|| format!("resolving environment '{environment_id_owned}' for run {run_id}"))?;
-            let client = Arc::new(client);
             let handle = client.prepare(spec).with_context(|| format!("preparing environment for run {run_id}"))?;
             Ok::<_, anyhow::Error>((client, handle))
         })();
 
         match prepared {
             Ok((client, handle)) => {
-                self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Ready, Some(&handle));
+                if let Err(error) = self.write_record_required(
+                    run_id,
+                    environment_id,
+                    &pending.project_root,
+                    LeaseState::Ready,
+                    Some(&handle),
+                ) {
+                    // Never expose/execute a prepared node whose complete
+                    // handle is not durable. Best-effort rollback keeps the
+                    // failure contained to acquire.
+                    let cleanup = client.teardown(&handle).err();
+                    return Err(error).with_context(|| {
+                        format!(
+                            "persisting ready lease for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
+                if let Err(error) =
+                    bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
+                {
+                    // The lease record is sufficient for cold reaping, but
+                    // restart resume and liveness reconciliation use the phase
+                    // checkpoint as their recovery oracle. Never let the
+                    // runner execute until that binding is durable too.
+                    let cleanup = client.teardown(&handle).err();
+                    if cleanup.is_none() {
+                        self.delete_record(run_id);
+                    }
+                    return Err(error).with_context(|| {
+                        format!(
+                            "persisting phase environment binding for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
                 let response = (handle.workspace_root.clone(), handle.id.clone());
                 self.inner.leases.lock().await.insert(
                     run_id.to_string(),
@@ -337,7 +483,11 @@ impl EnvironmentBroker {
     /// NEVER exec into another run's node), and return the pinned client +
     /// handle to drive `exec_stream` against. The lease lock is NOT held across
     /// the exec, so a long command does not block other broker ops.
-    async fn exec_target(&self, run_id: &str, handle_id: &str) -> Result<(Arc<EnvironmentClient>, EnvironmentHandle)> {
+    async fn exec_target(
+        &self,
+        run_id: &str,
+        handle_id: &str,
+    ) -> Result<(Arc<dyn EnvironmentLeaseClient>, EnvironmentHandle)> {
         let leases = self.inner.leases.lock().await;
         let lease =
             leases.get(run_id).ok_or_else(|| anyhow!("no prepared environment for run {run_id} (acquire first)"))?;
@@ -393,14 +543,36 @@ impl EnvironmentBroker {
         }
     }
 
+    fn write_record_required(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        project_root: &str,
+        state: LeaseState,
+        handle: Option<&EnvironmentHandle>,
+    ) -> std::io::Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = LeaseRecord {
+            run_id: run_id.to_string(),
+            daemon_instance_id: self.inner.daemon_instance_id.clone(),
+            environment_id: environment_id.to_string(),
+            project_root: project_root.to_string(),
+            state,
+            handle: handle.cloned(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        write_record_atomic(&self.record_path(run_id), &record)
+    }
+
     fn delete_record(&self, run_id: &str) {
         let _ = std::fs::remove_file(self.record_path(run_id));
     }
 
-    /// Cold-teardown every lease record owned by a PRIOR daemon instance: its
-    /// relay died with that daemon, so a fresh `resolve` + `teardown(handle)`
-    /// (dispose-by-id on a fresh plugin process) reclaims the leaked node. Then
-    /// delete the record. Records owned by THIS instance are left untouched.
+    /// Reconcile every lease record owned by a prior daemon instance. Adopt an
+    /// exact Ready lease still claimed by a Running checkpoint; otherwise use
+    /// a fresh `resolve` + `teardown(handle)` to reclaim the leaked node and
+    /// delete its record. Records owned by this instance are left untouched.
     async fn reap_prior_daemon_records(&self) {
         let entries = match std::fs::read_dir(&self.inner.records_dir) {
             Ok(entries) => entries,
@@ -422,6 +594,58 @@ impl EnvironmentBroker {
             if record.daemon_instance_id == self.inner.daemon_instance_id {
                 continue;
             }
+            // A Running delegated checkpoint is a durable claim on this exact
+            // node. Preserve it until startup reconciliation can probe/resume
+            // it; otherwise broker startup destroys the node before TASK-933
+            // recovery runs. Unclaimed records retain the cold-reap behavior.
+            if prior_record_is_claimed_for_resume(&record) {
+                let Some(handle) = record.handle.clone() else {
+                    continue;
+                };
+                match (self.inner.client_resolver)(Path::new(&record.project_root), &record.environment_id) {
+                    Ok(client) => {
+                        if let Err(error) = self.write_record_required(
+                            &record.run_id,
+                            &record.environment_id,
+                            &record.project_root,
+                            LeaseState::Ready,
+                            Some(&handle),
+                        ) {
+                            tracing::warn!(
+                                target: "animus.runtime.environment_broker",
+                                run_id = %record.run_id,
+                                %error,
+                                "startup adoption could not rewrite lease ownership; keeping prior durable record"
+                            );
+                            continue;
+                        }
+                        self.inner.leases.lock().await.insert(
+                            record.run_id.clone(),
+                            ReadyLease {
+                                environment_id: record.environment_id.clone(),
+                                project_root: record.project_root.clone(),
+                                client,
+                                handle: handle.clone(),
+                            },
+                        );
+                        tracing::info!(
+                            target: "animus.runtime.environment_broker",
+                            run_id = %record.run_id,
+                            node = %handle.id,
+                            "startup adopted prior node claimed by a running delegated checkpoint"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "animus.runtime.environment_broker",
+                            run_id = %record.run_id,
+                            %error,
+                            "startup could not adopt claimed prior node; preserving durable record for retry"
+                        );
+                    }
+                }
+                continue;
+            }
             if let Some(handle) = record.handle.clone() {
                 let environment_id = record.environment_id.clone();
                 let project_root = record.project_root.clone();
@@ -429,27 +653,91 @@ impl EnvironmentBroker {
                 // `resolve` + `teardown` bridge async→sync internally; call
                 // directly (no outer `block_in_place`).
                 let outcome = (|| {
-                    let client = EnvironmentClient::resolve(Path::new(&project_root), &environment_id)?;
+                    let client = (self.inner.client_resolver)(Path::new(&project_root), &environment_id)?;
                     client.teardown(&handle)
                 })();
-                if let Err(error) = outcome {
-                    tracing::warn!(
-                        target: "animus.runtime.environment_broker",
-                        run_id = %run_id,
-                        %error,
-                        "startup reap: cold teardown of an orphaned node failed; deleting the record anyway"
-                    );
-                } else {
-                    tracing::info!(
-                        target: "animus.runtime.environment_broker",
-                        run_id = %run_id,
-                        "startup reap: cold tore down a node leaked by a prior daemon instance"
-                    );
+                match outcome {
+                    Err(error) => {
+                        tracing::warn!(
+                            target: "animus.runtime.environment_broker",
+                            run_id = %run_id,
+                            %error,
+                            "startup reap: cold teardown failed; retaining the lease record for retry"
+                        );
+                        continue;
+                    }
+                    Ok(()) => {
+                        tracing::info!(
+                            target: "animus.runtime.environment_broker",
+                            run_id = %run_id,
+                            "startup reap: cold tore down a node leaked by a prior daemon instance"
+                        );
+                    }
                 }
             }
             let _ = std::fs::remove_file(&path);
         }
     }
+}
+
+/// Persist the production broker's prepared handle into the phase checkpoint
+/// before the acquire response exposes the node to a runner. A workflow has at
+/// most one Running phase checkpoint; refusing ambiguous/missing ownership
+/// closes the prepare-to-persistence crash window instead of executing work
+/// that restart reconciliation cannot resume or reap by handle.
+fn bind_running_phase_checkpoint(
+    project_root: &str,
+    run_id: &str,
+    environment_id: &str,
+    handle: &EnvironmentHandle,
+) -> Result<()> {
+    let scoped_root = protocol::repository_scope::scoped_state_root(Path::new(project_root))
+        .ok_or_else(|| anyhow!("project has no scoped state root"))?;
+    let mut matches = list_running_checkpoints(&scoped_root)
+        .context("listing running phase checkpoints")?
+        .into_iter()
+        .map(|(_, checkpoint)| checkpoint)
+        .filter(|checkpoint| checkpoint.workflow_id == run_id);
+    let checkpoint =
+        matches.next().ok_or_else(|| anyhow!("no Running phase checkpoint found for brokered workflow"))?;
+    if matches.next().is_some() {
+        bail!("multiple Running phase checkpoints found for brokered workflow");
+    }
+    update_session_environment(
+        &scoped_root,
+        &checkpoint.workflow_id,
+        &checkpoint.phase_id,
+        EnvironmentBinding {
+            environment_id: environment_id.to_string(),
+            handle: handle.clone(),
+            bound_at: chrono::Utc::now().to_rfc3339(),
+            torn_down: false,
+        },
+    )
+    .context("writing delegated environment binding")
+}
+
+fn prior_record_is_claimed_for_resume(record: &LeaseRecord) -> bool {
+    // Only a fully prepared lease can be resumed. In particular, preserving a
+    // TearingDown record would allow already-completed coding work to be
+    // reattached after restart instead of letting startup finish reaping it.
+    if record.state != LeaseState::Ready {
+        return false;
+    }
+    let Some(handle) = record.handle.as_ref() else {
+        return false;
+    };
+    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(Path::new(&record.project_root)) else {
+        return false;
+    };
+    animus_runtime_shared::phase_session::list_running_checkpoints(&scoped_root).ok().into_iter().flatten().any(
+        |(_, checkpoint)| {
+            checkpoint.workflow_id == record.run_id
+                && checkpoint.environment.as_ref().is_some_and(|binding| {
+                    !binding.torn_down && binding.environment_id == record.environment_id && binding.handle == *handle
+                })
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -581,16 +869,10 @@ async fn handle_exec(
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
     let timeout = timeout_secs.map(Duration::from_secs);
     let exec_task = tokio::spawn(async move {
-        client.exec_stream(
-            &handle,
-            command,
-            std::collections::BTreeMap::new(),
-            stdin,
-            timeout,
-            |stream: ExecStream, text: &str| {
-                let _ = tx.send(json!({ "out": exec_stream_str(stream), "text": text }));
-            },
-        )
+        let on_output = |stream: ExecStream, text: &str| {
+            let _ = tx.send(json!({ "out": exec_stream_str(stream), "text": text }));
+        };
+        client.exec_stream(&handle, command, stdin, timeout, &on_output)
     });
 
     while let Some(frame) = rx.recv().await {
@@ -706,6 +988,38 @@ fn write_record_atomic(path: &Path, record: &LeaseRecord) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct FakeLeaseClient {
+        handle: EnvironmentHandle,
+        prepares: AtomicUsize,
+        execs: AtomicUsize,
+        teardowns: AtomicUsize,
+    }
+
+    impl EnvironmentLeaseClient for FakeLeaseClient {
+        fn prepare(&self, _spec: EnvironmentSpec) -> Result<EnvironmentHandle> {
+            self.prepares.fetch_add(1, Ordering::SeqCst);
+            Ok(self.handle.clone())
+        }
+
+        fn exec_stream(
+            &self,
+            _handle: &EnvironmentHandle,
+            _command: HarnessCommand,
+            _stdin: Option<String>,
+            _timeout: Option<Duration>,
+            _on_output: &(dyn Fn(ExecStream, &str) + Send + Sync),
+        ) -> Result<ExecResponse> {
+            self.execs.fetch_add(1, Ordering::SeqCst);
+            Ok(ExecResponse { exit_code: Some(0), stdout: String::new(), stderr: String::new(), timed_out: false })
+        }
+
+        fn teardown(&self, _handle: &EnvironmentHandle) -> Result<()> {
+            self.teardowns.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     #[test]
     fn local_environment_ids_are_recognized() {
@@ -796,6 +1110,172 @@ mod tests {
         assert_eq!(decoded.run_id, "wf-1");
         assert_eq!(decoded.state, LeaseState::Ready);
         assert_eq!(decoded.handle.unwrap().id, "node-1");
+    }
+
+    #[test]
+    fn broker_binding_is_written_to_the_running_phase_checkpoint() {
+        use animus_runtime_shared::phase_session::{read_checkpoint, update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(
+            &scoped_root,
+            "wf-bound",
+            "implementation",
+            "claude",
+            "agent-run",
+            Some(json!({"context": {"prompt": "continue"}})),
+        )
+        .expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-bound", "implementation").expect("running checkpoint");
+        let handle = EnvironmentHandle {
+            id: "node-bound".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+
+        bind_running_phase_checkpoint(&project_root, "wf-bound", "railway", &handle).expect("persist broker binding");
+
+        let checkpoint = read_checkpoint(&scoped_root, "wf-bound", "implementation")
+            .expect("read checkpoint")
+            .expect("checkpoint exists");
+        let binding = checkpoint.environment.expect("environment binding");
+        assert_eq!(binding.environment_id, "railway");
+        assert_eq!(binding.handle, handle);
+        assert!(!binding.torn_down);
+    }
+
+    #[test]
+    fn only_ready_prior_record_is_claimed_for_resume() {
+        use animus_runtime_shared::phase_session::{update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(&scoped_root, "wf-resume", "implementation", "claude", "agent-run", None)
+            .expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-resume", "implementation").expect("running checkpoint");
+        let handle = EnvironmentHandle {
+            id: "node-resume".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+        bind_running_phase_checkpoint(&project_root, "wf-resume", "railway", &handle).expect("persist broker binding");
+        let record = LeaseRecord {
+            run_id: "wf-resume".to_string(),
+            daemon_instance_id: "prior-daemon".to_string(),
+            environment_id: "railway".to_string(),
+            project_root,
+            state: LeaseState::Ready,
+            handle: Some(handle),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:01Z".to_string(),
+        };
+
+        assert!(prior_record_is_claimed_for_resume(&record));
+        for state in [LeaseState::Preparing, LeaseState::TearingDown, LeaseState::TornDown, LeaseState::Failed] {
+            let mut non_ready = record.clone();
+            non_ready.state = state;
+            assert!(!prior_record_is_claimed_for_resume(&non_ready), "{state:?} record was claimed");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn restart_adopts_exact_lease_reuses_it_for_next_phase_and_tears_down_once() {
+        use animus_runtime_shared::phase_session::{
+            read_checkpoint, update_session_completed, update_session_running, write_session_pending,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(&scoped_root, "wf-restart", "code-implement", "claude", "agent-1", None)
+            .expect("first pending checkpoint");
+        update_session_running(&scoped_root, "wf-restart", "code-implement").expect("first running checkpoint");
+
+        let fake = Arc::new(FakeLeaseClient {
+            handle: EnvironmentHandle {
+                id: "node-h1".to_string(),
+                workspace_root: "/workspace".to_string(),
+                metadata: json!({"relay": "opaque"}),
+            },
+            prepares: AtomicUsize::new(0),
+            execs: AtomicUsize::new(0),
+            teardowns: AtomicUsize::new(0),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+
+        let first =
+            EnvironmentBroker::start_with_resolver(&project_root, resolver.clone()).await.expect("start first broker");
+        first.register_run("wf-restart", &project_root, "railway");
+        let spec = EnvironmentSpec {
+            kind: "railway".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: serde_json::Value::Null,
+        };
+        let (_, first_handle) = first.acquire("wf-restart", "railway", spec.clone()).await.expect("first acquire");
+        assert_eq!(first_handle, "node-h1");
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1);
+
+        // Simulate daemon replacement without terminal cleanup: the durable
+        // Ready record + Running checkpoint remain, while the old broker socket
+        // disappears with its process.
+        first.stop_acceptor_for_restart_test();
+        drop(first);
+        let replacement =
+            EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start replacement broker");
+        assert!(
+            replacement.owns_ready_lease("wf-restart", "railway", &fake.handle).await,
+            "replacement daemon adopts the exact persisted handle"
+        );
+        let (resume_client, resume_handle) =
+            replacement.exec_target("wf-restart", "node-h1").await.expect("adopted lease is executable");
+        resume_client
+            .exec_stream(
+                &resume_handle,
+                HarnessCommand {
+                    program: "resume-provider".to_string(),
+                    args: Vec::new(),
+                    env: std::collections::BTreeMap::new(),
+                    cwd: None,
+                },
+                None,
+                None,
+                &|_, _| {},
+            )
+            .expect("resume non-terminal phase on adopted lease");
+        assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 0, "resumed phase must not teardown workflow lease");
+
+        // The resumed phase completes and the workflow advances. The next
+        // phase's acquire must reuse H1 and durably bind that new checkpoint.
+        update_session_completed(&scoped_root, "wf-restart", "code-implement").expect("complete first phase");
+        write_session_pending(&scoped_root, "wf-restart", "code-check", "codex", "agent-2", None)
+            .expect("second pending checkpoint");
+        update_session_running(&scoped_root, "wf-restart", "code-check").expect("second running checkpoint");
+        replacement.register_run("wf-restart", &project_root, "railway");
+        let (_, second_handle) =
+            replacement.acquire("wf-restart", "railway", spec).await.expect("second phase acquire");
+        assert_eq!(second_handle, "node-h1");
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1, "no replacement node was prepared");
+        let second_checkpoint = read_checkpoint(&scoped_root, "wf-restart", "code-check")
+            .expect("read second checkpoint")
+            .expect("second checkpoint exists");
+        assert_eq!(second_checkpoint.environment.expect("second phase binding").handle.id, "node-h1");
+
+        replacement.teardown("wf-restart").await;
+        replacement.teardown("wf-restart").await;
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 1, "terminal cleanup tears the adopted lease down once");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -569,6 +569,55 @@ mod tests {
         assert!(cp.environment.expect("binding").torn_down, "torn_down stays set on the second mark");
     }
 
+    // TASK-811: terminalizing a dead delegation must not discard the durable
+    // handle or its cleanup state. Reconciliation can fail the checkpoint
+    // after teardown, and operators still need the retained binding for audit
+    // while later scans must see that the node has already been reaped.
+    #[test]
+    fn failing_checkpoint_preserves_torn_down_environment_binding() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-3", "phase-a", "claude", "run-3", None).expect("pending");
+
+        let binding = sample_binding();
+        update_session_environment(scoped_root, "wf-env-3", "phase-a", binding.clone()).expect("persist binding");
+        mark_environment_torn_down(scoped_root, "wf-env-3", "phase-a").expect("mark torn down");
+        update_session_failed(scoped_root, "wf-env-3", "phase-a", "delegated node died").expect("fail checkpoint");
+
+        let cp = read_checkpoint(scoped_root, "wf-env-3", "phase-a").expect("read").expect("present");
+        assert_eq!(cp.status, SessionCheckpointStatus::Failed);
+        assert_eq!(cp.blocked_reason.as_deref(), Some("delegated node died"));
+        let environment = cp.environment.expect("terminal checkpoint retains environment binding");
+        assert_eq!(environment.handle, binding.handle);
+        assert_eq!(environment.environment_id, binding.environment_id);
+        assert!(environment.torn_down, "terminal mutation retains the completed cleanup marker");
+    }
+
+    // TASK-933: after reconciliation reaps an unusable node, a phase-boundary
+    // redispatch may prepare a replacement for the same checkpoint. Persisting
+    // that replacement must overwrite the old handle AND clear its completed
+    // teardown marker, otherwise the replacement is invisible to subsequent
+    // restart recovery and can leak.
+    #[test]
+    fn replacement_environment_binding_supersedes_torn_down_node() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-4", "phase-a", "claude", "run-4", None).expect("pending");
+
+        update_session_environment(scoped_root, "wf-env-4", "phase-a", sample_binding()).expect("persist first");
+        mark_environment_torn_down(scoped_root, "wf-env-4", "phase-a").expect("mark first torn down");
+
+        let mut replacement = sample_binding();
+        replacement.handle.id = "node-2".to_string();
+        replacement.bound_at = "2025-01-02T00:00:00Z".to_string();
+        update_session_environment(scoped_root, "wf-env-4", "phase-a", replacement.clone())
+            .expect("persist replacement");
+
+        let cp = read_checkpoint(scoped_root, "wf-env-4", "phase-a").expect("read").expect("present");
+        assert_eq!(cp.environment.as_ref(), Some(&replacement));
+        assert!(!cp.environment.expect("replacement binding").torn_down);
+    }
+
     // Backward-compat: a checkpoint JSON written by an OLDER runner that does
     // not know the `environment` field must still deserialize (serde ignores
     // unknown fields; the struct is not deny_unknown_fields), with

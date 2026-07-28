@@ -5,7 +5,7 @@ use animus_environment_protocol::{ExecResponse, HarnessCommand};
 use animus_runtime_shared::phase_session::{
     mark_environment_torn_down, read_checkpoint, update_session_failed, EnvironmentBinding,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use orchestrator_core::{
     active_workflow_runner_ids, dispatch_workflow_event, load_agent_runtime_config_or_default, services::ServiceHub,
     workflow_runner_liveness, EnvironmentClient, OrchestratorWorkflow, RunnerLiveness, WorkflowConfig, WorkflowEvent,
@@ -308,9 +308,98 @@ fn current_delegate_binding(
     Some((phase_id, binding))
 }
 
+/// Release every distinct delegated node retained by a workflow before an
+/// external cancellation is committed. Bindings are scanned across all phase
+/// checkpoints because the current phase may be manual/local while an earlier
+/// delegated phase still owns the workflow-scoped lease. Teardown happens
+/// first and every checkpoint referring to that handle is marked only after it
+/// succeeds, so failed cleanup remains retryable.
+pub(crate) fn teardown_retained_environment_for_cancel(
+    project_root: &str,
+    workflow: &OrchestratorWorkflow,
+) -> anyhow::Result<()> {
+    let Some(scoped_root) = protocol::scoped_state_root(Path::new(project_root)) else {
+        return Ok(());
+    };
+    teardown_retained_environment_with(&scoped_root, workflow, |binding| {
+        let client =
+            EnvironmentClient::resolve(Path::new(project_root), &binding.environment_id).with_context(|| {
+                format!(
+                    "cannot resolve environment plugin '{}' to cancel retained node {} for workflow {}",
+                    binding.environment_id, binding.handle.id, workflow.id
+                )
+            })?;
+        client.teardown(&binding.handle).with_context(|| {
+            format!(
+                "failed to teardown retained node {} in environment '{}' for cancelled workflow {}",
+                binding.handle.id, binding.environment_id, workflow.id
+            )
+        })
+    })
+}
+
+fn teardown_retained_environment_with<F>(
+    scoped_root: &Path,
+    workflow: &OrchestratorWorkflow,
+    teardown: F,
+) -> anyhow::Result<()>
+where
+    F: FnMut(&EnvironmentBinding) -> anyhow::Result<()>,
+{
+    let mut teardown = teardown;
+    for (binding, phase_ids) in retained_delegate_bindings(scoped_root, workflow) {
+        teardown(&binding)?;
+        for phase_id in &phase_ids {
+            mark_environment_torn_down(scoped_root, &workflow.id, phase_id).with_context(|| {
+                format!(
+                    "node {} was torn down but its retained binding could not be marked for workflow {}/{}",
+                    binding.handle.id, workflow.id, phase_id
+                )
+            })?;
+        }
+        info!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %workflow.id,
+            node = %binding.handle.id,
+            phases = ?phase_ids,
+            "released retained delegated node before external workflow cancellation"
+        );
+    }
+    Ok(())
+}
+
+/// Group every untorn-down phase binding by exact environment handle. A
+/// healthy brokered workflow normally has one group (the same handle repeated
+/// by later phases); grouping also prevents duplicate teardown if several
+/// checkpoints reference it and safely exposes any historical extra lease.
+fn retained_delegate_bindings(
+    scoped_root: &Path,
+    workflow: &OrchestratorWorkflow,
+) -> Vec<(EnvironmentBinding, Vec<String>)> {
+    let mut groups: Vec<(EnvironmentBinding, Vec<String>)> = Vec::new();
+    for phase in &workflow.phases {
+        let Some(binding) = read_checkpoint(scoped_root, &workflow.id, &phase.phase_id)
+            .ok()
+            .flatten()
+            .and_then(|checkpoint| checkpoint.environment)
+            .filter(|binding| !binding.torn_down)
+        else {
+            continue;
+        };
+        if let Some((_, phase_ids)) = groups.iter_mut().find(|(candidate, _)| {
+            candidate.environment_id == binding.environment_id && candidate.handle == binding.handle
+        }) {
+            phase_ids.push(phase.phase_id.clone());
+        } else {
+            groups.push((binding, vec![phase.phase_id.clone()]));
+        }
+    }
+    groups
+}
+
 /// Liveness of a delegated node, as observed by a trivial exec probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DelegateLiveness {
+pub(crate) enum DelegateLiveness {
     /// The node answered a trivial exec — it is up and reusable.
     Alive,
     /// The node/plugin failed every probe with a definitive death signal.
@@ -351,7 +440,7 @@ fn probe_error_is_transient(err: &anyhow::Error) -> bool {
 /// `true`, RETRIED up to [`PROBE_ATTEMPTS`] times: the first success => Alive;
 /// an unresolvable plugin => Unknown; all attempts failing => Unknown when the
 /// last failure looked transient (preserve + re-probe next sweep), else Dead.
-fn probe_delegate(project_root: &str, binding: &EnvironmentBinding) -> DelegateLiveness {
+pub(crate) fn probe_delegate(project_root: &str, binding: &EnvironmentBinding) -> DelegateLiveness {
     let client = match EnvironmentClient::resolve(Path::new(project_root), &binding.environment_id) {
         Ok(client) => client,
         Err(_) => return DelegateLiveness::Unknown,
@@ -406,35 +495,50 @@ fn delegate_is_dead(scoped_root: Option<&Path>, project_root: &str, workflow: &O
 /// gone), and `mark_environment_torn_down` is only written on success, so a
 /// failed reap is retried on the next sweep. Inert when there is no
 /// (un-torn-down) binding.
-fn teardown_delegated_node(project_root: &str, scoped_root: Option<&Path>, workflow: &OrchestratorWorkflow) {
-    let Some(scoped_root) = scoped_root else { return };
-    let Some((phase_id, binding)) = current_delegate_binding(scoped_root, workflow) else { return };
+fn teardown_delegated_node(project_root: &str, scoped_root: Option<&Path>, workflow: &OrchestratorWorkflow) -> bool {
+    let Some(scoped_root) = scoped_root else { return true };
+    let Some((phase_id, binding)) = current_delegate_binding(scoped_root, workflow) else { return true };
     match EnvironmentClient::resolve(Path::new(project_root), &binding.environment_id) {
         Ok(client) => match client.teardown(&binding.handle) {
             Ok(()) => {
-                let _ = mark_environment_torn_down(scoped_root, &workflow.id, &phase_id);
+                if let Err(error) = mark_environment_torn_down(scoped_root, &workflow.id, &phase_id) {
+                    warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %workflow.id,
+                        %error,
+                        "node was reaped but its checkpoint could not be updated; idempotent teardown will retry"
+                    );
+                    return false;
+                }
                 info!(
                     actor = protocol::ACTOR_DAEMON,
                     workflow_id = %workflow.id,
                     node = %binding.handle.id,
                     "reaped delegated node by persisted handle during orphan reconciliation"
                 );
+                true
             }
-            Err(error) => warn!(
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow.id,
+                    node = %binding.handle.id,
+                    %error,
+                    "env teardown of delegated node failed; will retry on the next sweep"
+                );
+                false
+            }
+        },
+        Err(error) => {
+            warn!(
                 actor = protocol::ACTOR_DAEMON,
                 workflow_id = %workflow.id,
-                node = %binding.handle.id,
+                environment = %binding.environment_id,
                 %error,
-                "env teardown of delegated node failed; will retry on the next sweep"
-            ),
-        },
-        Err(error) => warn!(
-            actor = protocol::ACTOR_DAEMON,
-            workflow_id = %workflow.id,
-            environment = %binding.environment_id,
-            %error,
-            "cannot resolve environment plugin to reap delegated node; will retry on the next sweep"
-        ),
+                "cannot resolve environment plugin to reap delegated node; will retry on the next sweep"
+            );
+            false
+        }
     }
 }
 
@@ -451,7 +555,12 @@ async fn terminalize_dead_delegation(
     workflow: &OrchestratorWorkflow,
 ) -> bool {
     let phase_id = current_phase_id(workflow).unwrap_or_default();
-    teardown_delegated_node(project_root, Some(scoped_root), workflow);
+    if !teardown_delegated_node(project_root, Some(scoped_root), workflow) {
+        // Keep both checkpoint and workflow Running. A terminal checkpoint is
+        // omitted from future sweeps, so terminalizing here would permanently
+        // suppress the promised cleanup retry and leak the node.
+        return false;
+    }
     let _ = update_session_failed(
         scoped_root,
         &workflow.id,
@@ -711,6 +820,13 @@ pub async fn recover_orphaned_running_workflows(
         let age_secs = (now - workflow.started_at).num_seconds();
         let within_grace = age_secs < ORPHAN_RECONCILIATION_GRACE_SECS;
         let resumable = is_resumable_orphan(&workflow);
+        // A persisted binding is stronger evidence than current routing
+        // intent. In particular startup deliberately does not load routing,
+        // and configuration may have changed since this run was dispatched.
+        // Always liveness-gate such a delegate before the generic
+        // journal-resume preserve branch, otherwise a dead node is preserved
+        // forever across every daemon restart.
+        let dead_delegate = !within_grace && delegate_is_dead(scoped_root.as_deref(), project_root, &workflow);
 
         let decision = if workflow.machine_state == WorkflowMachineState::MergeConflict {
             ReconcileDecision::MergeConflict
@@ -718,19 +834,16 @@ pub async fn recover_orphaned_running_workflows(
             ReconcileDecision::WaitingManual
         } else if in_runner_registry {
             ReconcileDecision::ProtectedLiveRunner
+        } else if dead_delegate {
+            ReconcileDecision::TerminalizeDeadDelegate
         } else if in_active_subjects {
             ReconcileDecision::ProtectedActiveSubject
         } else if is_delegated {
-            // TASK-793: refine rc.24's intent-based skip with the node's ACTUAL
-            // liveness. Only a delegate PAST GRACE whose persisted node probes
-            // DEAD is terminalized; alive / unverifiable / no-binding (and any
-            // within-grace delegate) keep rc.24's skip. `delegate_is_dead` is
-            // inert (false) until the companion runner persists a binding.
-            if !within_grace && delegate_is_dead(scoped_root.as_deref(), project_root, &workflow) {
-                ReconcileDecision::TerminalizeDeadDelegate
-            } else {
-                ReconcileDecision::SkippedDelegated
-            }
+            // Alive / unverifiable / no-binding (and any within-grace
+            // delegate) keep rc.24's fail-safe skip. Definitively dead
+            // persisted bindings were handled above, including at startup
+            // where routing is intentionally unavailable.
+            ReconcileDecision::SkippedDelegated
         } else if within_grace {
             ReconcileDecision::WithinGrace
         } else if resume_orphans && resumable {
@@ -827,7 +940,19 @@ pub async fn recover_orphaned_running_workflows(
                 // cancel so an orphan (e.g. a dead delegate handled at startup,
                 // where intent-gating is off) does not leak its node. Inert for
                 // local runs and until the companion runner persists a binding.
-                teardown_delegated_node(project_root, scoped_root.as_deref(), &workflow);
+                if !teardown_delegated_node(project_root, scoped_root.as_deref(), &workflow) {
+                    // Cancellation makes the workflow/checkpoint terminal and
+                    // removes it from subsequent orphan sweeps. Keep it Running
+                    // when cleanup fails so the persisted binding remains a
+                    // retryable cleanup obligation instead of becoming a
+                    // permanently leaked node.
+                    error!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %workflow.id,
+                        "delegated node cleanup failed; deferring orphan cancellation so teardown can retry"
+                    );
+                    continue;
+                }
                 let cancelled = cancel_orphaned_running_workflow(hub.clone(), project_root, &workflow).await;
                 if cancelled {
                     recovered = recovered.saturating_add(1);
@@ -994,6 +1119,7 @@ pub(crate) async fn resumable_orphans_for_redispatch(
     // delegating runner's QUALIFIED active/orphan ids (see `bare_subject_id`).
     let active_subject_bare: HashSet<&str> = active_subject_ids.iter().map(|s| bare_subject_id(s)).collect();
     let live_orphan_bare: HashSet<&str> = live_orphan_subjects.iter().map(|s| bare_subject_id(s)).collect();
+    let scoped_root = protocol::scoped_state_root(Path::new(project_root));
 
     let mut candidates = Vec::new();
     let mut evaluated = 0usize;
@@ -1024,6 +1150,7 @@ pub(crate) async fn resumable_orphans_for_redispatch(
         let age_secs = (now - workflow.started_at).num_seconds();
         let within_grace = age_secs < ORPHAN_RECONCILIATION_GRACE_SECS;
         let resumable = is_resumable_orphan(&workflow);
+        let dead_delegate = !within_grace && delegate_is_dead(scoped_root.as_deref(), project_root, &workflow);
 
         let decision = if workflow.machine_state == WorkflowMachineState::MergeConflict {
             ReconcileDecision::MergeConflict
@@ -1031,6 +1158,8 @@ pub(crate) async fn resumable_orphans_for_redispatch(
             ReconcileDecision::WaitingManual
         } else if in_runner_registry {
             ReconcileDecision::ProtectedLiveRunner
+        } else if dead_delegate {
+            ReconcileDecision::TerminalizeDeadDelegate
         } else if in_active_subjects {
             ReconcileDecision::ProtectedActiveSubject
         } else if is_delegated {
@@ -1079,17 +1208,27 @@ pub(crate) async fn resumable_orphans_for_redispatch(
                 selected += 1;
                 candidates.push(workflow);
             }
+            ReconcileDecision::TerminalizeDeadDelegate => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow.id,
+                    workflow_ref = workflow.workflow_ref.as_deref().unwrap_or_default(),
+                    "dead delegated node reached redispatch sweep; terminalizing instead of spawning a replacement"
+                );
+                if let Some(scoped_root) = scoped_root.as_deref() {
+                    let _ = terminalize_dead_delegation(hub.clone(), project_root, scoped_root, &workflow).await;
+                }
+            }
             // All other outcomes exclude the run from re-dispatch (no-op). A
-            // dead delegate is terminalized by the cancel leg (which sets it
-            // Cancelled, so it never reaches this Running-only leg); the variant
-            // is matched exhaustively but never arises here.
+            // dead delegate normally gets terminalized by the cancel leg first,
+            // but this leg independently applies the same gate so callers
+            // cannot re-dispatch-and-leak when invoked on its own.
             ReconcileDecision::MergeConflict
             | ReconcileDecision::WaitingManual
             | ReconcileDecision::SkippedLiveOrphan
             | ReconcileDecision::SkippedBlockedResume
             | ReconcileDecision::WithinGrace
             | ReconcileDecision::NotResumable
-            | ReconcileDecision::TerminalizeDeadDelegate
             | ReconcileDecision::PreservedResumable
             | ReconcileDecision::CancelledOrphan => {}
         }
@@ -1898,8 +2037,11 @@ mod tests {
         assert_eq!(reloaded.status, WorkflowStatus::Running, "unverifiable delegate stays Running");
     }
 
-    // TASK-811: terminalize_dead_delegation drives the checkpoint Failed (so it
-    // never re-surfaces for auto-resume) and cancels the workflow.
+    // TASK-811: after the delegated node has been successfully reaped,
+    // terminalize_dead_delegation drives the checkpoint Failed (so it never
+    // re-surfaces for auto-resume) and cancels the workflow. Marking the
+    // fixture binding torn down models that successful cleanup without making
+    // this unit test depend on an installed environment plugin.
     #[tokio::test]
     async fn terminalize_dead_delegation_fails_checkpoint_and_cancels_workflow() {
         let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
@@ -1907,6 +2049,8 @@ mod tests {
         let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
         let (scoped_root, phase_id) =
             bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-dead")).await;
+        animus_runtime_shared::phase_session::mark_environment_torn_down(&scoped_root, &workflow_id, &phase_id)
+            .expect("model successful delegated-node teardown");
         let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
 
         let cancelled = super::terminalize_dead_delegation(hub.clone(), &project_root, &scoped_root, &workflow).await;
@@ -1946,6 +2090,99 @@ mod tests {
         assert!(
             checkpoint.environment.expect("binding present").torn_down,
             "an already-reaped binding stays torn_down (no double-free)"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_cancel_releases_retained_node_once_then_marks_binding() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-held")).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+        let teardown_calls = AtomicUsize::new(0);
+
+        super::teardown_retained_environment_with(&scoped_root, &workflow, |binding| {
+            assert_eq!(binding.handle.id, "node-held");
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("first cancellation cleanup");
+        super::teardown_retained_environment_with(&scoped_root, &workflow, |_| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("idempotent repeated cleanup");
+
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "retained node is torn down exactly once");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "successful cleanup releases the hold");
+    }
+
+    #[tokio::test]
+    async fn external_cancel_finds_retained_binding_from_earlier_phase() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+        let (scoped_root, retained_phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-from-earlier-phase")).await;
+
+        // Model cancellation after the workflow has advanced to a later
+        // manual/local phase whose checkpoint has no environment binding.
+        let (later_index, later_phase) = workflow
+            .phases
+            .iter()
+            .enumerate()
+            .find(|(_, phase)| phase.phase_id != retained_phase_id)
+            .expect("fixture has a later phase");
+        let mut later_workflow = workflow.clone();
+        later_workflow.current_phase_index = later_index;
+        later_workflow.current_phase = Some(later_phase.phase_id.clone());
+
+        let teardown_calls = AtomicUsize::new(0);
+        super::teardown_retained_environment_with(&scoped_root, &later_workflow, |binding| {
+            assert_eq!(binding.handle.id, "node-from-earlier-phase");
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("earlier retained binding is released");
+        super::teardown_retained_environment_with(&scoped_root, &later_workflow, |_| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("repeated cleanup is inert");
+
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "earlier retained handle tears down exactly once");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &retained_phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "earlier binding is marked torn down");
+    }
+
+    #[tokio::test]
+    async fn failed_external_cancel_cleanup_keeps_binding_retryable() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-held")).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+
+        let err =
+            super::teardown_retained_environment_with(&scoped_root, &workflow, |_| anyhow::bail!("relay unavailable"))
+                .expect_err("failed cleanup must abort cancellation");
+        assert!(format!("{err:#}").contains("relay unavailable"));
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(
+            !checkpoint.environment.expect("binding").torn_down,
+            "failed teardown must leave the durable hold available for retry"
         );
     }
 }

@@ -50,7 +50,7 @@
 //! [`EnvironmentClient`] contract this module exercises kernel-side.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -64,6 +64,8 @@ use orchestrator_core::EnvironmentClient;
 use orchestrator_plugin_host::HostError;
 use serde_json::Value;
 use tokio::sync::mpsc;
+
+use animus_runtime_shared::phase_session::EnvironmentBinding;
 
 /// Environment ids that mean "run on the host": the resolver treats them as
 /// no-routing so the existing local spawn path stays byte-for-byte unchanged.
@@ -139,10 +141,17 @@ fn routing_spec_overrides(
 /// [`SessionRun`] — the same handle shape `start_session` produces, so the
 /// caller's event loop (persistence, rendering, exit-code handling) is
 /// unchanged.
+pub(super) struct EnvironmentCheckpointTarget {
+    pub scoped_root: PathBuf,
+    pub workflow_id: String,
+    pub phase_id: String,
+}
+
 pub(super) fn start_environment_session(
     project_root: &Path,
     environment: &ResolvedEnvironment,
     request: &SessionRequest,
+    checkpoint_target: Option<EnvironmentCheckpointTarget>,
 ) -> Result<SessionRun> {
     let environment_id = environment.id.as_str();
     let client = EnvironmentClient::resolve(project_root, environment_id).map_err(|err| {
@@ -161,7 +170,17 @@ pub(super) fn start_environment_session(
     // hung provider command inside the environment would drain forever.
     let timeout = Some(Duration::from_secs(request.timeout_secs.unwrap_or(DEFAULT_ENVIRONMENT_RUN_TIMEOUT_SECS)));
     let backend_label = format!("environment:{}", client.plugin_name());
-    Ok(spawn_environment_run(Arc::new(client), spec, command, stdin, timeout, backend_label))
+    let resolved_environment_id = client.plugin_name().to_string();
+    Ok(spawn_environment_run(
+        Arc::new(client),
+        spec,
+        command,
+        stdin,
+        timeout,
+        backend_label,
+        resolved_environment_id,
+        checkpoint_target,
+    ))
 }
 
 /// Merge a routing rule's opaque `spec` overrides into the compiled
@@ -551,6 +570,8 @@ pub(super) fn spawn_environment_run(
     stdin: Option<String>,
     timeout: Option<Duration>,
     backend_label: String,
+    environment_id: String,
+    checkpoint_target: Option<EnvironmentCheckpointTarget>,
 ) -> SessionRun {
     let (events_tx, events_rx) = mpsc::channel::<SessionEvent>(256);
     // The pipeline thread sends through an unbounded channel: the exec_stream
@@ -568,7 +589,17 @@ pub(super) fn spawn_environment_run(
 
     let selected_backend = backend_label.clone();
     std::thread::spawn(move || {
-        run_environment_pipeline(backend.as_ref(), spec, command, stdin, timeout, &backend_label, &pipeline_tx);
+        run_environment_pipeline(
+            backend.as_ref(),
+            spec,
+            command,
+            stdin,
+            timeout,
+            &backend_label,
+            &environment_id,
+            checkpoint_target,
+            &pipeline_tx,
+        );
     });
 
     SessionRun { session_id: None, events: events_rx, selected_backend, fallback_reason: None, pid: None }
@@ -587,6 +618,8 @@ fn run_environment_pipeline(
     stdin: Option<String>,
     timeout: Option<Duration>,
     backend_label: &str,
+    environment_id: &str,
+    checkpoint_target: Option<EnvironmentCheckpointTarget>,
     events: &mpsc::UnboundedSender<SessionEvent>,
 ) {
     let send = |event: SessionEvent| {
@@ -595,7 +628,40 @@ fn run_environment_pipeline(
     send(SessionEvent::Started { backend: backend_label.to_string(), session_id: None, pid: None });
 
     let handle = match backend.prepare(spec) {
-        Ok(handle) => handle,
+        Ok(handle) => {
+            let binding = EnvironmentBinding {
+                environment_id: environment_id.to_string(),
+                handle: handle.clone(),
+                bound_at: chrono::Utc::now().to_rfc3339(),
+                torn_down: false,
+            };
+            // Do not return the prepared handle to the execution pipeline until
+            // its owner is durable. An async notification leaves a
+            // prepare-to-persistence crash window and can execute work whose
+            // node a restarted daemon cannot identify.
+            if let Some(target) = checkpoint_target.as_ref() {
+                if let Err(error) = animus_runtime_shared::phase_session::update_session_environment(
+                    &target.scoped_root,
+                    &target.workflow_id,
+                    &target.phase_id,
+                    binding,
+                ) {
+                    let teardown_error = backend.teardown(&handle).err();
+                    send(SessionEvent::Error {
+                        message: format!(
+                            "environment binding persistence failed for {backend_label}: {error}; \
+                             prepared node cleanup: {}",
+                            teardown_error
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        ),
+                        recoverable: false,
+                    });
+                    return;
+                }
+            }
+            handle
+        }
         Err(err) => {
             send(SessionEvent::Error {
                 message: format!("environment prepare failed for {backend_label}: {err:#}"),
@@ -605,7 +671,37 @@ fn run_environment_pipeline(
         }
     };
 
-    run_exec_and_teardown(backend, &handle, command, stdin, timeout, backend_label, events);
+    let record_teardown = || {
+        if let Some(target) = checkpoint_target.as_ref() {
+            if let Err(error) = animus_runtime_shared::phase_session::mark_environment_torn_down(
+                &target.scoped_root,
+                &target.workflow_id,
+                &target.phase_id,
+            ) {
+                // The node is already gone. Leave the durable binding untorn so
+                // reconciliation retries the idempotent teardown and can repair
+                // the checkpoint instead of treating stale state as a live node.
+                send(SessionEvent::Error {
+                    message: format!(
+                        "environment teardown succeeded for {backend_label}, but its checkpoint \
+                         could not be marked torn down: {error}"
+                    ),
+                    recoverable: true,
+                });
+            }
+        }
+    };
+    run_exec_and_teardown(
+        backend,
+        &handle,
+        command,
+        stdin,
+        timeout,
+        backend_label,
+        events,
+        true,
+        Some(&record_teardown),
+    );
 }
 
 /// TASK-933 resume entry: drive a delegated run's harness command against an
@@ -632,8 +728,21 @@ pub(super) fn spawn_environment_resume(
     timeout: Option<Duration>,
     backend_label: String,
 ) -> SessionRun {
+    spawn_environment_resume_tracked(backend, handle, command, stdin, timeout, backend_label, true).0
+}
+
+fn spawn_environment_resume_tracked(
+    backend: Arc<dyn EnvironmentExecBackend>,
+    handle: EnvironmentHandle,
+    command: HarnessCommand,
+    stdin: Option<String>,
+    timeout: Option<Duration>,
+    backend_label: String,
+    teardown_after_exec: bool,
+) -> (SessionRun, tokio::sync::oneshot::Receiver<bool>) {
     let (events_tx, events_rx) = mpsc::channel::<SessionEvent>(256);
     let (pipeline_tx, mut pipeline_rx) = mpsc::unbounded_channel::<SessionEvent>();
+    let (teardown_tx, teardown_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         while let Some(event) = pipeline_rx.recv().await {
             if events_tx.send(event).await.is_err() {
@@ -648,11 +757,142 @@ pub(super) fn spawn_environment_resume(
             let _ = pipeline_tx.send(event);
         };
         send(SessionEvent::Started { backend: backend_label.clone(), session_id: None, pid: None });
-        // NO prepare — reuse the persisted handle for exec_stream + teardown.
-        run_exec_and_teardown(backend.as_ref(), &handle, command, stdin, timeout, &backend_label, &pipeline_tx);
+        // NO prepare — reuse the persisted handle. A broker-owned restart
+        // lease remains alive for later workflow phases and is torn down only
+        // at terminal workflow completion; legacy standalone callers retain
+        // the previous exec-then-teardown behavior.
+        let torn_down = run_exec_and_teardown(
+            backend.as_ref(),
+            &handle,
+            command,
+            stdin,
+            timeout,
+            &backend_label,
+            &pipeline_tx,
+            teardown_after_exec,
+            None,
+        );
+        let _ = teardown_tx.send(torn_down);
     });
 
-    SessionRun { session_id: None, events: events_rx, selected_backend, fallback_reason: None, pid: None }
+    (
+        SessionRun { session_id: None, events: events_rx, selected_backend, fallback_reason: None, pid: None },
+        teardown_rx,
+    )
+}
+
+pub(crate) enum EnvironmentCheckpointResume {
+    Outcome(orchestrator_plugin_host::session::ResumeAgentOutcome),
+    CleanupPending { reason: String },
+}
+
+/// Production restart entry for a delegated phase. Rebuild only the
+/// provider's *resume* invocation, then execute it on the already-prepared
+/// node recorded in the checkpoint. This is deliberately separate from
+/// `start_environment_session`: calling that function would prepare a second
+/// node before the old one could be reclaimed.
+pub(crate) async fn resume_environment_checkpoint(
+    project_root: &Path,
+    checkpoint: &animus_runtime_shared::phase_session::SessionCheckpoint,
+    retain_for_later_phases: bool,
+) -> EnvironmentCheckpointResume {
+    use orchestrator_plugin_host::session::ResumeAgentOutcome;
+
+    let Some(binding) = checkpoint.environment.as_ref().filter(|binding| !binding.torn_down) else {
+        return EnvironmentCheckpointResume::Outcome(ResumeAgentOutcome::Failed {
+            reason: "delegated environment binding is missing or torn down".into(),
+        });
+    };
+
+    let request = checkpoint.request.as_ref().unwrap_or(&Value::Null);
+    let request_field = |name: &str| {
+        request
+            .pointer(&format!("/context/{name}"))
+            .or_else(|| request.get(name))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let prompt = request_field("prompt");
+    let provider = checkpoint.provider.trim().to_ascii_lowercase();
+    let session_id = checkpoint.provider_session_id.as_deref().map(str::trim).filter(|sid| !sid.is_empty());
+    // Build both fresh and resumed invocations through the same canonical
+    // runtime contract as normal runner launches. Hand-building these argv
+    // vectors is unsafe: provider syntax and required non-interactive flags
+    // differ (notably Codex uses its configured resume policy), which can
+    // accidentally start a second session or execute the prompt twice.
+    let model = request_field("model").unwrap_or_default();
+    let prompt = prompt.unwrap_or_default();
+    let resume_plan = session_id.map(|session_id| orchestrator_core::runtime_contract::CliSessionResumePlan {
+        mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
+        session_key: format!("wf:{}:{}", checkpoint.workflow_id, checkpoint.phase_id),
+        session_id: Some(session_id.to_string()),
+        summary_seed: None,
+        reused: true,
+        phase_thread_isolated: true,
+    });
+    let Some((program, args)) = orchestrator_core::runtime_contract::build_cli_launch_contract(
+        &provider,
+        model,
+        prompt,
+        resume_plan.as_ref(),
+        None,
+    )
+    .as_ref()
+    .and_then(launch_program_args) else {
+        return EnvironmentCheckpointResume::Outcome(ResumeAgentOutcome::Failed {
+            reason: format!("cannot build environment resume command for provider '{}'", checkpoint.provider),
+        });
+    };
+    let args = plain_text_launch_args(&provider, args);
+
+    let client = match EnvironmentClient::resolve(project_root, &binding.environment_id) {
+        Ok(client) => client,
+        Err(err) => {
+            return EnvironmentCheckpointResume::Outcome(ResumeAgentOutcome::Failed {
+                reason: format!("cannot resolve environment plugin '{}': {err:#}", binding.environment_id),
+            });
+        }
+    };
+    let backend_label = format!("environment:{}", client.plugin_name());
+    let (mut run, teardown_rx) = spawn_environment_resume_tracked(
+        Arc::new(client),
+        binding.handle.clone(),
+        HarnessCommand { program, args, env: BTreeMap::new(), cwd: None },
+        None,
+        Some(Duration::from_secs(DEFAULT_ENVIRONMENT_RUN_TIMEOUT_SECS)),
+        backend_label,
+        !retain_for_later_phases,
+    );
+
+    let mut outcome = None;
+    while let Some(event) = run.events.recv().await {
+        match event {
+            SessionEvent::Finished { exit_code } if exit_code.unwrap_or_default() == 0 => {
+                outcome = Some(ResumeAgentOutcome::Resumed { session_id: session_id.map(str::to_string) });
+            }
+            SessionEvent::Finished { exit_code } => {
+                outcome = Some(ResumeAgentOutcome::Failed {
+                    reason: format!("delegated resume exited with code {exit_code:?}"),
+                });
+            }
+            SessionEvent::Error { message, recoverable: false } => {
+                outcome = Some(ResumeAgentOutcome::Failed { reason: message });
+            }
+            _ => {}
+        }
+    }
+    if !teardown_rx.await.unwrap_or(false) {
+        return EnvironmentCheckpointResume::CleanupPending {
+            reason: format!(
+                "delegated command completed but teardown of environment handle '{}' failed",
+                binding.handle.id
+            ),
+        };
+    }
+    EnvironmentCheckpointResume::Outcome(outcome.unwrap_or_else(|| ResumeAgentOutcome::Failed {
+        reason: "delegated resume stream ended before completion".into(),
+    }))
 }
 
 /// The exec_stream → teardown → terminal-mapping tail shared by the fresh-run
@@ -669,7 +909,9 @@ fn run_exec_and_teardown(
     timeout: Option<Duration>,
     backend_label: &str,
     events: &mpsc::UnboundedSender<SessionEvent>,
-) {
+    teardown_after_exec: bool,
+    on_teardown_success: Option<&dyn Fn()>,
+) -> bool {
     let send = |event: SessionEvent| {
         let _ = events.send(event);
     };
@@ -701,14 +943,28 @@ fn run_exec_and_teardown(
         result => result,
     };
 
-    // Teardown regardless of exec outcome; a teardown failure is surfaced as a
-    // recoverable frame (the run's verdict is the exec result, not cleanup).
-    if let Err(err) = backend.teardown(handle) {
-        send(SessionEvent::Error {
-            message: format!("environment teardown failed for {backend_label} (handle {}): {err:#}", handle.id),
-            recoverable: true,
-        });
-    }
+    // Standalone leases teardown regardless of exec outcome. Broker-owned
+    // restart leases deliberately stay ready across phase boundaries; their
+    // terminal workflow transition calls EnvironmentBroker::teardown once.
+    let torn_down = if !teardown_after_exec {
+        true
+    } else {
+        match backend.teardown(handle) {
+            Ok(()) => {
+                if let Some(on_teardown_success) = on_teardown_success {
+                    on_teardown_success();
+                }
+                true
+            }
+            Err(err) => {
+                send(SessionEvent::Error {
+                    message: format!("environment teardown failed for {backend_label} (handle {}): {err:#}", handle.id),
+                    recoverable: true,
+                });
+                false
+            }
+        }
+    };
 
     match result {
         Ok(response) if response.timed_out => send(SessionEvent::Error {
@@ -733,6 +989,7 @@ fn run_exec_and_teardown(
             recoverable: false,
         }),
     }
+    torn_down
 }
 
 /// Whether an exec error is the plugin's structured METHOD_NOT_SUPPORTED
@@ -1275,6 +1532,8 @@ environment_routing:
             None,
             None,
             "environment:container".to_string(),
+            "container".to_string(),
+            None,
         );
         assert_eq!(run.selected_backend, "environment:container");
         let events = drain(run).await;
@@ -1303,6 +1562,48 @@ environment_routing:
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn successful_normal_teardown_marks_the_persisted_binding_torn_down() {
+        let backend = Arc::new(FakeBackend::new());
+        *backend.exec_stream_outcome.lock().unwrap() = Some(StreamOutcome::Deltas(Vec::new(), Ok(ok_response(0))));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scoped_root = temp.path().to_path_buf();
+        animus_runtime_shared::phase_session::write_session_pending(
+            &scoped_root,
+            "wf-normal-cleanup",
+            "phase-code",
+            "claude",
+            "run-normal-cleanup",
+            None,
+        )
+        .expect("pending checkpoint");
+
+        let run = spawn_environment_run(
+            backend,
+            spec_for_test(),
+            command_for_test(),
+            None,
+            None,
+            "environment:container".to_string(),
+            "container".to_string(),
+            Some(EnvironmentCheckpointTarget {
+                scoped_root: scoped_root.clone(),
+                workflow_id: "wf-normal-cleanup".to_string(),
+                phase_id: "phase-code".to_string(),
+            }),
+        );
+        let _events = drain(run).await;
+
+        let checkpoint =
+            animus_runtime_shared::phase_session::read_checkpoint(&scoped_root, "wf-normal-cleanup", "phase-code")
+                .expect("read checkpoint")
+                .expect("checkpoint exists");
+        assert!(
+            checkpoint.environment.expect("binding persisted").torn_down,
+            "successful normal teardown must retire the durable binding"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn prepare_failure_fails_the_run_without_executing_locally() {
         let backend = Arc::new(FakeBackend::new());
         *backend.prepare_result.lock().unwrap() = Some(Err(anyhow!("no docker daemon")));
@@ -1314,6 +1615,8 @@ environment_routing:
             None,
             None,
             "environment:container".to_string(),
+            "container".to_string(),
+            None,
         );
         let events = drain(run).await;
         assert!(
@@ -1339,6 +1642,8 @@ environment_routing:
             None,
             None,
             "environment:container".to_string(),
+            "container".to_string(),
+            None,
         );
         let events = drain(run).await;
         assert!(
@@ -1375,6 +1680,8 @@ environment_routing:
             None,
             None,
             "environment:container".to_string(),
+            "container".to_string(),
+            None,
         );
         let events = drain(run).await;
         assert_eq!(backend.exec_calls.load(Ordering::SeqCst), 1, "buffered exec retried exactly once");
@@ -1409,6 +1716,8 @@ environment_routing:
             None,
             None,
             "environment:container".to_string(),
+            "container".to_string(),
+            None,
         );
         let events = drain(run).await;
         assert!(
@@ -1462,6 +1771,28 @@ environment_routing:
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn broker_owned_resume_keeps_node_for_later_phases() {
+        let backend = Arc::new(FakeBackend::new());
+        *backend.prepare_result.lock().unwrap() = Some(Err(anyhow!("prepare must not be called on resume")));
+        *backend.exec_stream_outcome.lock().unwrap() = Some(StreamOutcome::Deltas(Vec::new(), Ok(ok_response(0))));
+
+        let (run, retained_rx) = spawn_environment_resume_tracked(
+            backend.clone(),
+            sample_handle(),
+            command_for_test(),
+            None,
+            None,
+            "environment:container".to_string(),
+            false,
+        );
+        let events = drain(run).await;
+        assert!(matches!(events.last(), Some(SessionEvent::Finished { exit_code: Some(0) })));
+        assert!(retained_rx.await.expect("retention result"));
+        assert!(!backend.torn_down.load(Ordering::SeqCst), "broker-owned resume retains the node");
+        assert!(backend.prepare_result.lock().unwrap().is_some(), "resume does not prepare a replacement node");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn timed_out_exec_is_a_terminal_error() {
         let backend = Arc::new(FakeBackend::new());
         *backend.exec_stream_outcome.lock().unwrap() = Some(StreamOutcome::Deltas(
@@ -1476,6 +1807,8 @@ environment_routing:
             None,
             Some(Duration::from_secs(5)),
             "environment:container".to_string(),
+            "container".to_string(),
+            None,
         );
         let events = drain(run).await;
         assert!(

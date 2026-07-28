@@ -17,9 +17,8 @@ use orchestrator_core::{
 };
 use orchestrator_daemon_runtime::control::{DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
 use orchestrator_daemon_runtime::{
-    discover_installed_plugins, run_daemon, DaemonRunEvent, DaemonRunHooks, ProcessManager,
+    discover_installed_plugins, run_daemon, DaemonRunEvent, DaemonRunHooks, EnvironmentBroker, ProcessManager,
 };
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -29,23 +28,33 @@ use super::daemon_run_host::DefaultDaemonRunHost;
 use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver};
 use animus_runtime_shared::persist_resumed_phase_completion;
 use animus_runtime_shared::phase_session::{
-    list_running_checkpoints, update_session_blocked, update_session_completed, update_session_running_after_resume,
-    SessionCheckpoint,
+    list_running_checkpoints, mark_environment_torn_down, update_session_blocked, update_session_completed,
+    update_session_running_after_resume, SessionCheckpoint,
 };
 use orchestrator_plugin_host::session::{
     canonical_tool_alias, discover_provider_plugins, PluginSessionBackend, ResumeAgentOutcome,
 };
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) enum ResumeLookup {
     NotInstalled,
     Outcome(ResumeAgentOutcome),
+    /// The resumed command ran on a broker-owned workflow lease. Keep its
+    /// binding live so later phases acquire the exact same node; terminal
+    /// workflow completion or explicit cancellation owns teardown.
+    RetainedEnvironmentOutcome(ResumeAgentOutcome),
+    /// The delegated node could not be verified this sweep. Keep the
+    /// checkpoint Running so liveness can be retried later.
+    Deferred,
 }
 
 #[async_trait::async_trait(?Send)]
 pub(super) trait ResumeProviderRegistry {
     async fn try_resume(&self, checkpoint: &SessionCheckpoint) -> ResumeLookup;
+    /// Release the broker-owned workflow lease after an adopted final phase
+    /// reaches terminal workflow state. Implementations must be idempotent.
+    async fn teardown_retained_environment(&self, workflow_id: &str);
 }
 
 // Applies a resumed phase outcome back to durable workflow state once the
@@ -63,12 +72,19 @@ pub(super) trait ResumedOutcomeApplier {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ResumedOutcomeApplyResult {
-    // Workflow state was advanced and session checkpoint flipped to Completed.
+    // Workflow state advanced to another phase/paused handoff and the session
+    // checkpoint flipped to Completed. Retain a broker-owned lease.
     Advanced,
+    // Workflow state advanced to a terminal status. A broker-owned retained
+    // lease must now be torn down because no WorkflowProcess exists to do it.
+    AdvancedTerminal,
     // The workflow had already advanced past this phase (durable marker was
     // already on disk from a previous restart). We still flipped the session
     // checkpoint to Completed but did not double-advance.
     AlreadyAdvanced,
+    // Idempotent replay discovered that the workflow was already terminal;
+    // cleanup may have been the crash boundary, so retry broker teardown.
+    AlreadyAdvancedTerminal,
     // The phase is decision-gated (review/QA/testing/etc.) so we refuse to
     // synthesize an `Advance` verdict from the resumed session. The session
     // checkpoint is marked Blocked with an actionable reason so the operator
@@ -160,15 +176,17 @@ fn phase_requires_explicit_decision_for_resume_in_workflow(
 
 struct ProductionResumeProviderRegistry {
     providers: HashMap<String, Arc<PluginSessionBackend>>,
+    project_root: PathBuf,
+    environment_broker: Option<EnvironmentBroker>,
 }
 
 impl ProductionResumeProviderRegistry {
-    fn discover(project_root: &Path) -> Self {
+    fn discover(project_root: &Path, environment_broker: Option<EnvironmentBroker>) -> Self {
         let providers = discover_provider_plugins(project_root)
             .into_iter()
             .map(|plugin| (plugin.provider_tool.to_ascii_lowercase(), plugin.into_backend()))
             .collect();
-        Self { providers }
+        Self { providers, project_root: project_root.to_path_buf(), environment_broker }
     }
 }
 
@@ -191,6 +209,76 @@ fn resolve_resume_provider_key(provider_keys: &[String], checkpoint_provider: &s
 #[async_trait::async_trait(?Send)]
 impl ResumeProviderRegistry for ProductionResumeProviderRegistry {
     async fn try_resume(&self, checkpoint: &SessionCheckpoint) -> ResumeLookup {
+        if let Some(binding) = checkpoint.environment.as_ref() {
+            match super::daemon_reconciliation::probe_delegate(self.project_root.to_string_lossy().as_ref(), binding) {
+                super::daemon_reconciliation::DelegateLiveness::Unknown => {
+                    tracing::warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %checkpoint.workflow_id,
+                        phase_id = %checkpoint.phase_id,
+                        "delegated node liveness is unknown; preserving Running checkpoint for retry"
+                    );
+                    return ResumeLookup::Deferred;
+                }
+                super::daemon_reconciliation::DelegateLiveness::Dead => {
+                    // Reconciliation owns dead-delegate terminalization because
+                    // it can reap the handle and cancel the workflow as one
+                    // retryable transition. Mapping this to a generic resume
+                    // failure would mark the checkpoint Blocked and shield the
+                    // ghost from every later cleanup sweep.
+                    tracing::warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %checkpoint.workflow_id,
+                        phase_id = %checkpoint.phase_id,
+                        "delegated node is dead; deferring to orphan reconciliation for reap and terminalization"
+                    );
+                    return ResumeLookup::Deferred;
+                }
+                super::daemon_reconciliation::DelegateLiveness::Alive => {}
+            }
+            let Some(broker) = self.environment_broker.as_ref() else {
+                tracing::warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %checkpoint.workflow_id,
+                    phase_id = %checkpoint.phase_id,
+                    "delegated node is alive but no environment broker is available to retain it across phases"
+                );
+                return ResumeLookup::Deferred;
+            };
+            if !broker.owns_ready_lease(&checkpoint.workflow_id, &binding.environment_id, &binding.handle).await {
+                tracing::warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %checkpoint.workflow_id,
+                    phase_id = %checkpoint.phase_id,
+                    node = %binding.handle.id,
+                    "delegated node is alive but its exact lease was not adopted by this daemon; preserving for retry"
+                );
+                return ResumeLookup::Deferred;
+            }
+            return match super::super::runtime_agent::environment_exec::resume_environment_checkpoint(
+                &self.project_root,
+                checkpoint,
+                true,
+            )
+            .await
+            {
+                super::super::runtime_agent::environment_exec::EnvironmentCheckpointResume::Outcome(outcome) => {
+                    ResumeLookup::RetainedEnvironmentOutcome(outcome)
+                }
+                super::super::runtime_agent::environment_exec::EnvironmentCheckpointResume::CleanupPending {
+                    reason,
+                } => {
+                    tracing::warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        workflow_id = %checkpoint.workflow_id,
+                        phase_id = %checkpoint.phase_id,
+                        %reason,
+                        "delegated node cleanup is pending; preserving Running checkpoint for teardown retry"
+                    );
+                    ResumeLookup::Deferred
+                }
+            };
+        }
         // Codex round 8 P2 #2: historical workflows wrote
         // `checkpoint.provider = "oai-runner"` (or `"animus-oai-runner"`),
         // but the installed first-party plugin registers under
@@ -217,6 +305,12 @@ impl ResumeProviderRegistry for ProductionResumeProviderRegistry {
             });
         };
         ResumeLookup::Outcome(backend.resume_agent_for_restart(session_id, request).await)
+    }
+
+    async fn teardown_retained_environment(&self, workflow_id: &str) {
+        if let Some(broker) = &self.environment_broker {
+            broker.teardown(workflow_id).await;
+        }
     }
 }
 
@@ -330,7 +424,11 @@ pub(super) async fn apply_resumed_outcome_in_tree(
                 "workflow already advanced past phase '{phase_id}' but failed to mark session completed: {err}"
             ));
         }
-        return ResumedOutcomeApplyResult::AlreadyAdvanced;
+        return if workflow_terminal {
+            ResumedOutcomeApplyResult::AlreadyAdvancedTerminal
+        } else {
+            ResumedOutcomeApplyResult::AlreadyAdvanced
+        };
     }
 
     // Decision-gated phases (review/QA/testing), phases that own a
@@ -412,12 +510,17 @@ pub(super) async fn apply_resumed_outcome_in_tree(
         ));
     }
 
-    ResumedOutcomeApplyResult::Advanced
+    if workflow_terminal_after {
+        ResumedOutcomeApplyResult::AdvancedTerminal
+    } else {
+        ResumedOutcomeApplyResult::Advanced
+    }
 }
 
 // Returns the set of workflow_ids that have a Running session checkpoint
-// with a captured provider_session_id — i.e. workflows that
-// auto_resume_running_checkpoints can actually attempt to resume. These
+// which auto_resume_running_checkpoints can recover. Local providers require
+// a captured provider_session_id; a delegated checkpoint can also recover
+// without one by re-running the command on its still-live prepared node. These
 // must be excluded from orphan recovery at daemon startup; otherwise
 // recover_orphaned_running_workflows would cancel them before the resume
 // pass ever runs. Returns an empty set when the scoped state root is
@@ -436,7 +539,8 @@ pub(super) fn resumable_workflow_ids_for_project(project_root: &str) -> std::col
         .filter_map(|(_, checkpoint)| {
             let has_sid =
                 checkpoint.provider_session_id.as_deref().map(str::trim).as_ref().is_some_and(|s| !s.is_empty());
-            if has_sid {
+            let has_reusable_environment = checkpoint.environment.as_ref().is_some_and(|binding| !binding.torn_down);
+            if has_sid || has_reusable_environment {
                 Some(checkpoint.workflow_id)
             } else {
                 None
@@ -460,25 +564,6 @@ where
         Err(_) => return report,
     };
     for (_path, checkpoint) in running {
-        // TASK-933: a DELEGATED coding phase's provider session lives INSIDE the
-        // remote node prepared by an `environment` plugin, NOT in a local
-        // provider plugin. The daemon must not try to resume it against a local
-        // plugin — that plugin never issued the session id and would reject it,
-        // mis-blocking the checkpoint with a misleading reinstall hint. Leave it
-        // Running so the companion runner re-dispatch reuses the node (skip
-        // prepare + `--resume` on the live handle); a dead node was already
-        // terminalized by `recover_orphaned_running_workflows`. This branch is
-        // inert until the companion runner persists `environment` (the field is
-        // `None` for every local run and for every runner without the change).
-        if checkpoint.environment.is_some() {
-            tracing::info!(
-                actor = protocol::ACTOR_DAEMON,
-                workflow_id = %checkpoint.workflow_id,
-                phase_id = %checkpoint.phase_id,
-                "delegated phase: skipping local provider resume; preserved for runner re-dispatch to reuse the node (TASK-933)"
-            );
-            continue;
-        }
         // Guard rail: provider plugins can only resume an external session
         // they themselves issued. If no provider_session_id was captured
         // before the daemon crashed, dispatching ANY id (the run_id, an
@@ -487,7 +572,7 @@ where
         // block with an actionable, --force-aware reason instead.
         let provider_sid_present =
             checkpoint.provider_session_id.as_deref().map(str::trim).as_ref().is_some_and(|sid| !sid.is_empty());
-        if !provider_sid_present {
+        if !provider_sid_present && checkpoint.environment.is_none() {
             let reason =
                 "no provider session_id captured before crash; phase will re-run from scratch on resume --force"
                     .to_string();
@@ -495,8 +580,14 @@ where
             report.blocked_on_failure += 1;
             continue;
         }
-        match registry.try_resume(&checkpoint).await {
-            ResumeLookup::Outcome(ResumeAgentOutcome::Resumed { session_id }) => {
+        let lookup = registry.try_resume(&checkpoint).await;
+        let retained_environment = matches!(&lookup, ResumeLookup::RetainedEnvironmentOutcome(_));
+        match lookup {
+            ResumeLookup::Outcome(ResumeAgentOutcome::Resumed { session_id })
+            | ResumeLookup::RetainedEnvironmentOutcome(ResumeAgentOutcome::Resumed { session_id }) => {
+                if checkpoint.environment.is_some() && !retained_environment {
+                    let _ = mark_environment_torn_down(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
+                }
                 // Codex round-7 P1: the resumed agent has finished, but
                 // until we apply the outcome back through the workflow
                 // service the run stays stuck in Running with no
@@ -507,6 +598,15 @@ where
                 // don't pick it back up.
                 match applier.apply(&checkpoint, session_id.as_deref()).await {
                     ResumedOutcomeApplyResult::Advanced | ResumedOutcomeApplyResult::AlreadyAdvanced => {
+                        report.resumed += 1;
+                    }
+                    ResumedOutcomeApplyResult::AdvancedTerminal
+                    | ResumedOutcomeApplyResult::AlreadyAdvancedTerminal => {
+                        if retained_environment {
+                            registry.teardown_retained_environment(&checkpoint.workflow_id).await;
+                            let _ =
+                                mark_environment_torn_down(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
+                        }
                         report.resumed += 1;
                     }
                     ResumedOutcomeApplyResult::BlockedAwaitingDecision => {
@@ -526,7 +626,8 @@ where
                     }
                 }
             }
-            ResumeLookup::Outcome(ResumeAgentOutcome::Failed { reason }) => {
+            ResumeLookup::Outcome(ResumeAgentOutcome::Failed { reason })
+            | ResumeLookup::RetainedEnvironmentOutcome(ResumeAgentOutcome::Failed { reason }) => {
                 let _ = update_session_blocked(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id, &reason);
                 report.blocked_on_failure += 1;
             }
@@ -538,6 +639,7 @@ where
                 let _ = update_session_blocked(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id, &reason);
                 report.blocked_uninstalled += 1;
             }
+            ResumeLookup::Deferred => {}
         }
     }
     report
@@ -592,10 +694,16 @@ struct CliDaemonRunHost {
     daemon_ops_routing: Arc<dyn DaemonOpsRouting>,
     workflow_routing: Arc<dyn WorkflowRouting>,
     queue_routing: Arc<dyn QueueRouting>,
+    environment_broker: Option<EnvironmentBroker>,
 }
 
 impl CliDaemonRunHost {
-    fn new(project_root: &str, json: bool, start_config: DaemonStartConfig) -> Self {
+    fn new(
+        project_root: &str,
+        json: bool,
+        start_config: DaemonStartConfig,
+        environment_broker: Option<EnvironmentBroker>,
+    ) -> Self {
         let project_root_path = PathBuf::from(project_root);
         let plugin_routing = build_plugin_routing(project_root_path.clone());
         let daemon_ops_routing = build_daemon_ops_routing(project_root_path.clone(), SystemTime::now());
@@ -610,6 +718,7 @@ impl CliDaemonRunHost {
             daemon_ops_routing,
             workflow_routing,
             queue_routing,
+            environment_broker,
         }
     }
 
@@ -674,11 +783,10 @@ impl DaemonRunHooks for CliDaemonRunHost {
         let resume_orphans = journal_resume_enabled(project_root);
 
         // STARTUP passes `skip_live_delegated = false`: `EnvironmentBroker::start`
-        // → `reap_prior_daemon_records` has already torn down the prior daemon
-        // instance's remote nodes, so a delegated `Running` row surviving into
-        // startup is DEAD and must be handled here (resumed/cancelled) — shielding
-        // it would strand it `Running` forever. Only the steady-state sweep, where
-        // the delegate is still alive on its node, passes `true`.
+        // adopts a Ready lease that is still claimed by a resumable checkpoint
+        // and cold-reaps only unclaimed prior-daemon records. The resumable-id
+        // shield preserves an adopted run for auto-resume below; any delegated
+        // Running row outside that shield is dead and must be reconciled here.
         let orphans = recover_orphaned_running_workflows(
             startup_hub as Arc<dyn ServiceHub>,
             project_root,
@@ -689,7 +797,10 @@ impl DaemonRunHooks for CliDaemonRunHost {
         .await;
 
         if let Some(scoped_root) = protocol::repository_scope::scoped_state_root(std::path::Path::new(project_root)) {
-            let registry = ProductionResumeProviderRegistry::discover(std::path::Path::new(project_root));
+            let registry = ProductionResumeProviderRegistry::discover(
+                std::path::Path::new(project_root),
+                self.environment_broker.clone(),
+            );
             let apply_hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(project_root)?);
             let applier = FileResumedOutcomeApplier::new(project_root.to_string(), scoped_root.clone(), apply_hub);
             auto_resume_running_checkpoints(&scoped_root, &registry, &applier).await;
@@ -795,9 +906,10 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     // REQ-048 cross-phase environment broker: route non-local environments
     // through a daemon-owned node shared by every phase of a run. The routing
     // table decides which dispatches are brokered; the broker binds a private
-    // local socket and reaps any nodes leaked by a prior daemon instance. A
-    // bind failure is non-fatal — the runner then falls back to its own
-    // per-phase environment path.
+    // local socket, adopts a still-claimed Ready lease after restart, and reaps
+    // unclaimed nodes leaked by a prior daemon instance. A bind failure is
+    // non-fatal — the runner then falls back to its own per-phase environment
+    // path.
     process_manager.environment_routing = workflow_config.config.environment_routing.clone();
     // Map each workflow's `environment:` override (id -> environment id, lowercased
     // keys) so the broker gate can honor a workflow-level environment even when no
@@ -809,9 +921,10 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
         .iter()
         .filter_map(|workflow| workflow.environment.as_ref().map(|env| (workflow.id.to_ascii_lowercase(), env.clone())))
         .collect();
-    match orchestrator_daemon_runtime::EnvironmentBroker::start(project_root).await {
+    let environment_broker = match orchestrator_daemon_runtime::EnvironmentBroker::start(project_root).await {
         Ok(broker) => {
-            process_manager = process_manager.with_environment_broker(broker);
+            process_manager = process_manager.with_environment_broker(broker.clone());
+            Some(broker)
         }
         Err(error) => {
             tracing::warn!(
@@ -819,9 +932,10 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
                 %error,
                 "failed to start environment broker; workflow runners fall back to per-phase environment preparation"
             );
+            None
         }
-    }
-    let mut host = CliDaemonRunHost::new(project_root, json, start_config);
+    };
+    let mut host = CliDaemonRunHost::new(project_root, json, start_config, environment_broker);
     let logger = host.logger();
     let mut driver: SlimProjectTickDriver<'_> =
         slim_project_tick_driver(&runtime_options, &mut process_manager, logger);
@@ -1315,7 +1429,8 @@ mod tests {
         use super::super::resumable_workflow_ids_for_project;
         use super::*;
         use animus_runtime_shared::phase_session::{
-            update_provider_session_id, update_session_running, write_session_pending,
+            update_provider_session_id, update_session_environment, update_session_running, write_session_pending,
+            EnvironmentBinding,
         };
         use serde_json::json;
 
@@ -1365,6 +1480,22 @@ mod tests {
             )
             .expect("seed noid pending");
             update_session_running(&scoped_root, "wf-noid", "impl").expect("seed noid running");
+            update_session_environment(
+                &scoped_root,
+                "wf-noid",
+                "impl",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: animus_environment_protocol::EnvironmentHandle {
+                        id: "node-live".to_string(),
+                        workspace_root: "/workspace".to_string(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("bind reusable delegated environment");
 
             let shielded = resumable_workflow_ids_for_project(&project_root);
             assert!(
@@ -1372,10 +1503,10 @@ mod tests {
                 "workflow with provider_session_id MUST be shielded from orphan cancellation"
             );
             assert!(
-                !shielded.contains("wf-noid"),
-                "workflow without provider_session_id MUST NOT be shielded (nothing to resume)"
+                shielded.contains("wf-noid"),
+                "live delegated workflow without a provider session id must reach on-node fresh resume"
             );
-            assert_eq!(shielded.len(), 1, "shield set contains exactly the resumable workflows");
+            assert_eq!(shielded.len(), 2, "shield set contains both recoverable workflows");
         }
 
         #[test]
@@ -1398,8 +1529,9 @@ mod tests {
             ResumedOutcomeApplyResult,
         };
         use animus_runtime_shared::phase_session::{
-            read_checkpoint, update_provider_session_id, update_session_running, update_session_running_after_resume,
-            write_session_pending, SessionCheckpoint, SessionCheckpointStatus,
+            read_checkpoint, update_provider_session_id, update_session_completed, update_session_environment,
+            update_session_running, update_session_running_after_resume, write_session_pending, EnvironmentBinding,
+            SessionCheckpoint, SessionCheckpointStatus,
         };
         use async_trait::async_trait;
         use orchestrator_plugin_host::session::ResumeAgentOutcome;
@@ -1410,17 +1542,23 @@ mod tests {
 
         enum Script {
             Resumed { new_session_id: Option<String> },
+            RetainedEnvironmentResumed { new_session_id: Option<String> },
             Failed { reason: String },
         }
 
         struct ScriptedRegistry {
             scripts: Mutex<HashMap<String, Script>>,
+            teardowns: Mutex<Vec<String>>,
         }
 
         impl ScriptedRegistry {
             fn new(entries: Vec<(&str, Script)>) -> Self {
                 let scripts = entries.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-                Self { scripts: Mutex::new(scripts) }
+                Self { scripts: Mutex::new(scripts), teardowns: Mutex::new(Vec::new()) }
+            }
+
+            fn teardown_calls(&self) -> Vec<String> {
+                self.teardowns.lock().expect("teardowns mutex").clone()
             }
         }
 
@@ -1432,9 +1570,18 @@ mod tests {
                     Some(Script::Resumed { new_session_id }) => {
                         ResumeLookup::Outcome(ResumeAgentOutcome::Resumed { session_id: new_session_id })
                     }
+                    Some(Script::RetainedEnvironmentResumed { new_session_id }) => {
+                        ResumeLookup::RetainedEnvironmentOutcome(ResumeAgentOutcome::Resumed {
+                            session_id: new_session_id,
+                        })
+                    }
                     Some(Script::Failed { reason }) => ResumeLookup::Outcome(ResumeAgentOutcome::Failed { reason }),
                     None => ResumeLookup::NotInstalled,
                 }
+            }
+
+            async fn teardown_retained_environment(&self, workflow_id: &str) {
+                self.teardowns.lock().expect("teardowns mutex").push(workflow_id.to_string());
             }
         }
 
@@ -1488,6 +1635,12 @@ mod tests {
                         &checkpoint.phase_id,
                         new_session_id,
                     );
+                }
+                if matches!(
+                    &self.result,
+                    ResumedOutcomeApplyResult::AdvancedTerminal | ResumedOutcomeApplyResult::AlreadyAdvancedTerminal
+                ) {
+                    let _ = update_session_completed(&self.scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
                 }
                 self.result.clone()
             }
@@ -1608,6 +1761,101 @@ mod tests {
                 "expected explicit 'no provider session_id captured' guidance, got: {reason}"
             );
             assert!(applier.calls().is_empty(), "applier must NOT be invoked when provider_session_id is missing");
+        }
+
+        #[tokio::test]
+        async fn auto_resume_dispatches_delegated_checkpoint_without_provider_session_id() {
+            let temp = TempDir::new().expect("tempdir");
+            let scoped = temp.path();
+            write_session_pending(
+                scoped,
+                "wf-delegated-noid",
+                "impl",
+                "claude",
+                "run-delegated",
+                Some(json!({"context": {"prompt": "continue", "model": "claude-sonnet-4-6"}})),
+            )
+            .expect("pending");
+            update_session_running(scoped, "wf-delegated-noid", "impl").expect("running");
+            update_session_environment(
+                scoped,
+                "wf-delegated-noid",
+                "impl",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: animus_environment_protocol::EnvironmentHandle {
+                        id: "live-node".to_string(),
+                        workspace_root: "/workspace".to_string(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("environment binding");
+
+            let registry =
+                ScriptedRegistry::new(vec![("claude", Script::RetainedEnvironmentResumed { new_session_id: None })]);
+            let applier = RecordingApplier::new(ResumedOutcomeApplyResult::Advanced, false, scoped.to_path_buf());
+
+            let report = auto_resume_running_checkpoints(scoped, &registry, &applier).await;
+            assert_eq!(report.resumed, 1);
+            assert_eq!(report.blocked_on_failure, 0);
+            assert_eq!(applier.calls(), vec![("wf-delegated-noid".to_string(), "impl".to_string(), None)]);
+            let after = read_checkpoint(scoped, "wf-delegated-noid", "impl").expect("read").expect("present");
+            assert!(
+                !after.environment.expect("binding retained").torn_down,
+                "broker-owned node binding remains live for the next phase"
+            );
+            assert!(registry.teardown_calls().is_empty(), "a non-terminal resumed phase retains the adopted lease");
+        }
+
+        #[tokio::test]
+        async fn terminal_retained_environment_resume_tears_down_adopted_lease_once() {
+            let temp = TempDir::new().expect("tempdir");
+            let scoped = temp.path();
+            write_session_pending(
+                scoped,
+                "wf-delegated-final",
+                "publish",
+                "claude",
+                "run-delegated-final",
+                Some(json!({"context": {"prompt": "publish", "model": "claude-sonnet-4-6"}})),
+            )
+            .expect("pending");
+            update_session_running(scoped, "wf-delegated-final", "publish").expect("running");
+            update_session_environment(
+                scoped,
+                "wf-delegated-final",
+                "publish",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: animus_environment_protocol::EnvironmentHandle {
+                        id: "adopted-h1".to_string(),
+                        workspace_root: "/workspace".to_string(),
+                        metadata: serde_json::Value::Null,
+                    },
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("environment binding");
+
+            let registry =
+                ScriptedRegistry::new(vec![("claude", Script::RetainedEnvironmentResumed { new_session_id: None })]);
+            let applier =
+                RecordingApplier::new(ResumedOutcomeApplyResult::AdvancedTerminal, false, scoped.to_path_buf());
+
+            let first = auto_resume_running_checkpoints(scoped, &registry, &applier).await;
+            assert_eq!(first.resumed, 1);
+            assert_eq!(registry.teardown_calls(), vec!["wf-delegated-final".to_string()]);
+            let after =
+                read_checkpoint(scoped, "wf-delegated-final", "publish").expect("read").expect("checkpoint present");
+            assert!(after.environment.expect("binding").torn_down, "terminal resume records cleanup");
+
+            let second = auto_resume_running_checkpoints(scoped, &registry, &applier).await;
+            assert_eq!(second.resumed, 0, "completed checkpoint is not resumed twice");
+            assert_eq!(registry.teardown_calls().len(), 1, "terminal lease teardown occurs exactly once");
         }
 
         #[tokio::test]
@@ -1942,7 +2190,7 @@ mod tests {
                 Some("sess-rotated"),
             )
             .await;
-            assert_eq!(result, ResumedOutcomeApplyResult::Advanced);
+            assert_eq!(result, ResumedOutcomeApplyResult::AdvancedTerminal);
 
             let after = read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("present");
             assert_eq!(after.status, SessionCheckpointStatus::Completed);
@@ -1992,7 +2240,7 @@ mod tests {
             let result =
                 apply_resumed_outcome_in_tree(&project_root, &scoped_root, hub.clone(), &checkpoint, Some("sess-x"))
                     .await;
-            assert_eq!(result, ResumedOutcomeApplyResult::Advanced);
+            assert_eq!(result, ResumedOutcomeApplyResult::AdvancedTerminal);
 
             let after = hub.workflows().get(&workflow_id).await.expect("workflow after");
             let advanced = after.current_phase_index > before_index
@@ -2058,7 +2306,7 @@ mod tests {
             let first =
                 apply_resumed_outcome_in_tree(&project_root, &scoped_root, hub.clone(), &checkpoint, Some("sess-1"))
                     .await;
-            assert_eq!(first, ResumedOutcomeApplyResult::Advanced);
+            assert_eq!(first, ResumedOutcomeApplyResult::AdvancedTerminal);
 
             // Re-read the checkpoint (it's now Completed) but pretend a
             // crash left the OLD Running checkpoint for the same phase.
@@ -2077,7 +2325,7 @@ mod tests {
             .await;
             assert_eq!(
                 second,
-                ResumedOutcomeApplyResult::AlreadyAdvanced,
+                ResumedOutcomeApplyResult::AlreadyAdvancedTerminal,
                 "second apply MUST NOT double-advance the workflow"
             );
 
