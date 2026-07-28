@@ -1069,6 +1069,12 @@ mod tests {
             reason.is_none(),
             "consolidated backend `animus-postgres` declared as subject_backend must not produce a degraded reason, got: {reason:?}"
         );
+
+        let reasons = degraded_reasons_for(&project_root, &DaemonStatus::Running);
+        assert!(
+            reasons.is_empty(),
+            "a running daemon with a routable consolidated backend must remain healthy, got: {reasons:?}"
+        );
     }
 
     /// A project with no subject_backend plugins at all must produce a degraded
