@@ -828,6 +828,7 @@ pub(crate) async fn handle_workflow(
                     return print_value(workflow, json);
                 }
             }
+            crate::services::runtime::teardown_retained_environment_for_cancel(project_root, &workflow)?;
             let task_store =
                 orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
             let outcome = dispatch_workflow_event(

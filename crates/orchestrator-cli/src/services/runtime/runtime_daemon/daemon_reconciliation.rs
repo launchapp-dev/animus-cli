@@ -5,7 +5,7 @@ use animus_environment_protocol::{ExecResponse, HarnessCommand};
 use animus_runtime_shared::phase_session::{
     mark_environment_torn_down, read_checkpoint, update_session_failed, EnvironmentBinding,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use orchestrator_core::{
     active_workflow_runner_ids, dispatch_workflow_event, load_agent_runtime_config_or_default, services::ServiceHub,
     workflow_runner_liveness, EnvironmentClient, OrchestratorWorkflow, RunnerLiveness, WorkflowConfig, WorkflowEvent,
@@ -306,6 +306,62 @@ fn current_delegate_binding(
     let checkpoint = read_checkpoint(scoped_root, &workflow.id, &phase_id).ok()??;
     let binding = checkpoint.environment.filter(|binding| !binding.torn_down)?;
     Some((phase_id, binding))
+}
+
+/// Release the exact delegated node retained by a workflow before an external
+/// cancellation is committed. The teardown happens first and the durable
+/// binding is marked only after it succeeds, so a failed cleanup leaves the
+/// workflow and checkpoint retryable. Repeated calls are idempotent because a
+/// marked binding is no longer returned by `current_delegate_binding`.
+pub(crate) fn teardown_retained_environment_for_cancel(
+    project_root: &str,
+    workflow: &OrchestratorWorkflow,
+) -> anyhow::Result<()> {
+    let Some(scoped_root) = protocol::scoped_state_root(Path::new(project_root)) else {
+        return Ok(());
+    };
+    teardown_retained_environment_with(&scoped_root, workflow, |binding| {
+        let client =
+            EnvironmentClient::resolve(Path::new(project_root), &binding.environment_id).with_context(|| {
+                format!(
+                    "cannot resolve environment plugin '{}' to cancel retained node {} for workflow {}",
+                    binding.environment_id, binding.handle.id, workflow.id
+                )
+            })?;
+        client.teardown(&binding.handle).with_context(|| {
+            format!(
+                "failed to teardown retained node {} in environment '{}' for cancelled workflow {}",
+                binding.handle.id, binding.environment_id, workflow.id
+            )
+        })
+    })
+}
+
+fn teardown_retained_environment_with<F>(
+    scoped_root: &Path,
+    workflow: &OrchestratorWorkflow,
+    teardown: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&EnvironmentBinding) -> anyhow::Result<()>,
+{
+    let Some((phase_id, binding)) = current_delegate_binding(scoped_root, workflow) else {
+        return Ok(());
+    };
+    teardown(&binding)?;
+    mark_environment_torn_down(scoped_root, &workflow.id, &phase_id).with_context(|| {
+        format!(
+            "node {} was torn down but its retained binding could not be marked for workflow {}/{}",
+            binding.handle.id, workflow.id, phase_id
+        )
+    })?;
+    info!(
+        actor = protocol::ACTOR_DAEMON,
+        workflow_id = %workflow.id,
+        node = %binding.handle.id,
+        "released retained delegated node before external workflow cancellation"
+    );
+    Ok(())
 }
 
 /// Liveness of a delegated node, as observed by a trivial exec probe.
@@ -1996,6 +2052,57 @@ mod tests {
         assert!(
             checkpoint.environment.expect("binding present").torn_down,
             "an already-reaped binding stays torn_down (no double-free)"
+        );
+    }
+
+    #[tokio::test]
+    async fn external_cancel_releases_retained_node_once_then_marks_binding() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-held")).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+        let teardown_calls = AtomicUsize::new(0);
+
+        super::teardown_retained_environment_with(&scoped_root, &workflow, |binding| {
+            assert_eq!(binding.handle.id, "node-held");
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("first cancellation cleanup");
+        super::teardown_retained_environment_with(&scoped_root, &workflow, |_| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("idempotent repeated cleanup");
+
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "retained node is torn down exactly once");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "successful cleanup releases the hold");
+    }
+
+    #[tokio::test]
+    async fn failed_external_cancel_cleanup_keeps_binding_retryable() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-held")).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+
+        let err =
+            super::teardown_retained_environment_with(&scoped_root, &workflow, |_| anyhow::bail!("relay unavailable"))
+                .expect_err("failed cleanup must abort cancellation");
+        assert!(format!("{err:#}").contains("relay unavailable"));
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(
+            !checkpoint.environment.expect("binding").torn_down,
+            "failed teardown must leave the durable hold available for retry"
         );
     }
 }
