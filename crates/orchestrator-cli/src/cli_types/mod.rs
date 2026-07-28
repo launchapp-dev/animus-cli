@@ -1407,6 +1407,26 @@ mod tests {
     }
 
     #[test]
+    fn chat_new_accepts_canonical_agent_binding() {
+        let cli = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "new",
+            "--agent",
+            "researcher",
+            "--actor-json",
+            r#"{"user_id":"alice","tenant_id":"tenant-a","claims":[]}"#,
+        ])
+        .expect("chat new should accept an agent binding");
+        match cli.command {
+            Command::Chat { command: ChatCommand::New(args) } => {
+                assert_eq!(args.agent.as_deref(), Some("researcher"));
+            }
+            other => panic!("expected chat new, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn output_read_is_primary_and_run_alias_is_retired() {
         let cli =
             Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1"]).expect("output read should parse");

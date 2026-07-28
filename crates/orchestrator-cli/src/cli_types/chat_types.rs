@@ -88,6 +88,11 @@ pub(crate) struct ChatNewArgs {
     /// Optional human-facing title.
     #[arg(long)]
     pub(crate) title: Option<String>,
+    /// Canonical agent profile to bind to this conversation at creation.
+    /// The profile is resolved in the transport actor's project scope before
+    /// any conversation is written.
+    #[arg(long, value_name = "AGENT_ID")]
+    pub(crate) agent: Option<String>,
     /// Legacy user assertion. When present, must equal the transport actor's
     /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]

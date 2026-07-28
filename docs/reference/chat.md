@@ -43,6 +43,7 @@ If a resume turn (case 1) comes back with an error indicating the native session
 ```bash
 # Start an empty conversation (prints the conversation id)
 animus chat new [--id <id>] [--title <title>] \
+  [--agent <agent-id>] \
   [--actor-json <json>] [--as-user <user-id>] [--visibility private|shared]
 
 # Send a turn (creates a conversation if --conversation is omitted)

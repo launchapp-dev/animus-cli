@@ -70,7 +70,8 @@ fn handle_chat_capabilities(project_root: &str, json: bool) -> Result<()> {
                 "commands": ["new", "list", "get", "rename", "delete", "export", "search", "send"],
                 "features": [
                     "chat_new_actor", "chat_list_actor", "chat_get_actor", "chat_rename_actor",
-                    "chat_delete_actor", "chat_export_actor", "chat_search_actor", "chat_send_actor"
+                    "chat_delete_actor", "chat_export_actor", "chat_search_actor", "chat_send_actor",
+                    "chat_new_agent_binding"
                 ],
                 "local_store": {
                     "unscoped_system_mode": true,
@@ -558,12 +559,20 @@ fn visibility_from_arg(arg: ChatVisibilityArg) -> Visibility {
 }
 
 fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<()> {
-    // Build the client with the acting user so a plugin backend authorizes the
-    // follow-up title `save_meta` as the same owner the create stamped, not as
-    // an unscoped/admin mutation.
+    // Resolve the canonical profile before constructing the store or writing a
+    // conversation. This keeps an unknown, hidden, or cross-scope agent from
+    // leaving an unbound row behind.
     let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let agent_id = resolve_chat_agent(Path::new(project_root), actor.as_ref(), None, args.agent.as_deref())?
+        .map(|(canonical, _)| canonical);
+
+    // Build the client with the acting user so a plugin backend authorizes the
+    // create and any follow-up title save as the same owner. The canonical
+    // agent id rides the create RPC, so plugin-backed storage never exposes a
+    // partially-created unbound conversation.
     let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
-    let mut meta = store.create_with_ownership(args.id, user, visibility_from_arg(args.visibility))?;
+    let mut meta =
+        store.create_with_ownership_and_agent(args.id, user, visibility_from_arg(args.visibility), agent_id)?;
     if let Some(title) = normalize_title_update(args.title.as_deref()) {
         meta.title = title;
         save_meta_update(&store, &mut meta)?;
@@ -571,6 +580,8 @@ fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<
     print_value(
         serde_json::json!({
             "conversation_id": meta.id,
+            "agent_id": meta.agent_id,
+            "revision": meta.revision,
             "title": meta.title,
             "owner": meta.owner,
             "visibility": meta.visibility,
