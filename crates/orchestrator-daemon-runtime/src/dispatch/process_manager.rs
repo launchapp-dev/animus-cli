@@ -764,17 +764,30 @@ impl ProcessManager {
                     cleanup_agent_record(&process);
                     let exit_code = status.code();
                     let events = parse_runner_events(&process.stderr_lines);
-                    // Prefer the runner-reported id; fall back to the kernel
-                    // target so an early exit still reconciles the exact queue
-                    // and journal identity.
                     let workflow_target = process.target_workflow_id.take();
-                    let workflow_id = latest_runner_workflow_id(&events).or_else(|| workflow_target.clone());
+                    let runner_workflow_id = latest_runner_workflow_id(&events);
+                    let (workflow_id, identity_mismatch) =
+                        reconcile_workflow_identity(workflow_target.as_deref(), runner_workflow_id.as_deref());
                     let mut workflow_status = latest_runner_workflow_status(&events);
-                    let (success, failure_reason) = if status.success() {
+                    let (mut success, mut failure_reason) = if status.success() {
                         (true, None)
                     } else {
                         (false, Some(format!("workflow runner exited unsuccessfully with status {:?}", exit_code)))
                     };
+                    if let Some(mismatch) = identity_mismatch {
+                        tracing::error!(
+                            target: "animus.runtime.workflow_identity",
+                            kernel_workflow_id = workflow_target.as_deref().unwrap_or("-"),
+                            runner_workflow_id = runner_workflow_id.as_deref().unwrap_or("-"),
+                            "runner reported a workflow id that diverges from the authoritative dispatch id"
+                        );
+                        success = false;
+                        workflow_status = Some(WorkflowStatus::Failed);
+                        failure_reason = Some(match failure_reason {
+                            Some(existing) => format!("{existing}; {mismatch}"),
+                            None => mismatch,
+                        });
+                    }
                     // BU-4 (codex P2): a RESUME-spawned runner that exits
                     // non-zero WITHOUT reporting a workflow status (e.g. a bad
                     // `--workflow-id`, a plugin/startup failure, an arg parse
@@ -973,6 +986,25 @@ fn latest_runner_workflow_id(events: &[RunnerEvent]) -> Option<String> {
     events.iter().rev().find_map(|event| event.workflow_id.clone())
 }
 
+/// Select the identity used for completion reconciliation. A queue/kernel
+/// target is authoritative: runner output may confirm it but can never replace
+/// it. Divergence fails closed and is returned as a diagnostic containing both
+/// values. The runner id remains authoritative only for legacy ad-hoc spawns.
+fn reconcile_workflow_identity(
+    workflow_target: Option<&str>,
+    runner_workflow_id: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    match (workflow_target, runner_workflow_id) {
+        (Some(target), Some(reported)) if target != reported => (
+            Some(target.to_string()),
+            Some(format!("workflow identity mismatch: authoritative_id={target} runner_reported_id={reported}")),
+        ),
+        (Some(target), _) => (Some(target.to_string()), None),
+        (None, Some(reported)) => (Some(reported.to_string()), None),
+        (None, None) => (None, None),
+    }
+}
+
 fn latest_runner_workflow_status(events: &[RunnerEvent]) -> Option<WorkflowStatus> {
     events.iter().rev().find_map(|event| event.workflow_status)
 }
@@ -1101,6 +1133,19 @@ mod tests {
         let clean = format_runner_exit_line(None, Some(0), None, 5, "");
         assert!(clean.contains("workflow_id=-"));
         assert!(clean.contains("code=Some(0)"));
+    }
+
+    #[test]
+    fn kernel_workflow_id_wins_and_divergence_fails_closed_with_both_ids() {
+        let (workflow_id, mismatch) = reconcile_workflow_identity(Some("queue-id"), Some("runner-id"));
+        assert_eq!(workflow_id.as_deref(), Some("queue-id"));
+        let mismatch = mismatch.expect("divergence must fail closed");
+        assert!(mismatch.contains("authoritative_id=queue-id"));
+        assert!(mismatch.contains("runner_reported_id=runner-id"));
+
+        let (legacy_id, mismatch) = reconcile_workflow_identity(None, Some("runner-only-id"));
+        assert_eq!(legacy_id.as_deref(), Some("runner-only-id"));
+        assert!(mismatch.is_none());
     }
 
     #[test]
