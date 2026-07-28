@@ -1195,6 +1195,32 @@ mod tests {
         }
     }
 
+    /// A falsy disable value must not accidentally mask a genuinely
+    /// unroutable subject router. This exercises the degraded-reason path,
+    /// rather than only checking the env parser in isolation.
+    #[test]
+    fn subject_router_still_degraded_when_disable_env_is_falsy() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let _disable = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, "False");
+
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.as_deref().is_some_and(|r| r.contains("no executable subject-backend plugin")),
+            "a falsy disable value must preserve the no-backend degraded reason, got: {reason:?}"
+        );
+    }
+
     /// A `subject_backend` plugin that declares NO `subject_kind:*` capabilities
     /// must produce a degraded reason. The router it would build serves nothing —
     /// any call would fail with "no backend registered for kind". This guards the
