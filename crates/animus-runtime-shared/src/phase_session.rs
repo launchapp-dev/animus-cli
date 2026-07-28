@@ -593,6 +593,31 @@ mod tests {
         assert!(environment.torn_down, "terminal mutation retains the completed cleanup marker");
     }
 
+    // TASK-933: after reconciliation reaps an unusable node, a phase-boundary
+    // redispatch may prepare a replacement for the same checkpoint. Persisting
+    // that replacement must overwrite the old handle AND clear its completed
+    // teardown marker, otherwise the replacement is invisible to subsequent
+    // restart recovery and can leak.
+    #[test]
+    fn replacement_environment_binding_supersedes_torn_down_node() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-4", "phase-a", "claude", "run-4", None).expect("pending");
+
+        update_session_environment(scoped_root, "wf-env-4", "phase-a", sample_binding()).expect("persist first");
+        mark_environment_torn_down(scoped_root, "wf-env-4", "phase-a").expect("mark first torn down");
+
+        let mut replacement = sample_binding();
+        replacement.handle.id = "node-2".to_string();
+        replacement.bound_at = "2025-01-02T00:00:00Z".to_string();
+        update_session_environment(scoped_root, "wf-env-4", "phase-a", replacement.clone())
+            .expect("persist replacement");
+
+        let cp = read_checkpoint(scoped_root, "wf-env-4", "phase-a").expect("read").expect("present");
+        assert_eq!(cp.environment.as_ref(), Some(&replacement));
+        assert!(!cp.environment.expect("replacement binding").torn_down);
+    }
+
     // Backward-compat: a checkpoint JSON written by an OLDER runner that does
     // not know the `environment` field must still deserialize (serde ignores
     // unknown fields; the struct is not deny_unknown_fields), with
