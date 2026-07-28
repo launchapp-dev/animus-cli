@@ -1638,10 +1638,7 @@ mod tests {
         assert_eq!(redact_stderr_line("using api key: sk-abc123 now"), "using api key ***");
         assert_eq!(redact_stderr_line("Authorization: Bearer sk-xyz trailing"), "Authorization ***");
         // Multi-token / PEM value cannot leak its tail.
-        assert_eq!(
-            redact_stderr_line("private_key=-----BEGIN KEY----- abcd -----END KEY-----"),
-            "private_key ***"
-        );
+        assert_eq!(redact_stderr_line("private_key=-----BEGIN KEY----- abcd -----END KEY-----"), "private_key ***");
         // Query-string credential in a URL without userinfo.
         assert_eq!(
             redact_stderr_line("cb https://h/x?client_id=a&client_secret=zzz"),

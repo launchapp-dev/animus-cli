@@ -1246,10 +1246,7 @@ mod tests {
 
         let _env = isolate_discovery_env(&config_dir, &plugin_dir);
         let reason = subject_router_degraded_reason(&project_root);
-        assert!(
-            reason.is_none(),
-            "project-scoped consolidated subject backend must be routable, got: {reason:?}"
-        );
+        assert!(reason.is_none(), "project-scoped consolidated subject backend must be routable, got: {reason:?}");
     }
 
     /// A project with no subject_backend plugins at all must produce a degraded
@@ -1302,10 +1299,7 @@ mod tests {
 
         let _env = isolate_discovery_env(&config_dir, &plugin_dir);
         let reason = subject_router_degraded_reason(&project_root);
-        assert!(
-            reason.is_some(),
-            "plugin discovery failure must produce a degraded reason, not false-healthy (None)"
-        );
+        assert!(reason.is_some(), "plugin discovery failure must produce a degraded reason, not false-healthy (None)");
         let reason = reason.unwrap();
         assert!(
             reason.contains("plugins.yaml"),
@@ -1499,10 +1493,7 @@ mod tests {
 
         let _env = isolate_discovery_env(&config_dir, &plugin_dir);
         let reason = subject_router_degraded_reason(&project_root);
-        assert!(
-            reason.is_none(),
-            "a router with a serving consolidated backend must remain healthy, got: {reason:?}"
-        );
+        assert!(reason.is_none(), "a router with a serving consolidated backend must remain healthy, got: {reason:?}");
     }
 
     /// Two `subject_backend` plugins that both declare `subject_kind:task` cause
@@ -1557,10 +1548,7 @@ mod tests {
 
         let _env = isolate_discovery_env(&config_dir, &plugin_dir);
         let reason = subject_router_degraded_reason(&project_root);
-        assert!(
-            reason.is_some(),
-            "duplicate subject_kind:task claims must produce a degraded reason"
-        );
+        assert!(reason.is_some(), "duplicate subject_kind:task claims must produce a degraded reason");
         let r = reason.unwrap();
         assert!(
             r.contains("subject_backend unroutable"),
