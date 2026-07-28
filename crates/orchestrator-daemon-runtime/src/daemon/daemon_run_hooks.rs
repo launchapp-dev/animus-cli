@@ -30,6 +30,13 @@ pub trait DaemonRunHooks {
         anyhow::bail!("daemon lifecycle hooks must provide recover_startup_orphans")
     }
 
+    /// Retry durable cleanup work during the ordinary housekeeping sweep.
+    /// Implementations should be idempotent; failures are retried on a later
+    /// sweep and must not stop the daemon loop.
+    async fn retry_durable_cleanup(&mut self, _project_root: &str) -> Result<()> {
+        Ok(())
+    }
+
     async fn flush_notifications(&mut self, _project_root: &str) -> Result<()> {
         Ok(())
     }

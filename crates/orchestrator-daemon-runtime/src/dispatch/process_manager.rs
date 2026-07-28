@@ -886,7 +886,7 @@ async fn teardown_environment_if_terminal(
         return;
     };
     if is_terminal_workflow_status(status) {
-        broker.teardown(&run_id).await;
+        let _ = broker.teardown(&run_id).await;
     }
 }
 

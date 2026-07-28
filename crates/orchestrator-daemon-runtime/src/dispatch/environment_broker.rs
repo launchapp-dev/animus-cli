@@ -120,12 +120,25 @@ struct LeaseRecord {
     updated_at: String,
 }
 
+/// Exact delegated environment whose previously failed teardown was confirmed.
+///
+/// Cleanup callers must use all four fields when updating durable phase
+/// checkpoints: one workflow can retain multiple historical bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetriedEnvironmentTeardown {
+    pub run_id: String,
+    pub environment_id: String,
+    pub project_root: String,
+    pub handle: EnvironmentHandle,
+}
+
 // ---------------------------------------------------------------------------
 // In-memory lease.
 // ---------------------------------------------------------------------------
 
 /// A ready, prepared node for a run: the pinned daemon-resident client plus the
 /// environment handle every phase of the run execs against.
+#[derive(Clone)]
 struct ReadyLease {
     environment_id: String,
     project_root: String,
@@ -323,7 +336,17 @@ impl EnvironmentBroker {
     /// TornDown`, delete the durable record, forget the run's pending context.
     /// A failed teardown retains a retryable durable record.
     /// A no-op when no lease exists (already torn down, or never prepared).
-    pub async fn teardown(&self, run_id: &str) {
+    /// Returns `true` only when cleanup is complete (including the idempotent
+    /// no-lease case), so checkpoint owners do not record `torn_down` after a
+    /// failed plugin RPC.
+    pub async fn teardown(&self, run_id: &str) -> bool {
+        // Serialize the whole remove -> RPC -> restore/delete transition per
+        // run. Without this guard, a concurrent terminal-cleanup caller can
+        // observe the temporarily removed lease as "already torn down" and
+        // return true while the in-flight plugin RPC subsequently fails.
+        let key_lock = self.key_lock(run_id);
+        let _guard = key_lock.lock().await;
+
         let lease = self.inner.leases.lock().await.remove(run_id);
         if let Some(lease) = lease {
             self.write_record(run_id, &lease.environment_id, &lease.project_root, LeaseState::TearingDown, None);
@@ -347,12 +370,58 @@ impl EnvironmentBroker {
                     LeaseState::TearingDown,
                     Some(&handle),
                 );
-                self.forget_run(run_id);
-                return;
+                // Keep the exact client + handle retryable in this daemon.
+                // Dropping the lease here makes the next teardown look like an
+                // idempotent no-op, which would delete the durable record even
+                // though the remote node was never confirmed torn down.
+                self.inner.leases.lock().await.insert(run_id.to_string(), lease);
+                return false;
             }
         }
         self.delete_record(run_id);
         self.forget_run(run_id);
+        true
+    }
+
+    /// Retry teardown RPCs which failed earlier in this daemon lifetime.
+    ///
+    /// Only durable `TearingDown` records are selected: Ready leases still
+    /// belong to active workflows and must never be swept merely because they
+    /// are present in memory. Returns the exact bindings whose cleanup was
+    /// confirmed so checkpoint owners do not mark unrelated historical
+    /// bindings torn down.
+    pub async fn retry_failed_teardowns(&self) -> Vec<RetriedEnvironmentTeardown> {
+        let entries = match std::fs::read_dir(&self.inner.records_dir) {
+            Ok(entries) => entries,
+            Err(_) => return Vec::new(),
+        };
+        let mut retried = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(record) =
+                std::fs::read_to_string(&path).ok().and_then(|raw| serde_json::from_str::<LeaseRecord>(&raw).ok())
+            else {
+                continue;
+            };
+            let Some(handle) = record.handle.clone() else {
+                continue;
+            };
+            if record.daemon_instance_id == self.inner.daemon_instance_id
+                && record.state == LeaseState::TearingDown
+                && self.teardown(&record.run_id).await
+            {
+                retried.push(RetriedEnvironmentTeardown {
+                    run_id: record.run_id,
+                    environment_id: record.environment_id,
+                    project_root: record.project_root,
+                    handle,
+                });
+            }
+        }
+        retried
     }
 
     fn forget_run(&self, run_id: &str) {
@@ -664,6 +733,38 @@ impl EnvironmentBroker {
                             %error,
                             "startup reap: cold teardown failed; retaining the lease record for retry"
                         );
+                        let client = match (self.inner.client_resolver)(Path::new(&project_root), &environment_id) {
+                            Ok(client) => client,
+                            Err(resolve_error) => {
+                                tracing::warn!(
+                                    target: "animus.runtime.environment_broker",
+                                    run_id = %run_id,
+                                    %resolve_error,
+                                    "startup reap: failed cleanup could not be adopted for housekeeping retry"
+                                );
+                                continue;
+                            }
+                        };
+                        if let Err(write_error) = self.write_record_required(
+                            &run_id,
+                            &environment_id,
+                            &project_root,
+                            LeaseState::TearingDown,
+                            Some(&handle),
+                        ) {
+                            tracing::warn!(
+                                target: "animus.runtime.environment_broker",
+                                run_id = %run_id,
+                                %write_error,
+                                "startup reap: failed cleanup could not transfer durable ownership"
+                            );
+                            continue;
+                        }
+                        self.inner
+                            .leases
+                            .lock()
+                            .await
+                            .insert(run_id.clone(), ReadyLease { environment_id, project_root, client, handle });
                         continue;
                     }
                     Ok(()) => {
@@ -672,6 +773,25 @@ impl EnvironmentBroker {
                             run_id = %run_id,
                             "startup reap: cold tore down a node leaked by a prior daemon instance"
                         );
+                        if let Some(scoped_root) =
+                            protocol::repository_scope::scoped_state_root(Path::new(&project_root))
+                        {
+                            if let Err(error) =
+                                animus_runtime_shared::phase_session::mark_workflow_environment_torn_down(
+                                    &scoped_root,
+                                    &run_id,
+                                    &environment_id,
+                                    &handle,
+                                )
+                            {
+                                tracing::warn!(
+                                    target: "animus.runtime.environment_broker",
+                                    run_id = %run_id,
+                                    %error,
+                                    "startup reap succeeded but checkpoint binding could not be marked torn down"
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -988,13 +1108,17 @@ fn write_record_atomic(path: &Path, record: &LeaseRecord) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Condvar, Mutex,
+    };
 
     struct FakeLeaseClient {
         handle: EnvironmentHandle,
         prepares: AtomicUsize,
         execs: AtomicUsize,
         teardowns: AtomicUsize,
+        teardown_failures_remaining: AtomicUsize,
     }
 
     impl EnvironmentLeaseClient for FakeLeaseClient {
@@ -1017,7 +1141,68 @@ mod tests {
 
         fn teardown(&self, _handle: &EnvironmentHandle) -> Result<()> {
             self.teardowns.fetch_add(1, Ordering::SeqCst);
+            if self
+                .teardown_failures_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| remaining.checked_sub(1))
+                .is_ok()
+            {
+                bail!("injected teardown failure");
+            }
             Ok(())
+        }
+    }
+
+    struct BlockingFailTeardownClient {
+        handle: EnvironmentHandle,
+        teardown_calls: AtomicUsize,
+        entered: (Mutex<bool>, Condvar),
+        release: (Mutex<bool>, Condvar),
+    }
+
+    impl BlockingFailTeardownClient {
+        fn wait_until_teardown_entered(&self) {
+            let (entered, wake) = &self.entered;
+            let mut entered = entered.lock().expect("entered mutex");
+            while !*entered {
+                entered = wake.wait(entered).expect("entered condvar");
+            }
+        }
+
+        fn release_teardown(&self) {
+            let (release, wake) = &self.release;
+            *release.lock().expect("release mutex") = true;
+            wake.notify_all();
+        }
+    }
+
+    impl EnvironmentLeaseClient for BlockingFailTeardownClient {
+        fn prepare(&self, _spec: EnvironmentSpec) -> Result<EnvironmentHandle> {
+            Ok(self.handle.clone())
+        }
+
+        fn exec_stream(
+            &self,
+            _handle: &EnvironmentHandle,
+            _command: HarnessCommand,
+            _stdin: Option<String>,
+            _timeout: Option<Duration>,
+            _on_output: &(dyn Fn(ExecStream, &str) + Send + Sync),
+        ) -> Result<ExecResponse> {
+            unreachable!("concurrent teardown regression does not exec")
+        }
+
+        fn teardown(&self, _handle: &EnvironmentHandle) -> Result<()> {
+            self.teardown_calls.fetch_add(1, Ordering::SeqCst);
+            let (entered, entered_wake) = &self.entered;
+            *entered.lock().expect("entered mutex") = true;
+            entered_wake.notify_all();
+
+            let (release, release_wake) = &self.release;
+            let mut release = release.lock().expect("release mutex");
+            while !*release {
+                release = release_wake.wait(release).expect("release condvar");
+            }
+            bail!("injected teardown failure")
         }
     }
 
@@ -1206,6 +1391,7 @@ mod tests {
             prepares: AtomicUsize::new(0),
             execs: AtomicUsize::new(0),
             teardowns: AtomicUsize::new(0),
+            teardown_failures_remaining: AtomicUsize::new(0),
         });
         let resolver: Arc<ClientResolver> = {
             let fake = fake.clone();
@@ -1273,8 +1459,8 @@ mod tests {
             .expect("second checkpoint exists");
         assert_eq!(second_checkpoint.environment.expect("second phase binding").handle.id, "node-h1");
 
-        replacement.teardown("wf-restart").await;
-        replacement.teardown("wf-restart").await;
+        assert!(replacement.teardown("wf-restart").await);
+        assert!(replacement.teardown("wf-restart").await);
         assert_eq!(fake.teardowns.load(Ordering::SeqCst), 1, "terminal cleanup tears the adopted lease down once");
     }
 
@@ -1283,8 +1469,275 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let broker = EnvironmentBroker::start(temp.path().to_string_lossy().as_ref()).await.expect("start broker");
         // No lease for this run: teardown must be a clean no-op.
-        broker.teardown("wf-missing").await;
-        broker.teardown("wf-missing").await;
+        assert!(broker.teardown("wf-missing").await);
+        assert!(broker.teardown("wf-missing").await);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_teardown_retains_lease_and_record_for_retry() {
+        use animus_runtime_shared::phase_session::{
+            mark_workflow_environment_torn_down, read_checkpoint, update_session_environment, write_session_pending,
+            EnvironmentBinding,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        let fake = Arc::new(FakeLeaseClient {
+            handle: EnvironmentHandle {
+                id: "node-retry".to_string(),
+                workspace_root: "/workspace".to_string(),
+                metadata: json!({"relay": "opaque"}),
+            },
+            prepares: AtomicUsize::new(0),
+            execs: AtomicUsize::new(0),
+            teardowns: AtomicUsize::new(0),
+            teardown_failures_remaining: AtomicUsize::new(1),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+        let broker = EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start broker");
+        broker.register_run("wf-retry", &project_root, "railway");
+        let spec = EnvironmentSpec {
+            kind: "railway".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: serde_json::Value::Null,
+        };
+        broker.acquire("wf-retry", "railway", spec).await.expect("prepare lease");
+        let historical_handle = EnvironmentHandle {
+            id: "node-historical".to_string(),
+            workspace_root: "/old-workspace".to_string(),
+            metadata: json!({"relay": "old"}),
+        };
+        for (phase_id, handle) in [("old-phase", historical_handle.clone()), ("current-phase", fake.handle.clone())] {
+            write_session_pending(&scoped_root, "wf-retry", phase_id, "claude", phase_id, None)
+                .expect("pending checkpoint");
+            update_session_environment(
+                &scoped_root,
+                "wf-retry",
+                phase_id,
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle,
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("environment binding");
+        }
+
+        assert!(!broker.teardown("wf-retry").await, "failed RPC must remain retryable");
+        assert!(broker.record_path("wf-retry").exists(), "failed cleanup must retain its durable recovery record");
+        assert!(
+            broker.owns_ready_lease("wf-retry", "railway", &fake.handle).await,
+            "failed cleanup must restore the in-memory lease"
+        );
+
+        let retried = broker.retry_failed_teardowns().await;
+        assert_eq!(
+            retried,
+            vec![RetriedEnvironmentTeardown {
+                run_id: "wf-retry".to_string(),
+                environment_id: "railway".to_string(),
+                project_root: project_root.clone(),
+                handle: fake.handle.clone(),
+            }],
+            "next ordinary cleanup sweep retries the plugin RPC"
+        );
+        for cleanup in &retried {
+            mark_workflow_environment_torn_down(
+                &scoped_root,
+                &cleanup.run_id,
+                &cleanup.environment_id,
+                &cleanup.handle,
+            )
+            .expect("mark exact retried binding");
+        }
+        let old_checkpoint = read_checkpoint(&scoped_root, "wf-retry", "old-phase")
+            .expect("read old checkpoint")
+            .expect("old checkpoint");
+        let current_checkpoint = read_checkpoint(&scoped_root, "wf-retry", "current-phase")
+            .expect("read current checkpoint")
+            .expect("current checkpoint");
+        assert!(
+            !old_checkpoint.environment.expect("old binding").torn_down,
+            "retrying one node must not mark another historical binding"
+        );
+        assert!(
+            current_checkpoint.environment.expect("current binding").torn_down,
+            "the binding matching the successful retry must be marked torn down"
+        );
+        assert!(!broker.record_path("wf-retry").exists(), "successful retry removes the durable record");
+        assert!(
+            !broker.owns_ready_lease("wf-retry", "railway", &fake.handle).await,
+            "successful retry removes the in-memory lease"
+        );
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_startup_reap_is_adopted_for_housekeeping_retry() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let fake = Arc::new(FakeLeaseClient {
+            handle: EnvironmentHandle {
+                id: "node-startup-retry".to_string(),
+                workspace_root: "/workspace".to_string(),
+                metadata: json!({"relay": "opaque"}),
+            },
+            prepares: AtomicUsize::new(0),
+            execs: AtomicUsize::new(0),
+            teardowns: AtomicUsize::new(0),
+            teardown_failures_remaining: AtomicUsize::new(1),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+        let first =
+            EnvironmentBroker::start_with_resolver(&project_root, resolver.clone()).await.expect("start first broker");
+        first.write_record("wf-startup-retry", "railway", &project_root, LeaseState::TearingDown, Some(&fake.handle));
+        first.stop_acceptor_for_restart_test();
+
+        let replacement =
+            EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start replacement broker");
+        let retried = replacement.retry_failed_teardowns().await;
+
+        assert_eq!(
+            retried,
+            vec![RetriedEnvironmentTeardown {
+                run_id: "wf-startup-retry".to_string(),
+                environment_id: "railway".to_string(),
+                project_root: project_root.clone(),
+                handle: fake.handle.clone(),
+            }]
+        );
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 2);
+        assert!(
+            !replacement.record_path("wf-startup-retry").exists(),
+            "successful housekeeping retry removes the adopted startup record"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn successful_startup_reap_marks_the_exact_checkpoint_binding_torn_down() {
+        use animus_runtime_shared::phase_session::{
+            read_checkpoint, update_session_environment, write_session_pending, EnvironmentBinding,
+        };
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        let handle = EnvironmentHandle {
+            id: "node-startup-success".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+        write_session_pending(&scoped_root, "wf-startup-success", "code", "claude", "agent", None)
+            .expect("pending checkpoint");
+        update_session_environment(
+            &scoped_root,
+            "wf-startup-success",
+            "code",
+            EnvironmentBinding {
+                environment_id: "railway".to_string(),
+                handle: handle.clone(),
+                bound_at: chrono::Utc::now().to_rfc3339(),
+                torn_down: false,
+            },
+        )
+        .expect("binding");
+
+        let fake = Arc::new(FakeLeaseClient {
+            handle: handle.clone(),
+            prepares: AtomicUsize::new(0),
+            execs: AtomicUsize::new(0),
+            teardowns: AtomicUsize::new(0),
+            teardown_failures_remaining: AtomicUsize::new(0),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+        let first =
+            EnvironmentBroker::start_with_resolver(&project_root, resolver.clone()).await.expect("start first broker");
+        first.write_record("wf-startup-success", "railway", &project_root, LeaseState::TearingDown, Some(&handle));
+        first.stop_acceptor_for_restart_test();
+
+        let _replacement =
+            EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start replacement broker");
+        let checkpoint =
+            read_checkpoint(&scoped_root, "wf-startup-success", "code").expect("read checkpoint").expect("checkpoint");
+        assert!(checkpoint.environment.expect("binding").torn_down);
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_teardown_waits_for_failed_rpc_before_reporting_result() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let fake = Arc::new(BlockingFailTeardownClient {
+            handle: EnvironmentHandle {
+                id: "node-concurrent-retry".to_string(),
+                workspace_root: "/workspace".to_string(),
+                metadata: json!({"relay": "opaque"}),
+            },
+            teardown_calls: AtomicUsize::new(0),
+            entered: (Mutex::new(false), Condvar::new()),
+            release: (Mutex::new(false), Condvar::new()),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+        let broker = EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start broker");
+        broker.register_run("wf-concurrent-retry", &project_root, "railway");
+        let spec = EnvironmentSpec {
+            kind: "railway".to_string(),
+            repos: Vec::new(),
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: serde_json::Value::Null,
+        };
+        broker.acquire("wf-concurrent-retry", "railway", spec).await.expect("prepare lease");
+
+        let first_broker = broker.clone();
+        let first = tokio::spawn(async move { first_broker.teardown("wf-concurrent-retry").await });
+        let wait_fake = fake.clone();
+        tokio::task::spawn_blocking(move || wait_fake.wait_until_teardown_entered())
+            .await
+            .expect("wait for first teardown");
+
+        let second_broker = broker.clone();
+        let mut second = tokio::spawn(async move { second_broker.teardown("wf-concurrent-retry").await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut second).await.is_err(),
+            "a concurrent caller must not report a no-lease success while teardown is in flight"
+        );
+
+        fake.release_teardown();
+        assert!(!first.await.expect("first teardown task"), "the first failed RPC remains retryable");
+        assert!(
+            !second.await.expect("second teardown task"),
+            "the serialized caller retries the retained lease instead of reporting false success"
+        );
+        assert_eq!(fake.teardown_calls.load(Ordering::SeqCst), 2);
+        assert!(
+            broker.record_path("wf-concurrent-retry").exists(),
+            "both failed attempts retain the durable cleanup record"
+        );
+        assert!(
+            broker.owns_ready_lease("wf-concurrent-retry", "railway", &fake.handle).await,
+            "both failed attempts leave the delegated environment live and retryable"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

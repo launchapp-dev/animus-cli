@@ -184,6 +184,76 @@ pub fn mark_environment_torn_down(scoped_root: &Path, workflow_id: &str, phase_i
     })
 }
 
+/// Mark every persisted phase binding for a workflow torn down.
+///
+/// Terminal cleanup can happen after the current checkpoint has already moved
+/// out of `Running`, so a steady-state cleanup retry cannot rely on
+/// `list_running_checkpoints`.
+pub fn mark_workflow_environments_torn_down(scoped_root: &Path, workflow_id: &str) -> io::Result<usize> {
+    let phases_dir = scoped_root.join("runs").join(sanitize(workflow_id)).join("phases");
+    let entries = match fs::read_dir(phases_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let mut marked = 0usize;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = fs::read_to_string(&path)?;
+        let mut checkpoint: SessionCheckpoint = serde_json::from_str(&raw).map_err(io::Error::other)?;
+        let Some(binding) = checkpoint.environment.as_mut() else {
+            continue;
+        };
+        if binding.torn_down {
+            continue;
+        }
+        binding.torn_down = true;
+        write_atomic(&path, &checkpoint)?;
+        marked += 1;
+    }
+    Ok(marked)
+}
+
+/// Mark phase bindings for one exact delegated environment handle torn down.
+///
+/// A workflow can retain more than one historical binding, so startup cleanup
+/// must not mark unrelated nodes merely because one broker record was reaped.
+pub fn mark_workflow_environment_torn_down(
+    scoped_root: &Path,
+    workflow_id: &str,
+    environment_id: &str,
+    handle: &animus_environment_protocol::EnvironmentHandle,
+) -> io::Result<usize> {
+    let phases_dir = scoped_root.join("runs").join(sanitize(workflow_id)).join("phases");
+    let entries = match fs::read_dir(phases_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let mut marked = 0usize;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = fs::read_to_string(&path)?;
+        let mut checkpoint: SessionCheckpoint = serde_json::from_str(&raw).map_err(io::Error::other)?;
+        let Some(binding) = checkpoint.environment.as_mut() else {
+            continue;
+        };
+        if binding.torn_down || binding.environment_id != environment_id || binding.handle != *handle {
+            continue;
+        }
+        binding.torn_down = true;
+        write_atomic(&path, &checkpoint)?;
+        marked += 1;
+    }
+    Ok(marked)
+}
+
 pub fn update_session_running_after_resume(
     scoped_root: &Path,
     workflow_id: &str,
@@ -567,6 +637,57 @@ mod tests {
         mark_environment_torn_down(scoped_root, "wf-env-2", "phase-a").expect("second mark");
         let cp = read_checkpoint(scoped_root, "wf-env-2", "phase-a").expect("read").expect("present");
         assert!(cp.environment.expect("binding").torn_down, "torn_down stays set on the second mark");
+    }
+
+    #[test]
+    fn workflow_cleanup_marks_terminal_phase_bindings_after_successful_retry() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        for phase_id in ["phase-a", "phase-b"] {
+            write_session_pending(scoped_root, "wf-retry", phase_id, "claude", "run-retry", None).expect("pending");
+            update_session_environment(scoped_root, "wf-retry", phase_id, sample_binding()).expect("binding");
+        }
+        update_session_completed(scoped_root, "wf-retry", "phase-a").expect("terminalize first phase");
+
+        assert_eq!(mark_workflow_environments_torn_down(scoped_root, "wf-retry").expect("mark workflow"), 2);
+        for phase_id in ["phase-a", "phase-b"] {
+            let checkpoint = read_checkpoint(scoped_root, "wf-retry", phase_id).expect("read").expect("checkpoint");
+            assert!(
+                checkpoint.environment.expect("binding").torn_down,
+                "cleanup retry must mark {phase_id}, regardless of terminal status"
+            );
+        }
+        assert_eq!(mark_workflow_environments_torn_down(scoped_root, "wf-retry").expect("idempotent mark"), 0);
+    }
+
+    #[test]
+    fn workflow_handle_cleanup_marks_only_the_reaped_binding() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        let first = sample_binding();
+        let mut second = sample_binding();
+        second.handle.id = "node-other".to_string();
+        for (phase_id, binding) in [("phase-a", first.clone()), ("phase-b", second)] {
+            write_session_pending(scoped_root, "wf-reap", phase_id, "claude", "run-reap", None).expect("pending");
+            update_session_environment(scoped_root, "wf-reap", phase_id, binding).expect("binding");
+        }
+
+        assert_eq!(
+            mark_workflow_environment_torn_down(
+                scoped_root,
+                "wf-reap",
+                &first.environment_id,
+                &first.handle,
+            )
+            .expect("mark exact handle"),
+            1
+        );
+        let first_checkpoint =
+            read_checkpoint(scoped_root, "wf-reap", "phase-a").expect("read").expect("first checkpoint");
+        let second_checkpoint =
+            read_checkpoint(scoped_root, "wf-reap", "phase-b").expect("read").expect("second checkpoint");
+        assert!(first_checkpoint.environment.expect("first binding").torn_down);
+        assert!(!second_checkpoint.environment.expect("second binding").torn_down);
     }
 
     // TASK-811: terminalizing a dead delegation must not discard the durable

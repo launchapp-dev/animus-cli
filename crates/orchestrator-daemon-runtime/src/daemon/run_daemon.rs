@@ -515,6 +515,13 @@ where
         .await;
         if housekeeping_due {
             last_housekeeping = Some(tokio::time::Instant::now());
+            if let Err(error) = hooks.retry_durable_cleanup(&primary_root).await {
+                tracing::warn!(
+                    target: "animus.runtime.cleanup",
+                    %error,
+                    "durable cleanup retry sweep failed; will retry on the next housekeeping pass"
+                );
+            }
         }
 
         match tick_result {

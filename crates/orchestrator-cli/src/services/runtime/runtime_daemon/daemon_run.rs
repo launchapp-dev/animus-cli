@@ -18,6 +18,7 @@ use orchestrator_core::{
 use orchestrator_daemon_runtime::control::{DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
 use orchestrator_daemon_runtime::{
     discover_installed_plugins, run_daemon, DaemonRunEvent, DaemonRunHooks, EnvironmentBroker, ProcessManager,
+    RetriedEnvironmentTeardown,
 };
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -28,8 +29,8 @@ use super::daemon_run_host::DefaultDaemonRunHost;
 use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver};
 use animus_runtime_shared::persist_resumed_phase_completion;
 use animus_runtime_shared::phase_session::{
-    list_running_checkpoints, mark_environment_torn_down, update_session_blocked, update_session_completed,
-    update_session_running_after_resume, SessionCheckpoint,
+    list_running_checkpoints, mark_environment_torn_down, mark_workflow_environment_torn_down, update_session_blocked,
+    update_session_completed, update_session_running_after_resume, SessionCheckpoint,
 };
 use orchestrator_plugin_host::session::{
     canonical_tool_alias, discover_provider_plugins, PluginSessionBackend, ResumeAgentOutcome,
@@ -54,7 +55,7 @@ pub(super) trait ResumeProviderRegistry {
     async fn try_resume(&self, checkpoint: &SessionCheckpoint) -> ResumeLookup;
     /// Release the broker-owned workflow lease after an adopted final phase
     /// reaches terminal workflow state. Implementations must be idempotent.
-    async fn teardown_retained_environment(&self, workflow_id: &str);
+    async fn teardown_retained_environment(&self, workflow_id: &str) -> bool;
 }
 
 // Applies a resumed phase outcome back to durable workflow state once the
@@ -307,10 +308,11 @@ impl ResumeProviderRegistry for ProductionResumeProviderRegistry {
         ResumeLookup::Outcome(backend.resume_agent_for_restart(session_id, request).await)
     }
 
-    async fn teardown_retained_environment(&self, workflow_id: &str) {
+    async fn teardown_retained_environment(&self, workflow_id: &str) -> bool {
         if let Some(broker) = &self.environment_broker {
-            broker.teardown(workflow_id).await;
+            return broker.teardown(workflow_id).await;
         }
+        false
     }
 }
 
@@ -603,9 +605,13 @@ where
                     ResumedOutcomeApplyResult::AdvancedTerminal
                     | ResumedOutcomeApplyResult::AlreadyAdvancedTerminal => {
                         if retained_environment {
-                            registry.teardown_retained_environment(&checkpoint.workflow_id).await;
-                            let _ =
-                                mark_environment_torn_down(scoped_root, &checkpoint.workflow_id, &checkpoint.phase_id);
+                            if registry.teardown_retained_environment(&checkpoint.workflow_id).await {
+                                let _ = mark_environment_torn_down(
+                                    scoped_root,
+                                    &checkpoint.workflow_id,
+                                    &checkpoint.phase_id,
+                                );
+                            }
                         }
                         report.resumed += 1;
                     }
@@ -727,6 +733,31 @@ impl CliDaemonRunHost {
     }
 }
 
+fn record_retried_environment_teardown(retried: &RetriedEnvironmentTeardown) {
+    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(Path::new(&retried.project_root)) else {
+        tracing::warn!(
+            target: "animus.runtime.cleanup",
+            workflow_id = %retried.run_id,
+            project_root = %retried.project_root,
+            "environment teardown succeeded but lease project root has no scoped state root"
+        );
+        return;
+    };
+    if let Err(error) =
+        mark_workflow_environment_torn_down(&scoped_root, &retried.run_id, &retried.environment_id, &retried.handle)
+    {
+        tracing::warn!(
+            target: "animus.runtime.cleanup",
+            workflow_id = %retried.run_id,
+            environment_id = %retried.environment_id,
+            handle_id = %retried.handle.id,
+            project_root = %retried.project_root,
+            %error,
+            "environment teardown succeeded but checkpoint binding could not be marked torn down"
+        );
+    }
+}
+
 #[async_trait::async_trait(?Send)]
 impl DaemonRunHooks for CliDaemonRunHost {
     fn handle_event(&mut self, event: DaemonRunEvent) -> Result<()> {
@@ -807,6 +838,16 @@ impl DaemonRunHooks for CliDaemonRunHost {
         }
 
         Ok(orphans)
+    }
+
+    async fn retry_durable_cleanup(&mut self, _project_root: &str) -> Result<()> {
+        let Some(broker) = &self.environment_broker else {
+            return Ok(());
+        };
+        for retried in broker.retry_failed_teardowns().await {
+            record_retried_environment_teardown(&retried);
+        }
+        Ok(())
     }
 
     async fn flush_notifications(&mut self, project_root: &str) -> Result<()> {
@@ -971,6 +1012,69 @@ mod tests {
     }
 
     use protocol::test_utils::EnvVarGuard;
+
+    #[test]
+    fn housekeeping_retry_marks_only_the_lease_owning_project_checkpoint() {
+        use animus_environment_protocol::EnvironmentHandle;
+        use animus_runtime_shared::phase_session::{
+            read_checkpoint, update_session_environment, write_session_pending, EnvironmentBinding,
+        };
+
+        let _lock = lock_env();
+        let config_root = TempDir::new().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let primary = TempDir::new().expect("primary project dir");
+        let lease_owner = TempDir::new().expect("lease owner project dir");
+        let lease_owner_root = lease_owner.path().to_string_lossy().into_owned();
+        let primary_scope =
+            protocol::repository_scope::scoped_state_root(primary.path()).expect("primary scoped state root");
+        let lease_owner_scope =
+            protocol::repository_scope::scoped_state_root(lease_owner.path()).expect("owner scoped state root");
+        let handle = EnvironmentHandle {
+            id: "node-shared-id".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: serde_json::Value::Null,
+        };
+
+        for scoped_root in [&primary_scope, &lease_owner_scope] {
+            write_session_pending(scoped_root, "wf-retry", "code-implement", "codex", "agent-1", None)
+                .expect("pending checkpoint");
+            update_session_environment(
+                scoped_root,
+                "wf-retry",
+                "code-implement",
+                EnvironmentBinding {
+                    environment_id: "railway".to_string(),
+                    handle: handle.clone(),
+                    bound_at: chrono::Utc::now().to_rfc3339(),
+                    torn_down: false,
+                },
+            )
+            .expect("environment binding");
+        }
+
+        record_retried_environment_teardown(&RetriedEnvironmentTeardown {
+            run_id: "wf-retry".to_string(),
+            environment_id: "railway".to_string(),
+            project_root: lease_owner_root,
+            handle,
+        });
+
+        let primary_checkpoint = read_checkpoint(&primary_scope, "wf-retry", "code-implement")
+            .expect("read primary checkpoint")
+            .expect("primary checkpoint");
+        let owner_checkpoint = read_checkpoint(&lease_owner_scope, "wf-retry", "code-implement")
+            .expect("read owner checkpoint")
+            .expect("owner checkpoint");
+        assert!(
+            !primary_checkpoint.environment.expect("primary binding").torn_down,
+            "the daemon primary project's matching binding must remain untouched"
+        );
+        assert!(
+            owner_checkpoint.environment.expect("owner binding").torn_down,
+            "the lease-owning project's matching binding must be marked torn down"
+        );
+    }
 
     // The foreground `daemon run` path registers its own PID so the daemon's
     // status/health handlers can confirm liveness (without it a healthy daemon
@@ -1580,8 +1684,9 @@ mod tests {
                 }
             }
 
-            async fn teardown_retained_environment(&self, workflow_id: &str) {
+            async fn teardown_retained_environment(&self, workflow_id: &str) -> bool {
                 self.teardowns.lock().expect("teardowns mutex").push(workflow_id.to_string());
+                true
             }
         }
 
