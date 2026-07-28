@@ -339,7 +339,12 @@ fn subject_router_degraded_reason(project_root: &Path) -> Option<String> {
                 .collect(),
             env_required: p.manifest.env_required.clone(),
             notification_buffer_size: p.manifest.notification_buffer_size,
-            working_dir: None,
+            // Keep the health-side router specification identical to the one
+            // built during daemon boot. Although this probe does not spawn a
+            // backend, preserving the project working directory prevents the
+            // two reconciliation paths from drifting if router validation
+            // starts consulting the complete spec.
+            working_dir: Some(project_root.to_path_buf()),
         })
         .collect();
 
