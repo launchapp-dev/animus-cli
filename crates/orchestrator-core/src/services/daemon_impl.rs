@@ -304,12 +304,11 @@ fn subject_router_degraded_reason(project_root: &Path) -> Option<String> {
 
     let plugins = match discover_by_kind(project_root, PLUGIN_KIND_SUBJECT_BACKEND) {
         Ok(p) => p,
-        Err(_) => {
-            return Some(
-                "subject_backend unroutable: plugin discovery failed — \
+        Err(err) => {
+            return Some(format!(
+                "subject_backend unroutable: plugin discovery failed ({err:#}) — \
                  run `animus plugin status` to diagnose"
-                    .to_string(),
-            );
+            ));
         }
     };
 
@@ -1125,6 +1124,11 @@ mod tests {
         assert!(
             reason.is_some(),
             "plugin discovery failure must produce a degraded reason, not false-healthy (None)"
+        );
+        let reason = reason.unwrap();
+        assert!(
+            reason.contains("plugins.yaml"),
+            "discovery failure must retain the underlying configuration error, got: {reason}"
         );
     }
 
