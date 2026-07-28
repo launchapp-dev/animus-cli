@@ -407,7 +407,7 @@ impl PluginDiscovery {
         self
     }
 
-    /// Opt in to scanning `$PATH` for `animus-plugin-*` / `animus-provider-*` binaries.
+    /// Opt in to scanning `$PATH` for `animus-*` plugin binaries.
     ///
     /// Defaults to `false`. When enabled, [`PluginDiscovery::discover`] will
     /// execute every matching binary on `$PATH` with `--manifest` to fetch its
@@ -761,11 +761,10 @@ impl PluginDiscovery {
 
     /// Project-registry tier: `<project_root>/.animus/plugins.yaml`,
     /// written by `animus plugin install --project`. Needed because the
-    /// project dir scan only picks up `animus-plugin-*` /
-    /// `animus-provider-*` file names — official plugins like
-    /// `animus-subject-default` or `animus-queue-default` are only
-    /// discoverable through their registry entry, exactly like their
-    /// global counterparts resolve through `~/.animus/plugins.yaml`.
+    /// project dir scan picks up the `animus-*` executable namespace; this
+    /// registry is still needed for custom executable names and install-time
+    /// logical-name overrides, exactly like the global registry at
+    /// `~/.animus/plugins.yaml`.
     /// A corrupt project registry degrades to a warning (the daemon must
     /// not lose every plugin because one project file is broken).
     fn discover_project_registry(
@@ -1307,11 +1306,13 @@ fn scan_dir(
 
 /// Whether a binary file name is picked up by the directory-scan discovery
 /// tiers (project-local dir, global install dir, `$ANIMUS_PLUGIN_PATH`,
-/// `$PATH`). Names outside these prefixes are only discoverable via a
+/// `$PATH`). All Animus plugin kinds share the `animus-*` executable
+/// namespace, including consolidated plugins such as `animus-postgres`.
+/// Names outside this namespace are only discoverable via a
 /// registry entry (`~/.animus/plugins.yaml` for global installs,
 /// `<project>/.animus/plugins.yaml` for project-scoped ones).
 pub fn is_scanned_plugin_name(name: &str) -> bool {
-    name.starts_with("animus-plugin-") || name.starts_with("animus-provider-")
+    name.starts_with("animus-")
 }
 
 fn load_plugins_config(path: &Path) -> Result<PluginsConfig> {
@@ -1493,6 +1494,16 @@ mod tests {
             !PluginDiscovery::default().include_system_path,
             "PluginDiscovery::default() must not opt into $PATH scanning"
         );
+    }
+
+    #[test]
+    fn directory_scan_accepts_all_animus_plugin_names() {
+        assert!(is_scanned_plugin_name("animus-plugin-task"));
+        assert!(is_scanned_plugin_name("animus-provider-claude"));
+        assert!(is_scanned_plugin_name("animus-subject-default"));
+        assert!(is_scanned_plugin_name("animus-postgres"));
+        assert!(!is_scanned_plugin_name("postgres"));
+        assert!(!is_scanned_plugin_name("unrelated-executable"));
     }
 
     #[cfg(unix)]
