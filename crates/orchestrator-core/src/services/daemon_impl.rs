@@ -295,13 +295,14 @@ fn subject_plugins_disabled() -> bool {
 /// Install-time kind renames recorded in `plugins.lock` are applied before
 /// the duplicate-kind check, matching the logic in `resolve_subject_dispatch`.
 fn subject_router_degraded_reason(project_root: &Path) -> Option<String> {
+    use animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND;
     use orchestrator_plugin_host::{discover_by_kind, SubjectPluginSpec, SubjectRouter};
 
     if subject_plugins_disabled() {
         return None;
     }
 
-    let plugins = match discover_by_kind(project_root, "subject_backend") {
+    let plugins = match discover_by_kind(project_root, PLUGIN_KIND_SUBJECT_BACKEND) {
         Ok(p) => p,
         Err(_) => {
             return Some(
