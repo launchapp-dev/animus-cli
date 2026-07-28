@@ -288,9 +288,9 @@ fn subject_plugins_disabled() -> bool {
 ///   the router from building.
 ///
 /// Consolidated backends (e.g. `animus-postgres`) whose binary name does NOT
-/// begin with `animus-subject-` are correctly recognized when registered in
-/// `plugins.yaml` with `plugin_kind = "subject_backend"` — kind-based
-/// detection never applies filename heuristics.
+/// begin with `animus-subject-` are correctly recognized from their manifest's
+/// `plugin_kind = "subject_backend"`, whether found in the canonical plugin
+/// directory or registered in `plugins.yaml`.
 ///
 /// Install-time kind renames recorded in `plugins.lock` are applied before
 /// the duplicate-kind check, matching the logic in `resolve_subject_dispatch`.
@@ -1082,6 +1082,47 @@ mod tests {
                 "a live daemon ({status:?}) with a routable consolidated backend must remain healthy, got: {reasons:?}"
             );
         }
+    }
+
+    /// Consolidated plugins installed in the normal plugin directory are also
+    /// discovered from their manifest kind. They do not need an explicit
+    /// `plugins.yaml` entry merely because their executable name lacks the
+    /// legacy `animus-subject-` prefix.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_not_degraded_for_scanned_consolidated_backend() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let bin = plugin_dir.join("animus-postgres");
+        let manifest = serde_json::json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "Consolidated PostgreSQL subject backend",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"]
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_none(),
+            "scanned consolidated subject backend must be routable without a plugins.yaml entry, got: {reason:?}"
+        );
     }
 
     /// Project-scoped plugin configuration is the first discovery tier used at
