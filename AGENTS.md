@@ -158,6 +158,7 @@ Visible top-level commands:
 - `trigger`
 - `logs`
 - `subject`
+- `environment`
 - `flavor`
 - `update`
 - `cost`

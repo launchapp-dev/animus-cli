@@ -36,6 +36,8 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
         WorkflowDefinition {
             id: "ui-ux-standard".to_string(),
@@ -53,6 +55,8 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
     ];
     config
@@ -140,6 +144,8 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
         on_verdict,
         skip_if: Vec::new(),
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     let err = validate_workflow_config(&config).expect_err("on_verdict with nonexistent target should fail validation");
@@ -163,6 +169,8 @@ fn validation_rejects_zero_max_rework_attempts() {
         on_verdict: HashMap::new(),
         skip_if: Vec::new(),
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     let err = validate_workflow_config(&config).expect_err("zero max_rework_attempts should fail validation");
@@ -313,6 +321,8 @@ fn resolve_workflow_skip_guards_extracts_guards_from_config() {
             on_verdict: HashMap::new(),
             skip_if: vec!["task_type == 'docs'".to_string()],
             budget: None,
+            environment: None,
+            workspace: None,
         }),
         "implementation".to_string().into(),
     ];
@@ -773,6 +783,8 @@ fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinitio
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     }
 }
 
@@ -915,6 +927,8 @@ fn expand_preserves_rich_phase_config() {
                 on_verdict: on_verdict.clone(),
                 skip_if: vec!["task_type == 'docs'".into()],
                 budget: None,
+                environment: None,
+                workspace: None,
             })],
         ),
         make_pipeline(
@@ -1009,6 +1023,8 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
@@ -1052,6 +1068,8 @@ fn validate_rejects_circular_sub_pipeline() {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
         WorkflowDefinition {
             id: "review".into(),
@@ -1061,6 +1079,8 @@ fn validate_rejects_circular_sub_pipeline() {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
     ];
 
@@ -2328,6 +2348,8 @@ fn pipeline_variables_not_serialized_when_empty() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     };
     let json = serde_json::to_value(&workflow).expect("serialize");
     let obj = json.as_object().expect("json object");
@@ -2900,6 +2922,8 @@ fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
             base_ref: Some("develop".to_string()),
         }),
         budget: None,
+        environment: None,
+        workspace: None,
     });
     config.secrets.insert(
         "linear".to_string(),
@@ -3111,6 +3135,8 @@ fn validation_surfaces_malformed_trigger_configs() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     config.triggers.push(WorkflowTrigger {
         id: "bad-webhook".to_string(),
@@ -3221,6 +3247,8 @@ fn workflow_with_budget(id: &str, budget: BudgetConfig) -> WorkflowDefinition {
         variables: Vec::new(),
         worktree: None,
         budget: Some(budget),
+        environment: None,
+        workspace: None,
     }
 }
 
@@ -3381,6 +3409,80 @@ fn validation_rejects_authorization_code_with_blank_client_id() {
     let err = crate::workflow_config::validate_workflow_config(&config)
         .expect_err("authorization_code with blank client_id must fail validation");
     assert!(err.to_string().contains("client_id"), "should reject blank client_id: {err}");
+}
+
+#[test]
+fn validation_accepts_authorization_code_with_pinned_client_and_secret_env() {
+    // A confidential pre-registered app (REQ-044 Phase 2): a pinned client_id
+    // plus a client_secret_env is the supported confidential shape.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "hubspot".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: Some("HUBSPOT_CLIENT_SECRET".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: Some("app-123".to_string()),
+        }),
+    );
+    validate_workflow_config(&config)
+        .expect("authorization_code with a pinned client_id + client_secret_env should validate");
+}
+
+#[test]
+fn validation_rejects_authorization_code_secret_env_without_client_id() {
+    // A client_secret_env with no pinned client_id makes no sense: DCR mints the
+    // client, so there is nothing to attach the secret to.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "hubspot".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: Some("HUBSPOT_CLIENT_SECRET".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: None,
+        }),
+    );
+    let err = validate_workflow_config(&config)
+        .expect_err("client_secret_env without a pinned client_id must fail validation");
+    let msg = err.to_string();
+    assert!(msg.contains("client_secret_env"), "should name client_secret_env: {msg}");
+    assert!(msg.contains("client_id"), "should require a pinned client_id: {msg}");
+}
+
+#[test]
+fn validation_rejects_authorization_code_blank_secret_env() {
+    // A blank client_secret_env name is a typo — reject it even with a client_id.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "hubspot".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: Some("   ".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: Some("app-123".to_string()),
+        }),
+    );
+    let err = validate_workflow_config(&config).expect_err("blank client_secret_env must fail validation");
+    assert!(err.to_string().contains("client_secret_env"), "should reject blank client_secret_env: {err}");
 }
 
 #[test]
@@ -4092,6 +4194,77 @@ mod cache_token_short_circuit {
     }
 }
 
+// TASK-326: the non-swallowing loader must distinguish a genuinely-absent
+// config source (benign) from a present-but-failing source (transient), so
+// credential/OAuth resolvers never degrade a config_source outage into an empty
+// config that misreports servers as "not defined".
+mod try_load_availability {
+    use super::*;
+    use crate::workflow_config::config_source_client::test_seam;
+    use crate::workflow_config::loading::try_load_workflow_config;
+    use crate::workflow_config::WorkflowConfigAvailability;
+
+    #[test]
+    fn injected_base_classifies_as_loaded() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        let mut base = builtin_workflow_config();
+        base.tools_allowlist = vec!["marker-loaded".to_string()];
+        let _guard = test_seam::install(root, base);
+
+        match try_load_workflow_config(root, None) {
+            WorkflowConfigAvailability::Loaded(loaded) => {
+                assert!(loaded.config.tools_allowlist.contains(&"marker-loaded".to_string()));
+            }
+            other => panic!("expected Loaded, got {}", availability_label(&other)),
+        }
+    }
+
+    #[test]
+    fn no_installed_source_classifies_as_no_source() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        // No injected base, no installed plugin => resolve_plugin_base is
+        // Ok(None) => a benign "no source", NOT an error.
+        match try_load_workflow_config(root, None) {
+            WorkflowConfigAvailability::NoSource => {}
+            other => panic!("expected NoSource, got {}", availability_label(&other)),
+        }
+    }
+
+    #[test]
+    fn failing_source_classifies_as_source_unavailable() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        // A present-but-failing source (DB overload under bulk mcp call) must
+        // NOT be swallowed into an empty config.
+        let _guard = test_seam::install_failure(root, "config_source RPC timed out");
+        match try_load_workflow_config(root, None) {
+            WorkflowConfigAvailability::SourceUnavailable(err) => {
+                assert!(err.to_string().contains("config_source RPC timed out"), "err: {err}");
+            }
+            other => panic!("expected SourceUnavailable, got {}", availability_label(&other)),
+        }
+    }
+
+    fn availability_label(a: &WorkflowConfigAvailability) -> &'static str {
+        match a {
+            WorkflowConfigAvailability::Loaded(_) => "Loaded",
+            WorkflowConfigAvailability::NoSource => "NoSource",
+            WorkflowConfigAvailability::SourceUnavailable(_) => "SourceUnavailable",
+        }
+    }
+}
+
 mod unenforced_field_warnings {
     use super::super::validation::{unenforced_project_yaml_warnings, unenforced_yaml_field_warnings};
     use std::fs;
@@ -4372,4 +4545,85 @@ workflows:
     // raw placeholder is skipped rather than reported as a missing skill.
     let warnings = super::validation::missing_project_skill_reference_warnings(temp.path());
     assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn yaml_parses_workspaces_environment_routing_and_env_overrides() {
+    let yaml = r#"
+workspaces:
+  fullstack:
+    repos:
+      - url: "https://github.com/acme/api"
+        primary: true
+      - url: "https://github.com/acme/web"
+        name: web
+        git_ref: develop
+environment_routing:
+  default: env-local
+  rules:
+    - match:
+        kind: task
+        harness: claude
+      environment: env-firecracker
+      spec:
+        image: "acme/dev:latest"
+    - match:
+        harness: codex
+      environment: env-sandbox
+workflows:
+  - id: standard
+    name: Standard
+    environment: env-workflow
+    workspace: fullstack
+    phases:
+      - requirements
+      - implementation:
+          environment: env-phase
+      - testing
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("should parse workspaces + environment_routing");
+
+    // workspaces round-trip.
+    let ws = config.workspaces.get("fullstack").expect("fullstack workspace should be parsed");
+    assert_eq!(ws.repos.len(), 2);
+    assert_eq!(ws.repos[0].url, "https://github.com/acme/api");
+    assert!(ws.repos[0].primary);
+    assert_eq!(ws.repos[1].name.as_deref(), Some("web"));
+    assert_eq!(ws.repos[1].git_ref.as_deref(), Some("develop"));
+
+    // environment_routing round-trips (default + ordered rules with match predicates).
+    let routing = config.environment_routing.as_ref().expect("environment_routing should be parsed");
+    assert_eq!(routing.default.as_deref(), Some("env-local"));
+    assert_eq!(routing.rules.len(), 2);
+    assert_eq!(routing.rules[0].match_on.kind.as_deref(), Some("task"));
+    assert_eq!(routing.rules[0].match_on.harness.as_deref(), Some("claude"));
+    assert_eq!(routing.rules[0].environment, "env-firecracker");
+    assert!(routing.rules[0].spec.is_some());
+    assert_eq!(routing.rules[1].match_on.kind, None);
+    assert_eq!(routing.rules[1].match_on.harness.as_deref(), Some("codex"));
+    assert_eq!(routing.rules[1].environment, "env-sandbox");
+
+    // Workflow-level environment + workspace round-trip.
+    let standard = config.workflows.iter().find(|w| w.id == "standard").expect("standard workflow");
+    assert_eq!(standard.environment.as_deref(), Some("env-workflow"));
+    assert_eq!(standard.workspace.as_deref(), Some("fullstack"));
+
+    // Phase-level environment override round-trips on the rich phase entry.
+    let impl_phase = standard.phases.iter().find(|p| p.phase_id() == "implementation").expect("implementation phase");
+    match impl_phase {
+        WorkflowPhaseEntry::Rich(cfg) => assert_eq!(cfg.environment.as_deref(), Some("env-phase")),
+        other => panic!("expected rich phase entry, got {other:?}"),
+    }
+
+    // End-to-end: the compiled routing table drives resolve_environment.
+    assert_eq!(
+        super::resolve_environment(Some("task"), Some("claude"), None, None, config.environment_routing.as_ref())
+            .as_deref(),
+        Some("env-firecracker"),
+    );
+    assert_eq!(
+        super::resolve_environment(Some("task"), Some("gemini"), None, None, config.environment_routing.as_ref())
+            .as_deref(),
+        Some("env-local"),
+    );
 }

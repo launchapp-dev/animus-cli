@@ -4,6 +4,54 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **BREAKING — removed the deprecated `--task-id` / `--requirement-id` flags.**
+  `task` and `requirement` are ordinary subject kinds now, so there is no
+  task/requirement-specific CLI or MCP surface. Use `--subject-id` for every
+  kind on `queue enqueue`, `workflow run`, `workflow prompt render`, and the
+  `workflow list` filter (accepts a qualified `task:TASK-001` /
+  `requirement:REQ-042` / `blog:BLOG-001` or a bare `TASK-001`); the
+  `agent approve-hook` escalation context moves from `--task-id` to
+  `--subject-id`. The matching `animus mcp serve` tool inputs
+  (`animus.queue.enqueue`, `animus.workflow.run`, `.execute`, `.run-multiple`,
+  `.list`) drop `task_id` / `requirement_id` for `subject_id`. `--title` and
+  `--adhoc` are unchanged. The flags were already deprecated in v0.7 (TASK-247);
+  callers that shell the CLI or MCP should pass `--subject-id` / `subject_id`.
+  Note: because requirement runs no longer have a privileged kind-specific
+  default, a requirement dispatched via `--subject-id requirement:REQ-001`
+  without an explicit workflow ref uses the project default workflow (the old
+  `--requirement-id` flag defaulted to `animus.requirement/plan`) — name the
+  workflow explicitly, e.g. `animus workflow run animus.requirement/plan
+  --subject-id requirement:REQ-001`.
+
+## [0.7.0-rc.1] - 2026-07-03
+
+**v0.7.0-rc.1 — Composable, multi-tenant platform (release candidate).**
+
+Cut from `release/0.7` (off v0.6.33 + the actor foundation). Portal upgrades to
+this RC for staged verification before promoting to `v0.7.0` final.
+
+- **Multi-kind plugins** — a plugin advertises `plugin_kinds` and satisfies many
+  roles; discovery + preflight index by `serves_kind`. Protocol at
+  `animus-protocol` v0.7.0-rc.2 (single-source git-dep; the in-tree
+  `animus-plugin-protocol` copy was removed). Unblocks one Node process serving
+  subject + config + queue + journal + chat.
+- **Cross-role host-sharing** — a process-global `ResidentHostRegistry` keyed by
+  `(binary, mtime, spawn-context)`; `config_source` ⟷ `workflow_journal` collapse
+  to one process.
+- **Security hardening** — `auto` secret key source prefers real key material
+  (no locally-decryptable device-id default on servers); context-aware plugin
+  signature policy + fail-closed org TOFU in non-TTY; discovery scope-filters
+  BEFORE the `--manifest` probe (closes hostile-repo code-exec on the
+  server-safe path).
+- **Execution environment as a plugin** — new `environment` PluginKind +
+  `animus-environment-protocol` (`prepare`/`exec`/`exec_stream`/`teardown`);
+  `EnvironmentClient`, `resolve_environment` `(subject_kind × harness)` routing,
+  optional preflight role; the worktree materialization is thin-delegated to the
+  env plugin behind a gated, zero-regression fallback (`ANIMUS_ENVIRONMENT_DELEGATE`).
+- Carries all v0.6.33 reliability fixes (plugin-handshake stderr capture +
+  transient respawn retry) and the full per-user actor foundation (scoped config,
+  owner-scoped schedules, isolated MCP).
+
 ## [0.6.11] - 2026-06-24
 
 **v0.6.11 — `animus update` defers to avm.**

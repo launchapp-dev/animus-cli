@@ -34,36 +34,40 @@ pub fn build_runner_command_with_resume(
     let mut cmd = std::process::Command::new(resolve_workflow_runner_binary_for(Some(project_root)));
     cmd.arg("execute");
 
-    match dispatch.subject.to_workflow_subject() {
-        protocol::orchestrator::WorkflowSubject::Task { id } => {
-            cmd.arg("--task-id").arg(id);
-        }
-        protocol::orchestrator::WorkflowSubject::Requirement { id } => {
-            cmd.arg("--requirement-id").arg(id);
-        }
-        protocol::orchestrator::WorkflowSubject::Custom { title, description } => {
-            // `to_workflow_subject()` collapses every non-task/requirement kind
-            // to `Custom`, but a BaaS dynamic kind (e.g. `blog`) must NOT be
-            // dispatched as a custom title — the runner has to resolve it via
-            // `<kind>/get`. Disambiguate by the real subject kind: only the
-            // genuine built-in `custom` kind uses `--title`/`--description`; any
-            // other kind passes its qualified id via `--subject-id` so the
-            // runner resolves the subject under its real kind. (Requires the
-            // workflow_runner plugin to accept `--subject-id`; only ever emitted
-            // for dynamic kinds, so task/requirement/custom dispatch is
-            // unchanged for existing runners.)
-            if dispatch.subject.kind() == protocol::orchestrator::SUBJECT_KIND_CUSTOM {
-                cmd.arg("--title").arg(title);
-                cmd.arg("--description").arg(description);
-            } else {
-                // Qualify with the known kind when the stored id is bare so the
-                // runner resolves the exact kind (a bare native id could be
-                // re-probed to the wrong kind, or fail under a catch-all
-                // backend). Already-qualified ids (`blog:BLOG-001`) pass through.
-                let id = dispatch.subject.id();
-                let qualified =
-                    if id.contains(':') { id.to_string() } else { format!("{}:{id}", dispatch.subject.kind()) };
-                cmd.arg("--subject-id").arg(qualified);
+    // A subjectless dispatch (no bound subject) emits NO subject selector at
+    // all: the runner starts a subjectless run with subject template vars
+    // simply absent.
+    if let Some(subject) = dispatch.subject.as_ref() {
+        match subject.to_workflow_subject() {
+            protocol::orchestrator::WorkflowSubject::Task { id } => {
+                cmd.arg("--task-id").arg(strip_leading_kind_prefix(&id, subject.kind()));
+            }
+            protocol::orchestrator::WorkflowSubject::Requirement { id } => {
+                cmd.arg("--requirement-id").arg(strip_leading_kind_prefix(&id, subject.kind()));
+            }
+            protocol::orchestrator::WorkflowSubject::Custom { title, description } => {
+                // `to_workflow_subject()` collapses every non-task/requirement kind
+                // to `Custom`, but a BaaS dynamic kind (e.g. `blog`) must NOT be
+                // dispatched as a custom title — the runner has to resolve it via
+                // `<kind>/get`. Disambiguate by the real subject kind: only the
+                // genuine built-in `custom` kind uses `--title`/`--description`; any
+                // other kind passes its qualified id via `--subject-id` so the
+                // runner resolves the subject under its real kind. (Requires the
+                // workflow_runner plugin to accept `--subject-id`; only ever emitted
+                // for dynamic kinds, so task/requirement/custom dispatch is
+                // unchanged for existing runners.)
+                if subject.kind() == protocol::orchestrator::SUBJECT_KIND_CUSTOM {
+                    cmd.arg("--title").arg(title);
+                    cmd.arg("--description").arg(description);
+                } else {
+                    // Qualify with the known kind when the stored id is bare so the
+                    // runner resolves the exact kind (a bare native id could be
+                    // re-probed to the wrong kind, or fail under a catch-all
+                    // backend). Already-qualified ids (`blog:BLOG-001`) pass through.
+                    let id = subject.id();
+                    let qualified = if id.contains(':') { id.to_string() } else { format!("{}:{id}", subject.kind()) };
+                    cmd.arg("--subject-id").arg(qualified);
+                }
             }
         }
     }
@@ -103,6 +107,47 @@ pub fn build_runner_command_with_resume(
         }
     }
     cmd
+}
+
+/// Strip a redundant leading `<kind>:` prefix from a task/requirement id so the
+/// workflow runner receives the BARE id its kind-implicit `--task-id` /
+/// `--requirement-id` selectors expect.
+///
+/// Manual `queue enqueue` (and any other SubjectRouter-resolved dispatch)
+/// records the subject id in its kind-qualified form (`task:TASK-244`) — the
+/// canonical shape a consolidated BaaS backend returns. The subject backend
+/// itself, however, stores the row under the BARE id (`TASK-244`), and the
+/// runner's `--task-id` / `--requirement-id` selectors are kind-implicit: the
+/// runner infers the kind from the flag, then resolves the value via
+/// `<kind>/get`. Passing the qualified id straight through makes that lookup
+/// miss (or double-prefix to `task:task:TASK-244`), so a FRESH queue-leased
+/// dispatch fails subject resolution before it can build a run — the daemon
+/// leases the entry, the runner fails to spawn a run, and no journal_run is ever
+/// created (the lease→spawn drop). A bare manual/direct dispatch already carries
+/// the bare id and works, which is exactly the behaviour we restore here.
+///
+/// The id may be qualified with either the subject's full native kind
+/// (`animus.task:TASK-1`) or its short, user-facing alias — the trailing dotted
+/// segment (`task:TASK-1`, which is what a router-resolved `queue enqueue`
+/// records). Both denote the same kind, so a leading `<prefix>:` is stripped
+/// when `<prefix>` case-insensitively equals the subject's `kind` OR that kind's
+/// last dotted segment. A bare id (no prefix) or an unrelated `foo:` prefix (a
+/// genuine colon in a local id) passes through unchanged. Generic dynamic-kind
+/// subjects never reach this helper — they travel via `--subject-id` (kept
+/// kind-qualified) instead.
+fn strip_leading_kind_prefix<'a>(id: &'a str, kind: &str) -> &'a str {
+    let Some((prefix, rest)) = id.split_once(':') else {
+        return id;
+    };
+    if rest.is_empty() {
+        return id;
+    }
+    let short = kind.rsplit('.').next().unwrap_or(kind);
+    if prefix.eq_ignore_ascii_case(kind) || prefix.eq_ignore_ascii_case(short) {
+        rest
+    } else {
+        id
+    }
 }
 
 #[cfg(test)]
@@ -480,7 +525,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            &dispatch.subject.to_workflow_subject(),
+            &dispatch.subject.as_ref().unwrap().to_workflow_subject(),
             &WorkflowSubject::Custom {
                 title: "schedule:nightly".to_string(),
                 description: "nightly dispatch".to_string(),
@@ -544,6 +589,91 @@ mod tests {
                 "/tmp/project",
             ]
         );
+    }
+
+    #[test]
+    fn runner_command_strips_kind_prefix_from_queue_leased_task_id() {
+        use chrono::Utc;
+        use protocol::orchestrator::SubjectRef;
+        // Reproduces the rc.5 queue lease→spawn drop: a manual `queue enqueue`
+        // records the subject id kind-qualified (`task:TASK-244`), but the
+        // subject backend stores the row under the BARE id and the runner's
+        // kind-implicit `--task-id` resolves via `task/get`. The daemon must
+        // pass the BARE id so the FRESH runner resolves the subject and builds a
+        // run, instead of missing the lookup and dropping the leased entry with
+        // no journal_run.
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::task("task:TASK-244"),
+            "run-task",
+            "queue",
+            Utc::now(),
+        );
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec!["execute", "--task-id", "TASK-244", "--workflow-ref", "run-task", "--project-root", "/tmp/project",]
+        );
+    }
+
+    #[test]
+    fn runner_command_strips_kind_prefix_from_queue_leased_requirement_id() {
+        use chrono::Utc;
+        use protocol::orchestrator::SubjectRef;
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::requirement("requirement:REQUIREMENT-024"),
+            "run-requirement",
+            "queue",
+            Utc::now(),
+        );
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "execute",
+                "--requirement-id",
+                "REQUIREMENT-024",
+                "--workflow-ref",
+                "run-requirement",
+                "--project-root",
+                "/tmp/project",
+            ]
+        );
+    }
+
+    #[test]
+    fn runner_command_leaves_bare_task_id_unchanged() {
+        // A bare manual/direct dispatch (the shape that already worked) must be
+        // byte-identical after the normalization: no prefix to strip.
+        let dispatch = SubjectDispatch::for_task("TASK-777", "run-task");
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec!["execute", "--task-id", "TASK-777", "--workflow-ref", "run-task", "--project-root", "/tmp/project"]
+        );
+    }
+
+    #[test]
+    fn strip_leading_kind_prefix_only_strips_matching_kind() {
+        use super::strip_leading_kind_prefix;
+        // Short-alias prefix stripped against the native kind (the real portal
+        // shape: kind `animus.task`, id `task:TASK-244`).
+        assert_eq!(strip_leading_kind_prefix("task:TASK-244", "animus.task"), "TASK-244");
+        assert_eq!(strip_leading_kind_prefix("requirement:REQUIREMENT-1", "animus.requirement"), "REQUIREMENT-1");
+        // Full native-kind prefix is also stripped.
+        assert_eq!(strip_leading_kind_prefix("animus.task:TASK-244", "animus.task"), "TASK-244");
+        // Case-insensitive.
+        assert_eq!(strip_leading_kind_prefix("TASK:TASK-244", "animus.task"), "TASK-244");
+        // Matching a kind with no dotted segment (bare kind == short).
+        assert_eq!(strip_leading_kind_prefix("task:TASK-244", "task"), "TASK-244");
+        // Bare id (no prefix) passes through.
+        assert_eq!(strip_leading_kind_prefix("TASK-244", "animus.task"), "TASK-244");
+        // Unrelated prefix is preserved (neither the kind nor its short form).
+        assert_eq!(strip_leading_kind_prefix("other:TASK-244", "animus.task"), "other:TASK-244");
+        // A trailing-empty value is left intact rather than yielding an empty id.
+        assert_eq!(strip_leading_kind_prefix("task:", "animus.task"), "task:");
     }
 
     #[test]

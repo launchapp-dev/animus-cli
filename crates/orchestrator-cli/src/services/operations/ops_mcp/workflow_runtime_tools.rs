@@ -4,7 +4,7 @@ use super::*;
 impl AoMcpServer {
     #[tool(
         name = "animus.workflow.list",
-        description = "List workflows with optional filters (status, workflow_ref, task_id, phase_id, search), plus sort and pagination hints. Purpose: View workflow executions and their current state. Prerequisites: None. Example: {\"status\": \"running\"} or {\"task_id\": \"TASK-001\", \"sort\": \"started_at\"}. Sequencing: Use animus.workflow.get for specific workflow details, or animus.workflow.run to start a new workflow.",
+        description = "List workflows with optional filters (status, workflow_ref, subject_id, phase_id, search), plus sort and pagination hints. Purpose: View workflow executions and their current state. Prerequisites: None. Example: {\"status\": \"running\"} or {\"subject_id\": \"TASK-001\", \"sort\": \"started_at\"}. Sequencing: Use animus.workflow.get for specific workflow details, or animus.workflow.run to start a new workflow.",
         input_schema = ao_schema_for_type::<WorkflowListInput>()
     )]
     async fn ao_workflow_list(&self, params: Parameters<WorkflowListInput>) -> Result<CallToolResult, McpError> {
@@ -20,15 +20,13 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.workflow.run",
-        description = "Run a workflow for a subject. Purpose: Execute a workflow to complete subject phases automatically. Prerequisites: Subject should exist. For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post/etc.), pass subject_id (the kernel resolves the kind) instead of task_id. Example: {\"task_id\": \"TASK-001\"} or {\"subject_id\": \"blog:BLOG-001\"} or {\"subject_id\": \"blog:BLOG-001\", \"workflow_ref\": \"draft-post\"}. Sequencing: Use animus.subject.status to track progress, animus.workflow.get to monitor, and animus.workflow.pause/resume/cancel for control.",
+        description = "Run a workflow for a subject. Purpose: Execute a workflow to complete subject phases automatically. Prerequisites: Subject should exist. Pass subject_id for any subject kind (task, requirement, or dynamic kinds like blog/post) — a qualified id (task:TASK-001, blog:BLOG-001) is trusted, a bare id (TASK-001) is resolved via the subject router. Example: {\"subject_id\": \"TASK-001\"} or {\"subject_id\": \"blog:BLOG-001\", \"workflow_ref\": \"draft-post\"}. Sequencing: Use animus.subject.status to track progress, animus.workflow.get to monitor, and animus.workflow.pause/resume/cancel for control.",
         input_schema = ao_schema_for_type::<WorkflowRunInput>()
     )]
     async fn ao_workflow_run(&self, params: Parameters<WorkflowRunInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let mut args = vec!["workflow".to_string(), "run".to_string()];
         push_workflow_run_pipeline_arg(&mut args, input.workflow_ref);
-        push_opt(&mut args, "--task-id", input.task_id);
-        push_opt(&mut args, "--requirement-id", input.requirement_id);
         push_opt(&mut args, "--title", input.title);
         push_opt(&mut args, "--subject-id", input.subject_id);
         push_opt(&mut args, "--description", input.description);
@@ -151,7 +149,7 @@ impl AoMcpServer {
             .map(|item| {
                 let args = build_bulk_workflow_run_item_args(&item);
                 let command = args.join(" ");
-                BatchItemExec { target_id: item.task_id, command, args }
+                BatchItemExec { target_id: item.subject_id, command, args }
             })
             .collect();
         self.run_batch_tool("animus.workflow.run-multiple", items, &input.on_error, input.project_root).await
@@ -159,7 +157,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.workflow.execute",
-        description = "Execute a workflow synchronously. Purpose: Run a workflow without the daemon, blocking until completion. Prerequisites: Task must exist (use animus.subject.get with {\"kind\":\"task\"} to verify). Example: {\"task_id\": \"TASK-001\"} or {\"task_id\": \"TASK-001\", \"phase\": \"implementation\"}. Sequencing: Use animus.subject.get to verify the task first, or animus.workflow.config.get to review workflow config.",
+        description = "Execute a workflow synchronously. Purpose: Run a workflow without the daemon, blocking until completion. Prerequisites: Subject must exist (use animus.subject.get to verify). Pass subject_id for any kind — a qualified id (task:TASK-001) is trusted, a bare id (TASK-001) is resolved via the subject router. Example: {\"subject_id\": \"TASK-001\"} or {\"subject_id\": \"TASK-001\", \"phase\": \"implementation\"}. Sequencing: Use animus.subject.get to verify the subject first, or animus.workflow.config.get to review workflow config.",
         input_schema = ao_schema_for_type::<WorkflowExecuteInput>()
     )]
     async fn ao_workflow_execute(&self, params: Parameters<WorkflowExecuteInput>) -> Result<CallToolResult, McpError> {
@@ -167,8 +165,8 @@ impl AoMcpServer {
         let mut args = vec!["workflow".to_string(), "run".to_string()];
         push_workflow_run_pipeline_arg(&mut args, input.workflow_ref);
         args.push("--sync".to_string());
-        args.push("--task-id".to_string());
-        args.push(input.task_id);
+        args.push("--subject-id".to_string());
+        args.push(input.subject_id);
         push_opt(&mut args, "--phase", input.phase);
         push_opt(&mut args, "--model", input.model);
         push_opt(&mut args, "--tool", input.tool);

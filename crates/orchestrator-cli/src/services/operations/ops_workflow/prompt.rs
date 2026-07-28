@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::{
     ensure_workflow_config_compiled, load_workflow_config, load_workflow_config_or_default,
-    resolve_phase_plan_for_workflow_ref, services::ServiceHub, workflow_ref_for_task, OrchestratorWorkflow, SubjectRef,
+    resolve_phase_plan_for_workflow_ref, services::ServiceHub, OrchestratorWorkflow, SubjectRef,
     WorkflowDecisionAction,
 };
 use serde::Serialize;
@@ -57,7 +57,7 @@ struct ResolvedPromptContext {
     workflow_id: String,
     workflow_id_is_preview: bool,
     workflow_ref: String,
-    subject: SubjectRef,
+    subject: Option<SubjectRef>,
     subject_title: String,
     subject_description: String,
     execution_cwd: String,
@@ -121,7 +121,7 @@ async fn render_existing_workflow_prompts(
                 rework_context: existing_workflow_rework_context(&workflow, &phase_id),
                 pipeline_vars: context.workflow_vars.clone(),
                 dispatch_input: context.input.as_ref().map(Value::to_string),
-                schedule_input: schedule_prompt_input(&context.subject, context.input.as_ref()),
+                schedule_input: schedule_prompt_input(context.subject.as_ref(), context.input.as_ref()),
             };
             let rendered = render_phase_prompt_with_skills(
                 project_root,
@@ -129,7 +129,7 @@ async fn render_existing_workflow_prompts(
                     project_root,
                     execution_cwd: &context.execution_cwd,
                     workflow_id: &context.workflow_id,
-                    subject_id: context.subject.id(),
+                    subject_id: context.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                     subject_title: &context.subject_title,
                     subject_description: &context.subject_description,
                     phase_id: &phase_id,
@@ -167,7 +167,7 @@ async fn render_ad_hoc_prompts(
                 rework_context: args.rework_context.clone(),
                 pipeline_vars: context.workflow_vars.clone(),
                 dispatch_input: context.input.as_ref().map(Value::to_string),
-                schedule_input: schedule_prompt_input(&context.subject, context.input.as_ref()),
+                schedule_input: schedule_prompt_input(context.subject.as_ref(), context.input.as_ref()),
             };
             let rendered = render_phase_prompt_with_skills(
                 project_root,
@@ -175,7 +175,7 @@ async fn render_ad_hoc_prompts(
                     project_root,
                     execution_cwd: &context.execution_cwd,
                     workflow_id: &context.workflow_id,
-                    subject_id: context.subject.id(),
+                    subject_id: context.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                     subject_title: &context.subject_title,
                     subject_description: &context.subject_description,
                     phase_id: &phase_id,
@@ -221,20 +221,28 @@ async fn resolve_existing_workflow_context(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
 ) -> Result<ResolvedPromptContext> {
-    let resolved = hub
-        .subject_resolver()
-        .resolve_subject_context(&workflow.subject, None, None)
-        .await
-        .with_context(|| format!("failed to resolve subject context for workflow '{}'", workflow.id))?;
-    let execution_cwd = ensure_execution_cwd(hub, project_root, &workflow.subject, &resolved).await?;
+    // A subjectless workflow has no subject to resolve: render with absent
+    // subject vars and fall back to the project root as the execution cwd.
+    let (subject_title, subject_description, execution_cwd) = match workflow.subject.as_ref() {
+        Some(subject) => {
+            let resolved = hub
+                .subject_resolver()
+                .resolve_subject_context(subject, None, None)
+                .await
+                .with_context(|| format!("failed to resolve subject context for workflow '{}'", workflow.id))?;
+            let execution_cwd = ensure_execution_cwd(hub, project_root, subject, &resolved).await?;
+            (resolved.subject_title, resolved.subject_description, execution_cwd)
+        }
+        None => (String::new(), String::new(), project_root.to_string()),
+    };
 
     Ok(ResolvedPromptContext {
         workflow_id: workflow.id.clone(),
         workflow_id_is_preview: false,
         workflow_ref,
         subject: workflow.subject.clone(),
-        subject_title: resolved.subject_title,
-        subject_description: resolved.subject_description,
+        subject_title,
+        subject_description,
         execution_cwd,
         workflow_vars: workflow.vars.clone(),
         input: workflow.input.clone(),
@@ -248,37 +256,32 @@ async fn resolve_ad_hoc_context(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
 ) -> Result<ResolvedPromptContext> {
-    let (subject, workflow_ref, fallback_title, fallback_description) =
-        match (&args.task_id, &args.requirement_id, &args.title) {
-            (Some(task_id), None, None) => {
-                let task = hub.tasks().get(task_id).await?;
-                let workflow_ref = args.workflow_ref.clone().unwrap_or_else(|| workflow_ref_for_task(&task));
-                (SubjectRef::task(task.id.clone()), workflow_ref, Some(task.title), Some(task.description))
-            }
-            (None, Some(requirement_id), None) => {
-                hub.planning().get_requirement(requirement_id).await?;
-                (
-                    SubjectRef::requirement(requirement_id.clone()),
-                    args.workflow_ref.clone().unwrap_or(super::resolve_requirement_workflow_ref(project_root)?),
-                    None,
-                    None,
-                )
-            }
-            (None, None, Some(title)) => (
-                SubjectRef::custom(title.clone(), args.description.clone().unwrap_or_default()),
-                args.workflow_ref.clone().unwrap_or_else(|| {
-                    load_workflow_config_or_default(Path::new(project_root)).config.default_workflow_ref
-                }),
-                Some(title.clone()),
-                Some(args.description.clone().unwrap_or_default()),
-            ),
-            (None, None, None) => {
-                return Err(anyhow!("one of --workflow-id, --task-id, --requirement-id, or --title must be provided"));
-            }
-            _ => {
-                return Err(anyhow!("--task-id, --requirement-id, and --title are mutually exclusive"));
-            }
-        };
+    let (subject, workflow_ref, fallback_title, fallback_description) = match (&args.subject_id, &args.title) {
+        (Some(subject_id), None) => {
+            // Generic subject resolution (qualified `kind:id` or bare-id probe),
+            // the same path as `workflow run --subject-id`. task/requirement are
+            // ordinary subject kinds here — no privileged branch.
+            let subject = super::resolve_subject_id_ref_via_router(project_root, subject_id, None).await?;
+            let workflow_ref = args.workflow_ref.clone().unwrap_or_else(|| {
+                load_workflow_config_or_default(Path::new(project_root)).config.default_workflow_ref
+            });
+            (subject, workflow_ref, None, None)
+        }
+        (None, Some(title)) => (
+            SubjectRef::custom(title.clone(), args.description.clone().unwrap_or_default()),
+            args.workflow_ref.clone().unwrap_or_else(|| {
+                load_workflow_config_or_default(Path::new(project_root)).config.default_workflow_ref
+            }),
+            Some(title.clone()),
+            Some(args.description.clone().unwrap_or_default()),
+        ),
+        (None, None) => {
+            return Err(anyhow!("one of --workflow-id, --subject-id, or --title must be provided"));
+        }
+        (Some(_), Some(_)) => {
+            return Err(anyhow!("--subject-id and --title are mutually exclusive"));
+        }
+    };
 
     let resolved = hub
         .subject_resolver()
@@ -291,7 +294,7 @@ async fn resolve_ad_hoc_context(
         workflow_id: Uuid::new_v4().to_string(),
         workflow_id_is_preview: true,
         workflow_ref,
-        subject,
+        subject: Some(subject),
         subject_title: resolved.subject_title,
         subject_description: resolved.subject_description,
         execution_cwd,
@@ -328,8 +331,8 @@ fn existing_workflow_rework_context(workflow: &OrchestratorWorkflow, phase_id: &
         .map(|record| record.reason.clone())
 }
 
-fn schedule_prompt_input(subject: &SubjectRef, input: Option<&Value>) -> Option<String> {
-    if subject.id().starts_with("schedule:") {
+fn schedule_prompt_input(subject: Option<&SubjectRef>, input: Option<&Value>) -> Option<String> {
+    if subject.is_some_and(|s| s.id().starts_with("schedule:")) {
         return input.map(Value::to_string);
     }
     None
@@ -449,8 +452,7 @@ mod tests {
     fn base_args() -> WorkflowPromptRenderArgs {
         WorkflowPromptRenderArgs {
             workflow_id: None,
-            task_id: None,
-            requirement_id: None,
+            subject_id: None,
             title: None,
             description: None,
             workflow_ref: None,
@@ -559,9 +561,12 @@ mod tests {
     #[test]
     fn schedule_prompt_input_only_applies_to_schedule_subjects() {
         let input = serde_json::json!({"window":"nightly"});
-        assert_eq!(schedule_prompt_input(&SubjectRef::task("TASK-1".to_string()), Some(&input),), None);
+        assert_eq!(schedule_prompt_input(Some(&SubjectRef::task("TASK-1".to_string())), Some(&input)), None);
         assert_eq!(
-            schedule_prompt_input(&SubjectRef::custom("schedule:nightly".to_string(), String::new()), Some(&input),),
+            schedule_prompt_input(
+                Some(&SubjectRef::custom("schedule:nightly".to_string(), String::new())),
+                Some(&input)
+            ),
             Some("{\"window\":\"nightly\"}".to_string())
         );
     }

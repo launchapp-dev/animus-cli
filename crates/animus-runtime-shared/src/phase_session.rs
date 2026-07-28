@@ -45,6 +45,44 @@ pub struct SessionCheckpoint {
     pub blocked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<Value>,
+    /// The delegated environment context this phase is bound to, if any.
+    /// Persisted right after `environment/prepare` succeeds so a daemon
+    /// restart can teardown/reattach the node BY HANDLE instead of leaking
+    /// it. `None` for local (non-delegated) runs.
+    ///
+    /// Backward-compat: `#[serde(default, skip_serializing_if = ...)]` means
+    /// an older out-of-tree runner that does not know this field simply omits
+    /// it on write and (because `SessionCheckpoint` is NOT
+    /// `deny_unknown_fields`) ignores it on read — no runner rebuild is forced
+    /// for schema compatibility. A runner that pre-dates this field will,
+    /// however, DROP it when it rewrites a checkpoint it did not author, so the
+    /// canonical durable write must come from a runner that carries this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<EnvironmentBinding>,
+}
+
+/// The delegated environment context (Railway/container/remote node) a phase
+/// is bound to. Persisted into the phase [`SessionCheckpoint`] the instant
+/// `environment/prepare` returns a handle, so restart reconciliation can reap
+/// (or reattach to) the node by handle rather than leaking it and preparing a
+/// brand-new one on re-dispatch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvironmentBinding {
+    /// Resolved environment plugin id (what `EnvironmentClient::resolve` binds).
+    /// Stored explicitly so a restart knows WHICH environment plugin to talk to
+    /// for teardown/exec — the handle alone does not carry it.
+    pub environment_id: String,
+    /// The full, serializable prepared-context handle (id + workspace_root +
+    /// opaque plugin metadata: container/remote/relay ids). Teardown and
+    /// on-node re-exec are handle-only, so this is sufficient to reap or
+    /// reattach after a restart.
+    pub handle: animus_environment_protocol::EnvironmentHandle,
+    /// RFC3339 timestamp of when the binding was persisted (prepare success).
+    pub bound_at: String,
+    /// Set true after a successful teardown so subsequent reconciliation sweeps
+    /// skip an already-reaped node (idempotent, no double-free).
+    #[serde(default)]
+    pub torn_down: bool,
 }
 
 pub fn phase_session_path(scoped_root: &Path, workflow_id: &str, phase_id: &str) -> PathBuf {
@@ -81,6 +119,7 @@ pub fn write_session_pending(
         completed_at: None,
         blocked_reason: None,
         request,
+        environment: None,
     };
     write_atomic(&path, &checkpoint)?;
     Ok(checkpoint)
@@ -110,6 +149,37 @@ pub fn update_provider_session_id(
     mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
         if checkpoint.provider_session_id.as_deref() != Some(provider_session_id) {
             checkpoint.provider_session_id = Some(provider_session_id.to_string());
+        }
+    })
+}
+
+/// Persist the delegated environment binding for this phase, right after
+/// `environment/prepare` succeeds. Mirrors `update_provider_session_id`: the
+/// canonical caller is the out-of-tree workflow runner (which owns
+/// `scoped_root`/`workflow_id`/`phase_id` for a delegated coding phase and
+/// already writes the pending/running/provider-session-id fields). Once
+/// persisted, daemon restart reconciliation can reap the node by handle
+/// instead of leaking it.
+pub fn update_session_environment(
+    scoped_root: &Path,
+    workflow_id: &str,
+    phase_id: &str,
+    binding: EnvironmentBinding,
+) -> io::Result<()> {
+    mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
+        checkpoint.environment = Some(binding);
+    })
+}
+
+/// Mark the delegated node for this phase as torn down after a successful
+/// `environment/teardown`. Leaves the binding in place (so the handle is still
+/// visible for auditing) but flips `torn_down` so subsequent reconciliation
+/// sweeps do not attempt a second teardown. A no-op if the checkpoint carries
+/// no environment binding.
+pub fn mark_environment_torn_down(scoped_root: &Path, workflow_id: &str, phase_id: &str) -> io::Result<()> {
+    mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
+        if let Some(env) = checkpoint.environment.as_mut() {
+            env.torn_down = true;
         }
     })
 }
@@ -430,5 +500,92 @@ mod tests {
         // And no leftover .tmp siblings.
         let tmp_count = entries.iter().filter(|name| name.to_string_lossy().ends_with(".tmp")).count();
         assert_eq!(tmp_count, 0, "no .tmp siblings should remain after fsync_rename");
+    }
+
+    fn sample_binding() -> EnvironmentBinding {
+        EnvironmentBinding {
+            environment_id: "animus-environment-railway".to_string(),
+            handle: animus_environment_protocol::EnvironmentHandle {
+                id: "node-abc".to_string(),
+                workspace_root: "/work".to_string(),
+                metadata: serde_json::json!({ "railway_service_id": "svc-1", "relay": "wss://relay/x" }),
+            },
+            bound_at: Utc::now().to_rfc3339(),
+            torn_down: false,
+        }
+    }
+
+    // TASK-933: the EnvironmentBinding must survive a full serde round-trip
+    // through the on-disk checkpoint (the whole point is teardown-by-handle
+    // after a restart reads it back), including the opaque handle metadata.
+    #[test]
+    fn environment_binding_round_trips_through_the_checkpoint() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-1", "phase-a", "claude", "run-1", None).expect("pending");
+
+        // Freshly-written pending checkpoint has no binding.
+        let cp = read_checkpoint(scoped_root, "wf-env-1", "phase-a").expect("read").expect("present");
+        assert!(cp.environment.is_none(), "a local run carries no environment binding");
+
+        let binding = sample_binding();
+        update_session_environment(scoped_root, "wf-env-1", "phase-a", binding.clone()).expect("persist binding");
+
+        let cp = read_checkpoint(scoped_root, "wf-env-1", "phase-a").expect("read").expect("present");
+        assert_eq!(cp.environment.as_ref(), Some(&binding), "the binding round-trips byte-for-byte");
+        let env = cp.environment.expect("present");
+        assert_eq!(env.handle.id, "node-abc");
+        assert_eq!(
+            env.handle.metadata.pointer("/railway_service_id").and_then(Value::as_str),
+            Some("svc-1"),
+            "opaque handle metadata survives the round-trip"
+        );
+        assert!(!env.torn_down);
+    }
+
+    // TASK-811/933: mark_environment_torn_down flips the flag and is
+    // idempotent (a second call is a harmless no-op), and it never touches a
+    // checkpoint that has no binding.
+    #[test]
+    fn mark_environment_torn_down_is_idempotent_and_binding_gated() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-2", "phase-a", "claude", "run-2", None).expect("pending");
+
+        // No binding yet: mark is a silent no-op (does not error, does not
+        // fabricate a binding).
+        mark_environment_torn_down(scoped_root, "wf-env-2", "phase-a").expect("no-op ok");
+        let cp = read_checkpoint(scoped_root, "wf-env-2", "phase-a").expect("read").expect("present");
+        assert!(cp.environment.is_none(), "mark with no binding must not fabricate one");
+
+        update_session_environment(scoped_root, "wf-env-2", "phase-a", sample_binding()).expect("persist");
+        mark_environment_torn_down(scoped_root, "wf-env-2", "phase-a").expect("mark");
+        let cp = read_checkpoint(scoped_root, "wf-env-2", "phase-a").expect("read").expect("present");
+        assert!(cp.environment.as_ref().expect("binding").torn_down, "torn_down set after first mark");
+
+        // Idempotent: a second mark leaves it torn_down, no error, no change.
+        mark_environment_torn_down(scoped_root, "wf-env-2", "phase-a").expect("second mark");
+        let cp = read_checkpoint(scoped_root, "wf-env-2", "phase-a").expect("read").expect("present");
+        assert!(cp.environment.expect("binding").torn_down, "torn_down stays set on the second mark");
+    }
+
+    // Backward-compat: a checkpoint JSON written by an OLDER runner that does
+    // not know the `environment` field must still deserialize (serde ignores
+    // unknown fields; the struct is not deny_unknown_fields), with
+    // environment defaulting to None.
+    #[test]
+    fn legacy_checkpoint_without_environment_field_deserializes() {
+        let legacy = serde_json::json!({
+            "workflow_id": "wf-legacy",
+            "phase_id": "phase-a",
+            "provider": "claude",
+            "run_id": "run-legacy",
+            "status": "running",
+            "started_at": Utc::now().to_rfc3339(),
+        });
+        let cp: SessionCheckpoint =
+            serde_json::from_value(legacy).expect("legacy checkpoint without `environment` must deserialize");
+        assert!(cp.environment.is_none(), "missing environment field defaults to None");
+        assert_eq!(cp.status, SessionCheckpointStatus::Running);
     }
 }

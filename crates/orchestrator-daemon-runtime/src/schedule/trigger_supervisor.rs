@@ -40,7 +40,7 @@ use chrono::Utc;
 use orchestrator_core::workflow_config::TriggerType;
 use orchestrator_core::WebhookEvent;
 use orchestrator_logging::Logger;
-use orchestrator_plugin_host::{discover_plugins, DiscoveredPlugin, PluginHost, PluginSpawnOptions, PluginStderrSink};
+use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, PluginHost, PluginSpawnOptions, PluginStderrSink};
 use serde_json::json;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
@@ -143,9 +143,13 @@ impl TriggerSupervisor {
 }
 
 /// Filter the project's installed plugins down to trigger backends.
+///
+/// v0.7 multi-kind: matches a plugin's primary `plugin_kind` OR any of its
+/// additional `plugin_kinds` via [`discover_by_kind`], so a consolidated
+/// plugin that serves `trigger_backend` as a secondary role is still spawned
+/// instead of its webhook/event triggers silently never firing.
 pub fn discover_trigger_plugins(project_root: &Path) -> Result<Vec<DiscoveredPlugin>> {
-    let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == PLUGIN_KIND_TRIGGER_BACKEND).collect())
+    discover_by_kind(project_root, PLUGIN_KIND_TRIGGER_BACKEND)
 }
 
 /// Outcome reported by one trigger plugin session.
@@ -728,7 +732,10 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use tempfile::tempdir;
 
-    fn write_plugin_trigger_config(project_root: &Path, trigger_id: &str) {
+    fn write_plugin_trigger_config(
+        project_root: &Path,
+        trigger_id: &str,
+    ) -> crate::test_env::WorkflowConfigFixtureGuard {
         let mut config = orchestrator_core::builtin_workflow_config();
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "plugin-flow".to_string(),
@@ -738,6 +745,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -747,7 +756,7 @@ mod tests {
             config: json!({}),
             input: None,
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("write workflow config");
+        crate::test_env::write_workflow_config_fixture(project_root, &mut config, &["requirements"])
     }
 
     #[test]
@@ -763,6 +772,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: "fswatch-default".to_string(),
@@ -788,7 +799,7 @@ mod tests {
             config: json!({"max_triggers_per_minute": 10}),
             input: None,
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("write workflow config");
+        let _config = crate::test_env::write_workflow_config_fixture(project_root, &mut config, &["requirements"]);
 
         let payload = collect_plugin_trigger_config(project_root);
         let triggers = payload.get("triggers").and_then(|v| v.as_array()).expect("triggers array");
@@ -803,7 +814,7 @@ mod tests {
     fn route_event_queues_payload_for_known_plugin_trigger() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _config = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-1".to_string(),
@@ -840,7 +851,7 @@ mod tests {
     fn routes_event_with_subject_id_into_payload() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "linear-incoming");
+        let _config = write_plugin_trigger_config(project_root, "linear-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-linear-1".to_string(),
@@ -865,7 +876,7 @@ mod tests {
     fn routes_event_with_action_hint_into_payload() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _config = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-mention-1".to_string(),
@@ -977,7 +988,7 @@ mod tests {
 
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "noisy-trigger");
+        let _config = write_plugin_trigger_config(project_root, "noisy-trigger");
 
         let total_pushes = observed_cap + 2;
         for i in 0..total_pushes {
@@ -1008,7 +1019,7 @@ mod tests {
     fn route_event_drops_event_without_trigger_id() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _config = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-bare".to_string(),
@@ -1030,7 +1041,7 @@ mod tests {
     fn route_event_drops_event_for_unknown_trigger_id() {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
-        write_plugin_trigger_config(project_root, "slack-incoming");
+        let _config = write_plugin_trigger_config(project_root, "slack-incoming");
 
         let event = TriggerEvent {
             event_id: "evt-orphan".to_string(),
@@ -1061,6 +1072,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: "fw-collision".to_string(),
@@ -1070,7 +1083,7 @@ mod tests {
             config: json!({ "paths": ["**/*.rs"] }),
             input: None,
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("write");
+        let _config = crate::test_env::write_workflow_config_fixture(project_root, &mut config, &["requirements"]);
 
         let event = TriggerEvent {
             event_id: "evt-fw".to_string(),
@@ -1116,11 +1129,13 @@ mod tests {
                 name: name.to_string(),
                 version: "0.0.0".to_string(),
                 plugin_kind: PLUGIN_KIND_TRIGGER_BACKEND.to_string(),
+                plugin_kinds: vec![],
                 description: "fake trigger plugin for unit tests".to_string(),
                 protocol_version: animus_plugin_protocol::PROTOCOL_VERSION.to_string(),
                 capabilities: Vec::new(),
                 env_required: Vec::new(),
                 notification_buffer_size: None,
+                supports_mcp: None,
             },
             source: orchestrator_plugin_host::DiscoverySource::ExplicitConfig,
         }

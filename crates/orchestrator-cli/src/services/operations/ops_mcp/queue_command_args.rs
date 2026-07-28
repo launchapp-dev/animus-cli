@@ -2,8 +2,6 @@ use super::{push_opt, QueueEnqueueInput, QueueReorderInput, QueueSubjectInput};
 
 pub(super) fn build_queue_enqueue_args(input: &QueueEnqueueInput) -> Vec<String> {
     let mut args = vec!["queue".to_string(), "enqueue".to_string()];
-    push_opt(&mut args, "--task-id", input.task_id.clone());
-    push_opt(&mut args, "--requirement-id", input.requirement_id.clone());
     push_opt(&mut args, "--title", input.title.clone());
     push_opt(&mut args, "--subject-id", input.subject_id.clone());
     push_opt(&mut args, "--description", input.description.clone());

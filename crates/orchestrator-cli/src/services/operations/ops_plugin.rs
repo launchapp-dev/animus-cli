@@ -1532,6 +1532,20 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
     }
 
+    // ---- Cosign preflight (runs BEFORE any source resolution / network /
+    // manifest probe) ----------------------------------------------------
+    //
+    // Strict enforcement is impossible without the cosign binary. Fail once,
+    // here, with an actionable instruction — and crucially BEFORE we download
+    // the release or run the candidate binary with `--manifest`. Doing it here
+    // keeps the fail-closed invariant: a strict host with no cosign never
+    // executes unverified plugin code just to be told cosign is missing.
+    if let Some(message) =
+        cosign_preflight_error(matches!(effective_policy_mode(&req), PluginPolicyMode::Strict), cosign_available())
+    {
+        return Err(invalid_input_error(message));
+    }
+
     // ---- Lockfile pre-load (runs BEFORE any source resolution / network /
     // manifest probe) ----------------------------------------------------
     //
@@ -1590,6 +1604,10 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // tempdir is reliably cleaned up whether install succeeds, errors,
     // or returns early — closing the GBs-of-`animus-plugin-install-*`
     // accumulation the old `std::env::temp_dir().join(uuid)` left behind.
+    // Publisher trust decision, captured for the trusted-orgs write below. For
+    // RELEASE sources it is resolved EARLY (before download + manifest probe)
+    // so an untrusted org fails closed before we fetch or execute any binary.
+    let mut org_trust_decision: Option<TrustDecision> = None;
     let (source_path, default_name, provenance, _install_temp, release_assets_opt): (
         PathBuf,
         String,
@@ -1598,6 +1616,11 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         Option<Vec<GithubReleaseAsset>>,
     ) = if let Some(slug) = req.source.as_deref() {
         let spec = parse_repo_spec(slug)?;
+        // TOFU gate BEFORE any network fetch or `--manifest` probe: a hostile
+        // manifest naming an untrusted `OWNER/REPO` must be rejected before we
+        // download or execute its plugin binary. This closes the
+        // `git clone && animus install` hole for release-source installs.
+        org_trust_decision = enforce_org_trust(&spec.owner, &req)?;
         let release = resolve_release_install(spec, req.tag.clone(), req.expected_archive_sha256.clone()).await?;
         let provenance = InstallProvenance {
             source_kind: Some("release"),
@@ -1678,19 +1701,29 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     };
 
     if let Some(manifest_for_check) = source_manifest.as_ref() {
-        enforce_provider_tool_policy(manifest_for_check, req.allow_shadow_builtin, provenance.owner.as_deref())?;
+        // Resolve the name this install will actually be dispatched under so the
+        // reserved-provider guard checks the same string runtime discovery will
+        // (override / release basename / source basename), not just the manifest
+        // name (codex round-5/6 P1).
+        let effective_name = effective_install_name(req.name.as_deref(), &default_name, &source_path)?;
+        enforce_provider_tool_policy(
+            manifest_for_check,
+            Some(effective_name.as_str()),
+            req.allow_shadow_builtin,
+            provenance.owner.as_deref(),
+        )?;
         if let (Some(owner), Some(repo)) = (provenance.owner.as_deref(), provenance.repo.as_deref()) {
             enforce_manifest_name_matches_repo(manifest_for_check, owner, repo, req.force)?;
         }
     }
 
-    let mut org_trust_decision: Option<TrustDecision> = None;
-    if provenance.source_kind == Some("release") {
-        if let Some(owner) = provenance.owner.as_deref() {
-            org_trust_decision = enforce_org_trust(owner, &req)?;
-        }
-    }
+    // Publisher trust was enforced BEFORE the download / manifest probe above
+    // (see `org_trust_decision`), so no untrusted release binary is fetched or
+    // executed before rejection.
 
+    // Strict + missing-cosign was already caught by the preflight at the top of
+    // this function (before any download / manifest probe), so it cannot reach
+    // here.
     let signature_detail = resolve_signature_status(&req, &provenance)?;
     let policy_mode = effective_policy_mode(&req);
     match evaluate_signature_policy(&signature_detail, policy_mode, req.require_signature) {
@@ -1702,21 +1735,10 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         SignaturePolicyOutcome::Proceed => {}
     }
 
-    let (plugin_name, name_override_for_yaml) = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        Some(name) => (name.to_string(), Some(name.to_string())),
-        None => {
-            let derived = if !default_name.is_empty() {
-                default_name
-            } else {
-                source_path
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .ok_or_else(|| invalid_input_error("could not derive plugin name from source path"))?
-                    .to_string()
-            };
-            (derived, None)
-        }
-    };
+    let plugin_name = effective_install_name(req.name.as_deref(), &default_name, &source_path)?;
+    // The YAML `name_override` is recorded ONLY when the operator passed an
+    // explicit `--name`; a source-derived default name is not an override.
+    let name_override_for_yaml = req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
 
     let install_dir = scope_paths.install_dir.clone();
     let installed_path = install_dir.join(&plugin_name);
@@ -2540,7 +2562,10 @@ fn rename_eligible_native_kind(manifest: &PluginManifest) -> Option<String> {
 /// declared kinds collides with an existing install, not just the
 /// primary.
 fn all_rename_eligible_native_kinds(manifest: &PluginManifest) -> Vec<String> {
-    if manifest.plugin_kind != "subject_backend" {
+    // v0.7 multi-kind: a plugin serving `subject_backend` as a NON-primary
+    // `plugin_kinds` role is routed by the daemon, so its declared
+    // `subject_kind:*` capabilities must also be collision-checked at install.
+    if !manifest.serves_kind("subject_backend") {
         return Vec::new();
     }
     let mut out: Vec<String> = Vec::new();
@@ -2581,7 +2606,7 @@ fn current_subject_kinds_for_collision_check(
 ) -> Vec<String> {
     let mut discovery = PluginDiscovery::new();
     if let Some(root) = project_root {
-        discovery = discovery.with_project_root(std::path::Path::new(root));
+        discovery = discovery.with_project_root(std::path::Path::new(root)).probe_project_local_plugins(true);
     }
     let _ = plugin_dir;
     let discovered = match discovery.discover() {
@@ -2593,7 +2618,10 @@ fn current_subject_kinds_for_collision_check(
     };
     let mut out: Vec<String> = Vec::new();
     for plugin in discovered {
-        if plugin.name == current_plugin_name || plugin.manifest.plugin_kind != "subject_backend" {
+        // v0.7 multi-kind: include plugins that serve `subject_backend` as a
+        // secondary role — the daemon routes them, so their claimed kinds count
+        // toward the collision inventory.
+        if plugin.name == current_plugin_name || !plugin.manifest.serves_kind("subject_backend") {
             continue;
         }
         let lock_entry = lockfile.find(&plugin.name);
@@ -2859,6 +2887,11 @@ fn discover(project_root: &str, include_system_path: bool) -> Result<Vec<Discove
     PluginDiscovery::new()
         .with_project_root(root)
         .include_system_path(include_system_path)
+        // Operator-facing `animus plugin ...` surface: preserve
+        // project-local `.animus/plugins/` discovery for explicit local
+        // dev. The hostile-repo defense lives on the autonomous daemon
+        // path (`discover_plugins`), which leaves this OFF.
+        .probe_project_local_plugins(true)
         .with_scope(scope)
         .discover()
         .context("plugin discovery failed")
@@ -2873,6 +2906,8 @@ fn discover_with_warnings(
     PluginDiscovery::new()
         .with_project_root(root)
         .include_system_path(include_system_path)
+        // See [`discover`]: operator-facing surface, project-local probing on.
+        .probe_project_local_plugins(true)
         .with_scope(scope)
         .discover_with_warnings()
         .context("plugin discovery failed")
@@ -2884,6 +2919,7 @@ fn source_label(source: DiscoverySource) -> &'static str {
         DiscoverySource::ProjectLocal => "project_local",
         DiscoverySource::PluginPath => "plugin_path",
         DiscoverySource::SystemPath => "system_path",
+        DiscoverySource::DbRegistry => "db_registry",
     }
 }
 
@@ -3168,8 +3204,12 @@ fn find_plugin(project_root: &str, name: &str, include_system_path: bool) -> Res
     if trimmed.is_empty() {
         return Err(invalid_input_error("--name must not be empty"));
     }
-    let mut matches =
-        if include_system_path { discover(project_root, true)? } else { discover_plugins(Path::new(project_root))? };
+    // Operator-facing actions (`plugin info` / `ping` / `call`) must see
+    // the same set `plugin list` shows, including project-local
+    // `.animus/plugins/` installs — otherwise a listed plugin reports
+    // "not found" here. The `discover` helper opts project-local probing
+    // in (unlike the server-safe `discover_plugins`).
+    let mut matches = discover(project_root, include_system_path)?;
     matches.retain(|plugin| plugin.name == trimmed);
     matches.pop().ok_or_else(|| not_found_error(format!("plugin not found: {trimmed}")))
 }
@@ -4122,10 +4162,24 @@ const KNOWN_TARGET_TRIPLES: &[&str] = &[
     "x86_64-pc-windows-gnu",
 ];
 
+/// Filename-segment tokens that mark a platform-independent (noarch) asset. A
+/// JS-bundle plugin (a node-shebang esbuild bundle) IS the executable and runs
+/// on every triple, so it publishes ONE `<name>-noarch.tar.gz` instead of
+/// duplicating the same bytes under every triple name. Dash-prefixed so the
+/// substring match only fires on an explicit `-noarch` / `-any` segment, never
+/// an incidental substring of some other name.
+const NOARCH_SELECTION_TOKENS: &[&str] = &["-noarch", "-any"];
+
+/// Synthetic target recorded for a noarch asset in the lockfile / SHA256SUMS,
+/// so a `<name>-noarch.tar.gz` archive keys its integrity claim consistently.
+const NOARCH_TARGET: &str = "noarch";
+
 /// Derive the target triple a release asset filename targets, by scanning for a
 /// known triple substring (case-insensitive). `None` for non-archive assets
 /// (e.g. `SHA256SUMS.txt`, `.bundle`, `.sha256` sidecars) and any name with no
-/// recognizable triple.
+/// recognizable triple. A platform-independent bundle (`-noarch` / `-any`
+/// archive) maps to the synthetic [`NOARCH_TARGET`], checked only after the
+/// real triples so a triple-specific asset always wins.
 fn target_triple_from_asset_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     // `lower` is already ASCII-lowercased, so these `ends_with` checks are
@@ -4135,7 +4189,31 @@ fn target_triple_from_asset_name(name: &str) -> Option<&'static str> {
     if !is_archive {
         return None;
     }
-    KNOWN_TARGET_TRIPLES.iter().copied().find(|triple| lower.contains(&triple.to_ascii_lowercase()))
+    if let Some(triple) =
+        KNOWN_TARGET_TRIPLES.iter().copied().find(|triple| lower.contains(&triple.to_ascii_lowercase()))
+    {
+        return Some(triple);
+    }
+    if NOARCH_SELECTION_TOKENS.iter().any(|token| lower.contains(token)) {
+        return Some(NOARCH_TARGET);
+    }
+    None
+}
+
+/// Select the release asset to install: a triple-specific asset always wins;
+/// a platform-independent (`-noarch` / `-any`) asset is the fallback used only
+/// when no triple-specific asset is present. Within each pass the `<binary>-`
+/// prefixed picker is tried first (so a multi-binary release doesn't grab a
+/// sibling), then the prefix-agnostic picker for back-compat.
+fn select_release_asset<'a>(
+    assets: &'a [GithubReleaseAsset],
+    binary_name: &str,
+    platform_tokens: &[&str],
+) -> Option<&'a GithubReleaseAsset> {
+    pick_release_asset_for_binary(assets, binary_name, platform_tokens)
+        .or_else(|| pick_release_asset(assets, platform_tokens))
+        .or_else(|| pick_release_asset_for_binary(assets, binary_name, NOARCH_SELECTION_TOKENS))
+        .or_else(|| pick_release_asset(assets, NOARCH_SELECTION_TOKENS))
 }
 
 /// Parse a release `SHA256SUMS.txt` body into per-target archive shas for the
@@ -4381,20 +4459,20 @@ async fn resolve_release_install(
     // archive naming) so multi-binary releases — which publish sibling
     // `<other-bin>-<target>.tar.gz` archives in the same release — don't
     // accidentally pick a secondary binary as the primary based on GitHub's
-    // asset ordering. Fall through to the legacy prefix-agnostic picker for
-    // back-compat with releases that use a different archive base name.
-    let asset = pick_release_asset_for_binary(&release.assets, &spec.repo, platform_tokens)
-        .or_else(|| pick_release_asset(&release.assets, platform_tokens))
-        .ok_or_else(|| {
-            let available: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
-            invalid_input_error(format!(
-                "no release asset matched current platform '{}' (looked for any of: {}). Available assets in {}: [{}]",
-                current_platform_label(),
-                platform_tokens.join(", "),
-                release.tag_name,
-                available.join(", ")
-            ))
-        })?;
+    // asset ordering. Fall through to the legacy prefix-agnostic picker, then
+    // to a platform-independent `-noarch` / `-any` asset for JS-bundle plugins
+    // that publish a single cross-platform archive.
+    let asset = select_release_asset(&release.assets, &spec.repo, platform_tokens).ok_or_else(|| {
+        let available: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
+        invalid_input_error(format!(
+            "no release asset matched current platform '{}' (looked for any of: {}, or a noarch/any asset). \
+             Available assets in {}: [{}]",
+            current_platform_label(),
+            platform_tokens.join(", "),
+            release.tag_name,
+            available.join(", ")
+        ))
+    })?;
 
     // RAII staging dir — drops when `ReleaseInstall` drops. Replaces the
     // pre-fix `std::env::temp_dir().join(uuid)` that was created and
@@ -4711,28 +4789,106 @@ fn map_host_result_to_status(
     }
 }
 
-/// Compute the effective [`PluginPolicyMode`] for an install request.
-///
-/// Precedence:
-/// 1. `req.signature_policy` (the `--signature-policy` flag).
-/// 2. `--skip-signature` -> `Disabled`.
-/// 3. `--require-signature` -> `Strict`.
-/// 4. Fallback: `Warn` (verify-if-present). Matches the library default in
-///    [`PluginPolicyMode::default_for_install`]. The CLI handler flows
-///    through the same value so direct callers (unit tests, MCP wire) and
-///    CLI users agree. See `docs/reference/security.md` for the rationale
-///    and the recommended `strict` opt-in for production.
-fn effective_policy_mode(req: &PluginInstallRequest) -> PluginPolicyMode {
+/// Explicit per-call signature policy: the `--signature-policy` flag (already
+/// parsed into `req.signature_policy`) or the legacy `--skip-signature` /
+/// `--require-signature` booleans. Returns `None` when the caller left the
+/// policy unset, which lets the env/config layers decide. Kept pure so the
+/// precedence can be unit-tested without touching real env/config.
+fn explicit_signature_policy(req: &PluginInstallRequest) -> Option<PluginPolicyMode> {
     if let Some(mode) = req.signature_policy {
-        return mode;
+        return Some(mode);
     }
     if req.skip_signature {
-        return PluginPolicyMode::Disabled;
+        return Some(PluginPolicyMode::Disabled);
     }
     if req.require_signature {
-        return PluginPolicyMode::Strict;
+        return Some(PluginPolicyMode::Strict);
     }
-    PluginPolicyMode::Warn
+    None
+}
+
+/// Parse a signature-policy string for the env/config layers. Accepts
+/// `strict`/`warn`/`skip` (case-insensitive) plus the aliases the
+/// [`PluginPolicyMode`] `FromStr` already understands
+/// (`disabled`/`off`/`none`/`warning`). Empty or unrecognized values return
+/// `None` (unknown values are logged and IGNORED rather than failing the
+/// install) so a typo can never silently downgrade trust.
+fn parse_signature_policy_layer(raw: &str) -> Option<PluginPolicyMode> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.eq_ignore_ascii_case("skip") {
+        return Some(PluginPolicyMode::Disabled);
+    }
+    match trimmed.parse::<PluginPolicyMode>() {
+        Ok(mode) => Some(mode),
+        Err(_) => {
+            tracing::warn!(
+                value = %trimmed,
+                "ignoring unrecognized signature policy value (expected strict|warn|skip)"
+            );
+            None
+        }
+    }
+}
+
+/// Env layer: `ANIMUS_PLUGIN_SIGNATURE_POLICY`. Cloud/CI sets this once to
+/// `strict`; local dev leaves it unset (falls through to the `Warn` default).
+fn env_signature_policy() -> Option<PluginPolicyMode> {
+    parse_signature_policy_layer(&std::env::var("ANIMUS_PLUGIN_SIGNATURE_POLICY").ok()?)
+}
+
+/// Config layer: `plugins.signature_policy` in the global `config.json`. The
+/// field is optional and absent by default, so a fleet with no config change
+/// keeps the `Warn` default. Read directly from JSON because the out-of-tree
+/// `protocol::Config` struct does not model a `plugins` block; when/if it
+/// gains one, this reader stays forward-compatible.
+fn config_signature_policy() -> Option<PluginPolicyMode> {
+    let path = protocol::Config::global_config_dir().join("config.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let field = value.get("plugins")?.get("signature_policy")?.as_str()?;
+    parse_signature_policy_layer(field)
+}
+
+/// Pure precedence resolver: explicit per-call flag > env > config > `Warn`
+/// default. Split out so tests can assert precedence without real env/config.
+fn resolve_signature_policy_layers(
+    explicit: Option<PluginPolicyMode>,
+    env: Option<PluginPolicyMode>,
+    config: Option<PluginPolicyMode>,
+) -> PluginPolicyMode {
+    explicit.or(env).or(config).unwrap_or(PluginPolicyMode::Warn)
+}
+
+/// Cosign preflight: strict enforcement is impossible without the cosign
+/// binary. Returns an actionable message when the effective policy is strict
+/// but cosign is absent. Kept pure (no PATH/env reads) so it is unit-testable.
+fn cosign_preflight_error(strict: bool, cosign_present: bool) -> Option<String> {
+    if strict && !cosign_present {
+        Some(
+            "signature policy is strict but cosign is not installed — install cosign \
+             (https://github.com/sigstore/cosign) or set ANIMUS_PLUGIN_SIGNATURE_POLICY=warn"
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Compute the effective [`PluginPolicyMode`] for an install request.
+///
+/// Precedence (highest first):
+/// 1. Explicit per-call flag (`--signature-policy`, or legacy
+///    `--skip-signature` -> `Disabled` / `--require-signature` -> `Strict`).
+/// 2. `ANIMUS_PLUGIN_SIGNATURE_POLICY` env (cloud/CI opt-in to `strict`).
+/// 3. `plugins.signature_policy` in the global `config.json`.
+/// 4. Fallback: `Warn` (verify-if-present) — the unchanged local default.
+///
+/// See `docs/reference/security.md` and `docs/reference/configuration.md`.
+fn effective_policy_mode(req: &PluginInstallRequest) -> PluginPolicyMode {
+    resolve_signature_policy_layers(explicit_signature_policy(req), env_signature_policy(), config_signature_policy())
 }
 
 /// Outcome of applying the signature policy gate to a resolved
@@ -4904,16 +5060,12 @@ fn resolve_signature_status(req: &PluginInstallRequest, provenance: &InstallProv
     }
 
     if !cosign_available() {
-        let mode = effective_policy_mode(req);
-        let suffix = if matches!(mode, PluginPolicyMode::Strict) {
-            " (signature policy is strict; install cosign or rerun with --signature-policy warn/disabled)"
-        } else {
-            ""
-        };
+        // Strict + cosign-missing already hard-errored in the preflight above,
+        // so under `Warn` this degrades to an Unsigned status (verify-if-present).
         return Ok(SignatureStatus::Unsigned {
-            reason: format!(
-                "cosign binary not found on PATH; install cosign from https://github.com/sigstore/cosign to enable signature verification{suffix}"
-            ),
+            reason:
+                "cosign binary not found on PATH; install cosign from https://github.com/sigstore/cosign to enable signature verification"
+                    .to_string(),
         });
     }
 
@@ -5001,15 +5153,55 @@ fn probe_manifest(binary_path: &Path) -> Result<PluginManifest> {
 /// (`launchapp-dev`): a canonical `animus-provider-<tool>` from that org is the
 /// rightful first-party provider, not a squatter, so it installs with NO flag.
 /// Any other source claiming a reserved name must pass `--allow-shadow-builtin`.
+/// Resolve the name discovery will record for an install — the same value the
+/// SubjectRouter / `discover_*` paths later see as `DiscoveredPlugin::name` and
+/// (for providers) strip to compute `provider_tool`. Precedence mirrors the
+/// install-name binding: explicit `--name` override, else the source-derived
+/// `default_name` (release/repo basename), else the source file basename.
+/// Extracted so the reserved-name guard and the install-name binding key off
+/// one shared derivation and cannot drift (codex round-5/6 P1).
+fn effective_install_name(name_override: Option<&str>, default_name: &str, source_path: &Path) -> Result<String> {
+    match name_override.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => Ok(name.to_string()),
+        None if !default_name.is_empty() => Ok(default_name.to_string()),
+        None => source_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| invalid_input_error("could not derive plugin name from source path")),
+    }
+}
+
 fn enforce_provider_tool_policy(
     manifest: &PluginManifest,
+    effective_installed_name: Option<&str>,
     allow_shadow_builtin: bool,
     owner: Option<&str>,
 ) -> Result<()> {
-    if manifest.plugin_kind != animus_plugin_protocol::PLUGIN_KIND_PROVIDER {
+    // v0.7 multi-kind: the reserved-name guard must fire whenever the plugin
+    // SERVES the provider role — primary `plugin_kind` OR a secondary
+    // `plugin_kinds` entry — because runtime `discover_provider_plugins` now
+    // dispatches secondary-role providers too. Gating on the primary field
+    // alone would let a consolidated plugin named `animus-provider-claude`
+    // (primary e.g. `subject_backend`, `plugin_kinds: ["provider"]`) install
+    // without `--allow-shadow-builtin` and then hijack the `claude` dispatch
+    // path.
+    if !manifest.serves_kind(animus_plugin_protocol::PLUGIN_KIND_PROVIDER) {
         return Ok(());
     }
-    let derived_tool = manifest.name.strip_prefix("animus-provider-").unwrap_or(manifest.name.as_str());
+    // Derive the reserved-tool check from the EFFECTIVE installed name (the
+    // name discovery records as `DiscoveredPlugin::name` and
+    // `discover_provider_plugins` strips to compute `provider_tool` at
+    // dispatch) — NOT `manifest.name`. Callers pass the resolved install name
+    // (see `effective_install_name`: `--name` override, else release/basename
+    // default); unit tests pass `None` to fall back to the manifest name.
+    // Checking `manifest.name` alone would let a non-reserved manifest
+    // installed under a reserved dispatch name (`--name animus-provider-claude`,
+    // or a release/repo basename of `animus-provider-claude`) slip through and
+    // hijack the `claude` provider path.
+    let effective_name =
+        effective_installed_name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(manifest.name.as_str());
+    let derived_tool = effective_name.strip_prefix("animus-provider-").unwrap_or(effective_name);
     if !is_reserved_provider_tool(derived_tool) {
         return Ok(());
     }
@@ -5304,38 +5496,127 @@ fn org_is_trusted(owner: &str) -> Result<bool> {
 /// Returns the [`TrustDecision`] that admitted the install so the caller can
 /// persist it and surface it in the install audit line. `None` means the org
 /// was already trusted (no fresh decision to record).
-fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<Option<TrustDecision>> {
-    if req.allow_org.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
-        return Ok(Some(TrustDecision::AllowOrg));
-    }
-    if org_is_trusted(owner)? {
-        return Ok(None);
-    }
-    if req.yes || req.force {
-        tracing::warn!(owner, "installing plugin from untrusted org (--yes / --force); recording trust on first use");
-        return Ok(Some(TrustDecision::Yes));
-    }
-    if !std::io::stdin().is_terminal() {
-        return Err(invalid_input_error(format!(
-            "installing plugin from untrusted org '{owner}'. Pass --allow-org {owner} (or --yes) to confirm \
-             non-interactively. trusted-orgs.yaml lives at {}.",
-            trusted_orgs_path().display()
-        )));
-    }
-    eprintln!(
-        "warning: you are installing a plugin from `{owner}`, which is not a trusted organization.\n\
-         Verify this is the intended publisher before continuing. Type 'yes' to trust this org \
-         for future installs, anything else to abort."
-    );
-    eprint!("> ");
-    let _ = std::io::stderr().flush();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).with_context(|| "failed to read TOFU response from stdin")?;
-    let normalized = answer.trim().to_ascii_lowercase();
-    if normalized == "yes" || normalized == "y" {
-        Ok(Some(TrustDecision::InteractivePrompt))
+/// True when this process looks like a server/headless host: `ANIMUS_SERVER=1`.
+/// Mirrors `orchestrator_core::secret_keysource::is_server_env` (private there).
+fn plugin_install_is_server_env() -> bool {
+    std::env::var("ANIMUS_SERVER").map(|v| v.trim() == "1").unwrap_or(false)
+}
+
+/// A plugin install is "interactive" only on a local host that is NOT flagged
+/// as a server AND whose STDIN is a real terminal. Stdin specifically (not
+/// stdout/stderr) because the trust-on-first-use gate PROMPTS and reads the
+/// answer from stdin — if stdin is piped or closed the prompt is unusable, so
+/// such installs must take the non-interactive fail-closed path rather than
+/// consuming pipeline input / EOF. This closes the `git clone && animus
+/// install` fail-open hole without breaking `printf ... | animus plugin
+/// install`.
+fn plugin_install_is_interactive() -> bool {
+    !plugin_install_is_server_env() && std::io::stdin().is_terminal()
+}
+
+/// Decision for the org trust-on-first-use gate. Kept as a pure enum so the
+/// precedence can be exhaustively unit-tested without real env/TTY/network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrgTrustGate {
+    /// Pre-trusted via `--allow-org` -> record `AllowOrg`.
+    ExplicitAllow,
+    /// Already trusted (built-in or persisted) -> no fresh decision.
+    AlreadyTrusted,
+    /// `--yes`/`--force` on an interactive host -> record `Yes`.
+    AutoConfirm,
+    /// Interactive host, no auto-confirm -> prompt on stderr.
+    Prompt,
+    /// Non-interactive / server unknown org -> refuse (fail closed).
+    FailClosed,
+}
+
+/// Pure resolver for the org trust gate.
+///
+/// The security-critical rule: `--yes`/`--force` auto-confirms an unknown org
+/// ONLY on an interactive local host. In CI / server / non-TTY contexts an
+/// unknown org fails closed rather than silently TOFU-ing an attacker-chosen
+/// org from a hostile manifest.
+///
+/// The bool params are kept flat (rather than folded into enums) so the truth
+/// table is exhaustively unit-testable, mirroring
+/// `orchestrator_core::secret_keysource::decide_auto`.
+#[allow(clippy::fn_params_excessive_bools)]
+fn resolve_org_trust_gate(
+    allow_listed: bool,
+    already_trusted: bool,
+    yes_or_force: bool,
+    interactive: bool,
+) -> OrgTrustGate {
+    if allow_listed {
+        OrgTrustGate::ExplicitAllow
+    } else if already_trusted {
+        OrgTrustGate::AlreadyTrusted
+    } else if yes_or_force {
+        if interactive {
+            OrgTrustGate::AutoConfirm
+        } else {
+            OrgTrustGate::FailClosed
+        }
+    } else if interactive {
+        OrgTrustGate::Prompt
     } else {
-        Err(invalid_input_error(format!("user declined to trust org '{owner}'; aborting install")))
+        OrgTrustGate::FailClosed
+    }
+}
+
+fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<Option<TrustDecision>> {
+    enforce_org_trust_with(owner, req, plugin_install_is_interactive())
+}
+
+/// Interactivity-injected core of [`enforce_org_trust`] so tests can drive the
+/// interactive / non-interactive branches deterministically.
+fn enforce_org_trust_with(owner: &str, req: &PluginInstallRequest, interactive: bool) -> Result<Option<TrustDecision>> {
+    let allow_listed = req.allow_org.iter().any(|o| o.eq_ignore_ascii_case(owner));
+    // Skip the trusted-orgs read entirely when `--allow-org` already covers it.
+    let already_trusted = !allow_listed && org_is_trusted(owner)?;
+    match resolve_org_trust_gate(allow_listed, already_trusted, req.yes || req.force, interactive) {
+        OrgTrustGate::ExplicitAllow => Ok(Some(TrustDecision::AllowOrg)),
+        OrgTrustGate::AlreadyTrusted => Ok(None),
+        OrgTrustGate::AutoConfirm => {
+            tracing::warn!(
+                owner,
+                "installing plugin from untrusted org (--yes / --force on an interactive host); recording trust on first use"
+            );
+            Ok(Some(TrustDecision::Yes))
+        }
+        OrgTrustGate::FailClosed => {
+            if req.yes || req.force {
+                Err(invalid_input_error(format!(
+                    "refusing to auto-trust untrusted org '{owner}' with --yes/--force in a non-interactive/server \
+                     environment. Re-run interactively, or pass --allow-org {owner} to explicitly trust it. \
+                     trusted-orgs.yaml lives at {}.",
+                    trusted_orgs_path().display()
+                )))
+            } else {
+                Err(invalid_input_error(format!(
+                    "installing plugin from untrusted org '{owner}'. Pass --allow-org {owner} (or --yes on an \
+                     interactive host) to confirm. trusted-orgs.yaml lives at {}.",
+                    trusted_orgs_path().display()
+                )))
+            }
+        }
+        OrgTrustGate::Prompt => {
+            eprintln!(
+                "warning: you are installing a plugin from `{owner}`, which is not a trusted organization.\n\
+                 Verify this is the intended publisher before continuing. Type 'yes' to trust this org \
+                 for future installs, anything else to abort."
+            );
+            eprint!("> ");
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer).with_context(|| "failed to read TOFU response from stdin")?;
+            let normalized = answer.trim().to_ascii_lowercase();
+            if normalized == "yes" || normalized == "y" {
+                Ok(Some(TrustDecision::InteractivePrompt))
+            } else {
+                Err(invalid_input_error(format!("user declined to trust org '{owner}'; aborting install")))
+            }
+        }
     }
 }
 
@@ -5374,7 +5655,7 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         force: args.force,
         skip_manifest_check: args.skip_manifest_check,
         plugin_dir: args.plugin_dir,
-        signature_policy: Some(signature_policy),
+        signature_policy,
         trust_key: args.trust_key,
         require_signature: args.require_signature,
         skip_signature: args.skip_signature,
@@ -5433,7 +5714,17 @@ struct LockedInstallOutput {
 /// using the same machinery as `animus plugin install --locked`, with default
 /// install-security posture. `force` is threaded so a re-pin reinstall can
 /// overwrite already-present binaries.
-pub(crate) async fn run_locked_install_default(project_root: &str, force: bool, json: bool) -> Result<()> {
+pub(crate) async fn run_locked_install_default(
+    project_root: &str,
+    force: bool,
+    extra_allow_org: &[String],
+    json: bool,
+) -> Result<()> {
+    // `launchapp-dev` is always pre-trusted; the operator's `animus install
+    // --allow-org <OWNER>` values are threaded through so a locked reinstall of
+    // a third-party org can be trusted in a non-interactive / CI context.
+    let mut allow_org = vec!["launchapp-dev".to_string()];
+    allow_org.extend(extra_allow_org.iter().cloned());
     let args = PluginInstallArgs {
         source: None,
         path: None,
@@ -5453,7 +5744,7 @@ pub(crate) async fn run_locked_install_default(project_root: &str, force: bool, 
         skip_signature: false,
         trusted_signers: None,
         allow_shadow_builtin: true,
-        allow_org: vec!["launchapp-dev".to_string()],
+        allow_org,
         yes: true,
         force_rewrite_lockfile: false,
         locked: true,
@@ -5473,6 +5764,11 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
     let signature_policy = resolve_cli_signature_policy(&args)?;
     let trusted_signers = args.trusted_signers.clone();
     let allow_shadow_builtin = args.allow_shadow_builtin;
+    // Thread the operator's `--allow-org` through every locked reinstall so the
+    // documented fail-closed-TOFU escape hatch works in CI: without this a
+    // `--locked --allow-org third-party` run would rebuild with an empty
+    // allowlist and the new non-interactive gate would refuse the unknown org.
+    let allow_org = args.allow_org.clone();
     let lock_path = PluginLockfile::default_path(Some(root));
     if !lock_path.exists() {
         return Err(invalid_input_error(format!(
@@ -5699,10 +5995,10 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
                 project: effective_project,
                 plugin_dir: args.plugin_dir.clone(),
                 yes: true,
-                allow_org: vec![],
+                allow_org: allow_org.clone(),
                 allow_shadow_builtin,
                 as_kind: locked_as_kind,
-                signature_policy: Some(signature_policy),
+                signature_policy,
                 trusted_signers: trusted_signers.clone(),
                 locked_secondary_archive_shas,
                 ..Default::default()
@@ -5912,28 +6208,29 @@ fn plugin_role_from_kind(kind: &str) -> crate::services::metrics::PluginRole {
 /// 2. `--allow-unsigned` -> `Warn`.
 /// 3. `--skip-signature` -> `Disabled` (legacy).
 /// 4. `--require-signature` -> `Strict` (legacy alias; explicit opt-in).
-/// 5. Fallback: [`PluginPolicyMode::default_for_install`], which is
-///    `Warn` for v0.4.12 as a one-release migration window — pre-v0.4.12
-///    installs used the (now-removed) key-based PEM path and may not have
-///    keyless bundles available yet. v0.4.13 flips that lib default back
-///    to `Strict` now that keyless verification has a real Sigstore trust
-///    anchor. See `docs/reference/security.md`.
-fn resolve_cli_signature_policy(args: &PluginInstallArgs) -> Result<PluginPolicyMode> {
+/// 5. No explicit flag -> `None`, so the install pipeline's env/config layers
+///    (`ANIMUS_PLUGIN_SIGNATURE_POLICY`, `plugins.signature_policy`) and then
+///    the `Warn` default apply. Previously this collapsed to `Warn` here,
+///    which meant an explicit `Some(Warn)` always shadowed the env/config
+///    layers — so a CLI `plugin install` could not inherit cloud/CI strict.
+///    See `effective_policy_mode` and `docs/reference/security.md`.
+fn resolve_cli_signature_policy(args: &PluginInstallArgs) -> Result<Option<PluginPolicyMode>> {
     if let Some(raw) = args.signature_policy.as_deref() {
         return raw
             .parse::<PluginPolicyMode>()
+            .map(Some)
             .map_err(|msg| invalid_input_error(format!("invalid --signature-policy: {msg}")));
     }
     if args.allow_unsigned {
-        return Ok(PluginPolicyMode::Warn);
+        return Ok(Some(PluginPolicyMode::Warn));
     }
     if args.skip_signature {
-        return Ok(PluginPolicyMode::Disabled);
+        return Ok(Some(PluginPolicyMode::Disabled));
     }
     if args.require_signature {
-        return Ok(PluginPolicyMode::Strict);
+        return Ok(Some(PluginPolicyMode::Strict));
     }
-    Ok(PluginPolicyMode::default_for_install())
+    Ok(None)
 }
 
 fn handle_plugin_uninstall(args: PluginUninstallArgs, project_root: &str, json: bool) -> Result<()> {
@@ -6078,6 +6375,7 @@ pub(crate) fn run_plugin_rename(req: PluginRenameRequest) -> Result<PluginRename
     // the operator sees a clear error instead of a broken next boot.
     let own_secondary_native_kinds: Vec<String> = match PluginDiscovery::new()
         .with_project_root(std::path::Path::new(&req.project_root))
+        .probe_project_local_plugins(true)
         .discover()
     {
         Ok(plugins) => plugins
@@ -7102,6 +7400,61 @@ mod tests {
         assert!(!tokens.is_empty(), "no platform tokens registered for {}", current_platform_label());
     }
 
+    // ---- noarch / platform-independent asset support (TASK-200) --------
+
+    #[test]
+    fn target_triple_from_asset_name_recognizes_noarch_archives() {
+        assert_eq!(target_triple_from_asset_name("animus-postgres-noarch.tar.gz"), Some("noarch"));
+        assert_eq!(target_triple_from_asset_name("animus-postgres-any.tgz"), Some("noarch"));
+        // A real triple always wins over the noarch fallback.
+        assert_eq!(
+            target_triple_from_asset_name("animus-postgres-x86_64-unknown-linux-gnu.tar.gz"),
+            Some("x86_64-unknown-linux-gnu"),
+        );
+        // Non-archives and `-any`/`-noarch`-free names stay unrecognized.
+        assert_eq!(target_triple_from_asset_name("SHA256SUMS.txt"), None);
+        assert_eq!(target_triple_from_asset_name("animus-company-bundle.tar.gz"), None);
+    }
+
+    #[test]
+    fn select_release_asset_falls_back_to_noarch_when_no_triple_asset() {
+        let assets = vec![asset("animus-postgres-noarch.tar.gz")];
+        // Platform tokens that match nothing here — the noarch bundle is the fallback.
+        let tokens: &[&str] = &["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"];
+        let picked =
+            select_release_asset(&assets, "animus-postgres", tokens).expect("noarch fallback must be selected");
+        assert_eq!(picked.name, "animus-postgres-noarch.tar.gz");
+    }
+
+    #[test]
+    fn select_release_asset_prefers_triple_specific_over_noarch() {
+        let assets =
+            vec![asset("animus-postgres-noarch.tar.gz"), asset("animus-postgres-x86_64-unknown-linux-gnu.tar.gz")];
+        let tokens: &[&str] = &["x86_64-unknown-linux-gnu", "linux-x86_64"];
+        let picked = select_release_asset(&assets, "animus-postgres", tokens).expect("triple asset must be selected");
+        assert_eq!(
+            picked.name, "animus-postgres-x86_64-unknown-linux-gnu.tar.gz",
+            "a triple-specific asset must win over the noarch fallback"
+        );
+    }
+
+    #[test]
+    fn select_release_asset_returns_none_when_neither_triple_nor_noarch() {
+        let assets = vec![asset("animus-postgres-x86_64-apple-darwin.tar.gz")];
+        let tokens: &[&str] = &["x86_64-unknown-linux-gnu"];
+        assert!(select_release_asset(&assets, "animus-postgres", tokens).is_none());
+    }
+
+    #[test]
+    fn parse_sha256sums_keys_noarch_archive() {
+        let body = "abc123def4567890abc123def4567890abc123def4567890abc123def4567890  animus-postgres-noarch.tar.gz\n";
+        let parsed = parse_sha256sums_for_targets(body, "animus-postgres");
+        assert_eq!(
+            parsed.get("noarch").map(String::as_str),
+            Some("abc123def4567890abc123def4567890abc123def4567890abc123def4567890"),
+        );
+    }
+
     #[test]
     fn excludes_sha256_sidecars_from_asset_picking() {
         let assets = vec![
@@ -7850,32 +8203,35 @@ name = "same"
             name: name.to_string(),
             version: "0.1.0".to_string(),
             plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+            plugin_kinds: vec![],
             description: "test".to_string(),
             protocol_version: "1.0.0".to_string(),
             capabilities: vec!["agent/run".to_string()],
             env_required: Vec::new(),
             notification_buffer_size: None,
+            supports_mcp: None,
         }
     }
 
     #[test]
     fn install_refuses_reserved_provider_tool_without_flag() {
         let manifest = provider_manifest("animus-provider-claude");
-        let err = enforce_provider_tool_policy(&manifest, false, None).expect_err("must refuse claude provider plugin");
+        let err =
+            enforce_provider_tool_policy(&manifest, None, false, None).expect_err("must refuse claude provider plugin");
         assert!(format!("{err}").contains("reserved first-party provider name"));
     }
 
     #[test]
     fn install_allows_reserved_with_explicit_flag() {
         let manifest = provider_manifest("animus-provider-codex");
-        let ok = enforce_provider_tool_policy(&manifest, true, None);
+        let ok = enforce_provider_tool_policy(&manifest, None, true, None);
         assert!(ok.is_ok(), "--allow-shadow-builtin must let install through");
     }
 
     #[test]
     fn install_allows_non_reserved_provider_plugin() {
         let manifest = provider_manifest("animus-provider-mock");
-        let ok = enforce_provider_tool_policy(&manifest, false, None);
+        let ok = enforce_provider_tool_policy(&manifest, None, false, None);
         assert!(ok.is_ok(), "non-reserved provider tools must install without the override");
     }
 
@@ -7883,8 +8239,98 @@ name = "same"
     fn install_skips_provider_check_for_non_provider_plugins() {
         let mut manifest = provider_manifest("animus-provider-claude");
         manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string();
-        let ok = enforce_provider_tool_policy(&manifest, false, None);
+        let ok = enforce_provider_tool_policy(&manifest, None, false, None);
         assert!(ok.is_ok(), "subject backends are never gated by reserved provider tools");
+    }
+
+    /// v0.7 multi-kind regression (codex round-4 P1): the reserved-name guard
+    /// must fire when `provider` is a SECONDARY declared role, not just the
+    /// primary `plugin_kind`. Otherwise a consolidated plugin named
+    /// `animus-provider-claude` (primary `subject_backend`,
+    /// `plugin_kinds: ["provider"]`) — which runtime `discover_provider_plugins`
+    /// now dispatches — could install without `--allow-shadow-builtin` and
+    /// hijack the `claude` provider dispatch path.
+    #[test]
+    fn install_refuses_reserved_provider_tool_declared_as_secondary_role() {
+        let mut manifest = provider_manifest("animus-provider-claude");
+        manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string();
+        manifest.plugin_kinds = vec![animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string()];
+        let err = enforce_provider_tool_policy(&manifest, None, false, None)
+            .expect_err("must refuse a secondary-role provider claiming a reserved name");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
+        // ...and the explicit override still lets it through.
+        assert!(
+            enforce_provider_tool_policy(&manifest, None, true, None).is_ok(),
+            "--allow-shadow-builtin must still permit the secondary-role provider"
+        );
+    }
+
+    /// Codex round-5 P2 regression: the reserved-name guard checks the
+    /// EFFECTIVE installed name (`--name`/`name_override`), not just the
+    /// manifest name. A non-reserved manifest installed as
+    /// `--name animus-provider-claude` would otherwise pass the guard and then
+    /// be dispatched as the `claude` provider (runtime derives `provider_tool`
+    /// from the recorded install name).
+    #[test]
+    fn install_refuses_reserved_name_override_over_non_reserved_manifest() {
+        let manifest = provider_manifest("animus-provider-mock");
+        // Without the override the non-reserved manifest installs freely.
+        assert!(
+            enforce_provider_tool_policy(&manifest, None, false, None).is_ok(),
+            "non-reserved manifest with no override must install"
+        );
+        // With a reserved `--name` override it must be refused.
+        let err = enforce_provider_tool_policy(&manifest, Some("animus-provider-claude"), false, None)
+            .expect_err("reserved --name override must be refused");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
+        // ...and the explicit opt-in still lets it through.
+        assert!(
+            enforce_provider_tool_policy(&manifest, Some("animus-provider-claude"), true, None).is_ok(),
+            "--allow-shadow-builtin must permit a reserved --name override"
+        );
+    }
+
+    /// codex round-6 P1: the reserved-name guard must also fire for a
+    /// source-DERIVED install name (release/repo basename) even when `--name`
+    /// is omitted — `effective_install_name` resolves that basename and the
+    /// runtime dispatches under it, so a repo basename of
+    /// `animus-provider-claude` with a non-reserved manifest must be refused.
+    #[test]
+    fn effective_install_name_resolves_basename_and_guards_reserved_default() {
+        let source = std::path::Path::new("/tmp/x/animus-provider-claude");
+        // No override, empty default_name -> basename.
+        assert_eq!(effective_install_name(None, "", source).unwrap(), "animus-provider-claude");
+        // No override, non-empty default_name -> default_name wins.
+        assert_eq!(effective_install_name(None, "animus-provider-mock", source).unwrap(), "animus-provider-mock");
+        // Explicit override wins over both.
+        assert_eq!(
+            effective_install_name(Some("animus-provider-gemini"), "animus-provider-mock", source).unwrap(),
+            "animus-provider-gemini"
+        );
+
+        // Guard fires against the resolved default/basename name with NO --name.
+        let manifest = provider_manifest("animus-provider-mock");
+        let resolved = effective_install_name(None, "animus-provider-claude", source).unwrap();
+        let err = enforce_provider_tool_policy(&manifest, Some(resolved.as_str()), false, None)
+            .expect_err("reserved release/basename default must be refused without --allow-shadow-builtin");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
+    }
+
+    /// v0.7 multi-kind regression (codex round-4 P2): a plugin serving
+    /// `subject_backend` as a SECONDARY role still contributes its declared
+    /// `subject_kind:*` capabilities to install-time collision detection.
+    #[test]
+    fn rename_eligible_kinds_cover_secondary_subject_backend_role() {
+        let mut manifest = provider_manifest("animus-plugin-consolidated");
+        manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_QUEUE.to_string();
+        manifest.plugin_kinds = vec![animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string()];
+        manifest.capabilities = vec!["subject_kind:task".to_string(), "subject_kind:requirement".to_string()];
+        let kinds = all_rename_eligible_native_kinds(&manifest);
+        assert_eq!(
+            kinds,
+            vec!["task".to_string(), "requirement".to_string()],
+            "secondary-role subject_backend must expose its subject_kind capabilities for collision checks"
+        );
     }
 
     #[test]
@@ -7894,17 +8340,17 @@ name = "same"
         let manifest = provider_manifest("animus-provider-claude");
         let trusted = BUILTIN_TRUSTED_ORGS[0];
         assert!(
-            enforce_provider_tool_policy(&manifest, false, Some(trusted)).is_ok(),
+            enforce_provider_tool_policy(&manifest, None, false, Some(trusted)).is_ok(),
             "first-party {trusted}/animus-provider-claude must install without --allow-shadow-builtin"
         );
         // An untrusted org claiming the same reserved name is still blocked.
         assert!(
-            enforce_provider_tool_policy(&manifest, false, Some("attacker")).is_err(),
+            enforce_provider_tool_policy(&manifest, None, false, Some("attacker")).is_err(),
             "an untrusted org claiming a reserved provider name must still be rejected"
         );
         // ...unless the operator explicitly opts in.
         assert!(
-            enforce_provider_tool_policy(&manifest, true, Some("attacker")).is_ok(),
+            enforce_provider_tool_policy(&manifest, None, true, Some("attacker")).is_ok(),
             "--allow-shadow-builtin is the explicit opt-in for non-first-party reserved names"
         );
     }
@@ -7916,7 +8362,7 @@ name = "same"
             let repo_basename = slug.rsplit('/').next().unwrap_or(slug);
             let manifest = provider_manifest(repo_basename);
 
-            let curated_install = enforce_provider_tool_policy(&manifest, true, None);
+            let curated_install = enforce_provider_tool_policy(&manifest, None, true, None);
             assert!(
                 curated_install.is_ok(),
                 "curated install-defaults (allow_shadow_builtin=true) must accept '{repo_basename}'"
@@ -7925,7 +8371,7 @@ name = "same"
             let derived_tool = repo_basename.strip_prefix("animus-provider-").unwrap_or(repo_basename);
             if is_reserved_provider_tool(derived_tool) {
                 at_least_one_reserved = true;
-                let user_install = enforce_provider_tool_policy(&manifest, false, None);
+                let user_install = enforce_provider_tool_policy(&manifest, None, false, None);
                 assert!(
                     user_install.is_err(),
                     "user-typed install MUST still be blocked for reserved name '{repo_basename}'"
@@ -7957,8 +8403,9 @@ name = "same"
         let req =
             PluginInstallRequest { source: Some("attacker/animus-provider-claude".to_string()), ..Default::default() };
         assert!(!req.allow_shadow_builtin, "user-default request must NOT bypass shadow-builtin guard");
-        let err = enforce_provider_tool_policy(&manifest, req.allow_shadow_builtin, Some("attacker"))
-            .expect_err("user-typed install of reserved name must still be rejected");
+        let err =
+            enforce_provider_tool_policy(&manifest, req.name.as_deref(), req.allow_shadow_builtin, Some("attacker"))
+                .expect_err("user-typed install of reserved name must still be rejected");
         assert!(format!("{err}").contains("reserved first-party provider name"));
     }
 
@@ -8017,7 +8464,7 @@ name = "same"
         );
         // Untrusted, non-interactive, no --yes -> must error.
         let req = PluginInstallRequest::default();
-        let err = enforce_org_trust("evil-org", &req).expect_err("untrusted org without --yes must fail");
+        let err = enforce_org_trust_with("evil-org", &req, false).expect_err("untrusted org without --yes must fail");
         assert!(format!("{err}").contains("untrusted org"), "unexpected: {err}");
     }
 
@@ -8033,7 +8480,7 @@ name = "same"
         // Pre-populate with someone-elses-org.
         std::fs::write(&trusted_orgs_yaml, "trusted_orgs:\n  - someone-elses-org\n").unwrap();
         let req = PluginInstallRequest::default();
-        let ok = enforce_org_trust("someone-elses-org", &req);
+        let ok = enforce_org_trust_with("someone-elses-org", &req, false);
         assert!(ok.is_ok(), "previously-trusted org must skip the TOFU prompt");
     }
 
@@ -8047,7 +8494,7 @@ name = "same"
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
         let req = PluginInstallRequest { allow_org: vec!["new-friend-org".to_string()], ..Default::default() };
-        let ok = enforce_org_trust("new-friend-org", &req);
+        let ok = enforce_org_trust_with("new-friend-org", &req, false);
         assert!(ok.is_ok(), "--allow-org should pre-trust the org for this install");
     }
 
@@ -8061,7 +8508,7 @@ name = "same"
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
         let req = PluginInstallRequest::default();
-        let ok = enforce_org_trust("launchapp-dev", &req);
+        let ok = enforce_org_trust_with("launchapp-dev", &req, false);
         assert!(ok.is_ok(), "launchapp-dev is pre-trusted and must never trip TOFU");
     }
 
@@ -8203,15 +8650,19 @@ name = "same"
             "ANIMUS_TRUSTED_ORGS",
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
-        // --yes path returns the Yes decision.
+        // --yes on an INTERACTIVE host auto-confirms and returns the Yes decision.
         let req = PluginInstallRequest { yes: true, ..Default::default() };
-        assert_eq!(enforce_org_trust("fresh-org", &req).expect("ok"), Some(TrustDecision::Yes));
-        // --allow-org path returns AllowOrg.
+        assert_eq!(enforce_org_trust_with("fresh-org", &req, true).expect("ok"), Some(TrustDecision::Yes));
+        // --yes in a NON-interactive/CI context must FAIL CLOSED, not auto-TOFU.
+        let err = enforce_org_trust_with("fresh-org", &req, false)
+            .expect_err("--yes in a non-interactive context must refuse to auto-trust an unknown org");
+        assert!(format!("{err}").contains("refusing to auto-trust"), "unexpected: {err}");
+        // --allow-org path returns AllowOrg regardless of interactivity.
         let req2 = PluginInstallRequest { allow_org: vec!["friend-org".into()], ..Default::default() };
-        assert_eq!(enforce_org_trust("friend-org", &req2).expect("ok"), Some(TrustDecision::AllowOrg));
+        assert_eq!(enforce_org_trust_with("friend-org", &req2, false).expect("ok"), Some(TrustDecision::AllowOrg));
         // launchapp-dev (built-in, already trusted) -> None (no fresh grant).
         let req3 = PluginInstallRequest::default();
-        assert_eq!(enforce_org_trust("launchapp-dev", &req3).expect("ok"), None);
+        assert_eq!(enforce_org_trust_with("launchapp-dev", &req3, false).expect("ok"), None);
     }
 
     #[test]
@@ -8936,12 +9387,119 @@ required = ["launchapp-dev/animus-queue-default"]
 
     #[test]
     fn effective_policy_default_is_warn_for_legacy_callers() {
+        // Isolate the env + config layers so an ambient
+        // ANIMUS_PLUGIN_SIGNATURE_POLICY or a real ~/.animus/config.json cannot
+        // flake this: no env, empty config dir -> the Warn default must hold.
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let _env_policy = protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_SIGNATURE_POLICY", None);
+        let _env_dir = protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(temp.path().to_str().unwrap()));
         let req = PluginInstallRequest::default();
         assert_eq!(
             effective_policy_mode(&req),
             PluginPolicyMode::Warn,
-            "callers that build PluginInstallRequest without setting signature_policy get the verify-if-present default; this matches the v0.4.12 lib default while the built-in launchapp-dev cosign key is still a placeholder"
+            "with no explicit flag, no env, and no config field, the local default stays verify-if-present (Warn)"
         );
+    }
+
+    #[test]
+    fn effective_policy_reads_env_layer_when_no_explicit_flag() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let _env_dir = protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(temp.path().to_str().unwrap()));
+        let _env_policy = protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_SIGNATURE_POLICY", Some("strict"));
+        let req = PluginInstallRequest::default();
+        assert_eq!(effective_policy_mode(&req), PluginPolicyMode::Strict, "env layer promotes to strict");
+        // An explicit per-call flag still overrides the env layer.
+        let req2 = PluginInstallRequest { signature_policy: Some(PluginPolicyMode::Disabled), ..Default::default() };
+        assert_eq!(effective_policy_mode(&req2), PluginPolicyMode::Disabled, "explicit flag beats env");
+    }
+
+    #[test]
+    fn effective_policy_reads_config_layer_when_no_env() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("config.json"), r#"{"plugins":{"signature_policy":"strict"}}"#).unwrap();
+        let _env_dir = protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(temp.path().to_str().unwrap()));
+        let _env_policy = protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_SIGNATURE_POLICY", None);
+        let req = PluginInstallRequest::default();
+        assert_eq!(effective_policy_mode(&req), PluginPolicyMode::Strict, "config layer promotes to strict");
+    }
+
+    #[test]
+    fn layered_policy_precedence_explicit_over_env_over_config() {
+        use PluginPolicyMode::{Disabled, Strict, Warn};
+        // Explicit per-call flag wins over env and config.
+        assert_eq!(resolve_signature_policy_layers(Some(Disabled), Some(Strict), Some(Warn)), Disabled);
+        // Env wins over config when no explicit flag.
+        assert_eq!(resolve_signature_policy_layers(None, Some(Strict), Some(Warn)), Strict);
+        // Config wins over the default when no explicit flag and no env.
+        assert_eq!(resolve_signature_policy_layers(None, None, Some(Strict)), Strict);
+        // Nothing set -> Warn default (unchanged local behavior).
+        assert_eq!(resolve_signature_policy_layers(None, None, None), Warn);
+    }
+
+    #[test]
+    fn parse_signature_policy_layer_accepts_strict_warn_skip_case_insensitively() {
+        assert_eq!(parse_signature_policy_layer("strict"), Some(PluginPolicyMode::Strict));
+        assert_eq!(parse_signature_policy_layer("STRICT"), Some(PluginPolicyMode::Strict));
+        assert_eq!(parse_signature_policy_layer("  Warn "), Some(PluginPolicyMode::Warn));
+        assert_eq!(parse_signature_policy_layer("skip"), Some(PluginPolicyMode::Disabled));
+        assert_eq!(parse_signature_policy_layer("SKIP"), Some(PluginPolicyMode::Disabled));
+        // FromStr aliases still resolve.
+        assert_eq!(parse_signature_policy_layer("disabled"), Some(PluginPolicyMode::Disabled));
+        // Unknown / empty are ignored (never a silent trust downgrade).
+        assert_eq!(parse_signature_policy_layer("bogus"), None);
+        assert_eq!(parse_signature_policy_layer(""), None);
+        assert_eq!(parse_signature_policy_layer("   "), None);
+    }
+
+    #[test]
+    fn explicit_signature_policy_extracts_flags_or_none() {
+        assert_eq!(explicit_signature_policy(&PluginInstallRequest::default()), None);
+        assert_eq!(
+            explicit_signature_policy(&PluginInstallRequest { skip_signature: true, ..Default::default() }),
+            Some(PluginPolicyMode::Disabled)
+        );
+        assert_eq!(
+            explicit_signature_policy(&PluginInstallRequest { require_signature: true, ..Default::default() }),
+            Some(PluginPolicyMode::Strict)
+        );
+        assert_eq!(
+            explicit_signature_policy(&PluginInstallRequest {
+                signature_policy: Some(PluginPolicyMode::Warn),
+                skip_signature: true,
+                ..Default::default()
+            }),
+            Some(PluginPolicyMode::Warn),
+            "an explicit --signature-policy wins over the legacy booleans"
+        );
+    }
+
+    #[test]
+    fn cosign_preflight_only_errors_when_strict_and_cosign_absent() {
+        assert!(cosign_preflight_error(true, false).is_some());
+        assert!(cosign_preflight_error(true, true).is_none());
+        assert!(cosign_preflight_error(false, false).is_none());
+        let message = cosign_preflight_error(true, false).expect("strict + missing cosign errors");
+        assert!(message.contains("cosign"), "actionable message names cosign: {message}");
+        assert!(message.contains("ANIMUS_PLUGIN_SIGNATURE_POLICY=warn"), "message offers the warn escape: {message}");
+    }
+
+    #[test]
+    fn org_trust_gate_fails_closed_on_unknown_org_in_non_tty() {
+        use OrgTrustGate::{AlreadyTrusted, AutoConfirm, ExplicitAllow, FailClosed, Prompt};
+        // --allow-org always trusts.
+        assert_eq!(resolve_org_trust_gate(true, false, false, false), ExplicitAllow);
+        assert_eq!(resolve_org_trust_gate(true, true, true, true), ExplicitAllow);
+        // Already-trusted org: no fresh decision.
+        assert_eq!(resolve_org_trust_gate(false, true, false, false), AlreadyTrusted);
+        // Unknown org + --yes: auto-confirm ONLY when interactive.
+        assert_eq!(resolve_org_trust_gate(false, false, true, true), AutoConfirm);
+        assert_eq!(resolve_org_trust_gate(false, false, true, false), FailClosed);
+        // Unknown org, no --yes: prompt when interactive, fail closed otherwise.
+        assert_eq!(resolve_org_trust_gate(false, false, false, true), Prompt);
+        assert_eq!(resolve_org_trust_gate(false, false, false, false), FailClosed);
     }
 
     #[test]
@@ -9561,11 +10119,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-x".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["subject_kind:task".into(), "subject_kind:incident".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest).as_deref(), Some("task"));
     }
@@ -9576,11 +10136,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "provider-x".into(),
             version: "0.1".into(),
             plugin_kind: "provider".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["provider_tool:claude".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         // v0.5.7 only renames subject_backend kinds; provider dispatch
         // does not consult plugins.lock yet, so providers must skip the
@@ -9598,11 +10160,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-glob".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["subject_kind:task.*".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest), None);
     }
@@ -9613,11 +10177,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-mixed".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["subject_kind:task.*".into(), "subject_kind:incident".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest).as_deref(), Some("incident"));
     }
@@ -9628,11 +10194,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "transport-x".into(),
             version: "0.1".into(),
             plugin_kind: "transport".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["http_routes:foo".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest), None);
     }
@@ -9757,6 +10325,7 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-multi".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec![
@@ -9766,6 +10335,7 @@ required = ["launchapp-dev/animus-queue-default"]
             ],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let kinds = all_rename_eligible_native_kinds(&manifest);
         assert_eq!(kinds, vec!["task".to_string(), "requirement".to_string(), "incident".to_string()]);
@@ -9777,6 +10347,7 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-mixed".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec![
@@ -9787,6 +10358,7 @@ required = ["launchapp-dev/animus-queue-default"]
             ],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let kinds = all_rename_eligible_native_kinds(&manifest);
         assert_eq!(kinds, vec!["task".to_string(), "requirement".to_string()]);
@@ -9818,11 +10390,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-multi".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["subject_kind:task".into(), "subject_kind:requirement".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let err = compute_kind_assignment(Some(&manifest), &lock, &[], "subject-multi", None)
             .expect_err("secondary kind collision must refuse the install");
@@ -9898,11 +10472,13 @@ required = ["launchapp-dev/animus-queue-default"]
             name: "subject-multi".into(),
             version: "0.1".into(),
             plugin_kind: "subject_backend".into(),
+            plugin_kinds: vec![],
             description: "t".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec!["subject_kind:task".into(), "subject_kind:incident".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let (assigned, native) = compute_kind_assignment(Some(&manifest), &lock, &[], "subject-multi", None)
             .expect("primary auto-increment with free secondary must succeed");

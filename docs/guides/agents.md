@@ -7,13 +7,14 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **91 built-in MCP tools** across these families:
+Animus currently exposes **97 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
 | `animus.agent.*` | 12 | Agent profiles, runs, memory, agent messaging, and blocking human-in-the-loop questions/approvals |
 | `animus.daemon.*` | 12 | Daemon lifecycle, health, events, config, and the `observe` observability front-door |
 | `animus.cost.*` | 1 | Budget-cap breach inspection from the scoped breach log |
+| `animus.budget.*` | 2 | Read the fleet budget posture (daily cap, rolling spend, per-workflow/phase caps) and set/clear the fleet daily spend cap |
 | `animus.subject.*` | 8 | Task, requirement, and external subject backends, including bulk create/update |
 | `animus.workflow.*` | 22 | Workflow execution, control (incl. gate approve/reject), definition inspection, and config write-back (`config.set` + entity `agent-set`/`workflow-set`/`*-remove`) |
 | `animus.queue.*` | 7 | Dispatch queue inspection and mutation |
@@ -26,7 +27,7 @@ Animus currently exposes **91 built-in MCP tools** across these families:
 | `animus.tools.*` | 2 | Tool discovery over the live registry: ranked keyword search plus a grouped one-line catalog |
 
 **Tool discovery.** When you are unsure which tool fits an intent — or your
-context budget is too tight to carry all 91 schemas — start with
+context budget is too tight to carry all 93 schemas — start with
 `animus.tools.search` (e.g. `{"query": "pause workflow"}`). It searches the
 server's live registry (tool names, descriptions, and parameter names), ranks
 matches (name hits outrank description hits outrank parameter hits; an exact
@@ -39,6 +40,21 @@ may omit it because they operate on the public registry. Plugin mutation tools
 such as `animus.plugin.install` and `animus.plugin.uninstall` can still take
 `project_root` so project-local `.animus/plugins.lock` updates stay scoped to
 the target repo when present.
+
+Trusted application hosts start an actor-bound server with both
+`--require-actor` and `--actor-json`. Missing or malformed identity fails server
+startup rather than falling back to global scope. The actor-bound router exposes
+only paths that enforce the pin: workflow run/list/get, workflow config get/validate,
+workflow output reads, subject list/get/create/update/batch-create/batch-update/status,
+chat sends, interaction creation/management, and tool discovery. A child command
+cannot override the server actor.
+
+Subject `next`, queue operations, config writes, and other global tools are
+absent from an actor-bound server. Their pinned protocols cannot yet enforce
+the same authenticated actor, so exposing them would create an identity
+downgrade. Actor-bound subject calls use the v2 subject protocol and never
+fall back to legacy v1 methods.
+See [Actor-bound application contract](../architecture/actor-bound-application-contract.md).
 
 The total includes both the CLI-shaped `animus.agent.memory.*` wrappers and the
 top-level `animus.memory.*` document-oriented surface composed into
@@ -517,6 +533,17 @@ Act on `remediation` first when present; see the
   any server with an `oauth:` block is routed through `animus-mcp-proxy`
   instead of exposing a bearer token directly. See the per-agent MCP server
   section in the [CLI Command Surface](../reference/cli/index.md).
+- For chat, `--agent` is persisted as the canonical conversation `agent_id`.
+  Continuations may omit the flag and still re-resolve that exact profile in
+  the current actor/project scope, including its provider/model/persona,
+  reasoning, permission/approval, MCP, and tool-policy configuration. A
+  different flag or a renamed/deleted/hidden profile fails closed; legacy
+  conversations stay unbound. Portal-style application layers should pair the
+  `revision` returned by `chat get` with `chat send --expected-revision` so a
+  preflight-to-mutation identity race cannot execute against stale state. A
+  keyed application send also reserves that revision with an internal durable
+  operation id, allowing exact recovery across the crash boundary before the
+  user message is appended without admitting a different operation.
 - Workflow phase agents receive skills the same way: the union of the phase's
   `skills:` list and the executing agent profile's `skills:` is resolved
   daemon-side at dispatch (same scoped sources and trust rules as `--skill`)

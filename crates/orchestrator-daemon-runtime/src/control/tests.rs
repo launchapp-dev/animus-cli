@@ -896,6 +896,7 @@ impl WorkflowRouting for StubWorkflowRouting {
                 started_at: chrono::Utc::now(),
                 finished_at: None,
             }],
+            total: Some(1),
             next_cursor: None,
         })
     }

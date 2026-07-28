@@ -32,7 +32,7 @@ use rmcp::model::{ClientNotification, ClientRequest, ErrorCode, ServerInfo, Serv
 use rmcp::service::{
     NotificationContext, RequestContext, RoleClient, RoleServer, RunningService, Service, ServiceError,
 };
-use rmcp::transport::auth::{AuthError, AuthorizationManager};
+use rmcp::transport::auth::{AuthError, AuthorizationManager, CredentialStore};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{stdio, StreamableHttpClientTransport};
 use rmcp::{serve_client, ErrorData as McpError, ServiceExt};
@@ -103,14 +103,33 @@ pub struct McpProxy {
 }
 
 impl McpProxy {
-    /// Build the proxy: resolve the server URL, load the keychain-backed
-    /// auth manager, fetch the first access token, and open the upstream
-    /// connection.
+    /// Build the proxy: resolve the server URL from config, load the
+    /// keychain-backed auth manager, fetch the first access token, and open the
+    /// upstream connection.
+    ///
+    /// Prefer [`connect_authorization_code`](Self::connect_authorization_code)
+    /// when the upstream URL is ALREADY resolved (the daemon/CLI contract passes
+    /// it via `--url`): that path skips the `config_source` round-trip this one
+    /// performs, which is what saturates the source under bulk `mcp call`.
     pub async fn connect(project_root: &Path, server_name: &str, url_override: Option<&str>) -> Result<Self> {
         let resolution = resolve_server_url(project_root, server_name, url_override)?;
+        Self::connect_authorization_code(project_root, server_name, &resolution.url).await
+    }
+
+    /// Build the proxy for an `authorization_code` (keychain) server whose
+    /// upstream URL is ALREADY resolved — skipping the `config_source` lookup
+    /// [`connect`](Self::connect) does. The keychain principal + secret store
+    /// are read from the OS keychain / on-disk scoped state (NOT the config
+    /// source), so this performs ZERO `config_source` spawns.
+    pub async fn connect_authorization_code(
+        project_root: &Path,
+        server_name: &str,
+        upstream_url: &str,
+    ) -> Result<Self> {
         let principal = resolve_principal_id(project_root);
         let secrets = build_secret_store(project_root)?;
-        Self::connect_with_store(server_name, &resolution.url, secrets, &principal).await
+        let cache_dir = discovery_cache::cache_dir_for(project_root);
+        Self::connect_with_store(server_name, upstream_url, secrets, &principal, cache_dir.as_deref()).await
     }
 
     /// Connect with an explicit keychain store, principal, and upstream URL.
@@ -121,22 +140,51 @@ impl McpProxy {
     /// the OAuth `resource` indicator (RFC 8707) and the discovery seed in
     /// rmcp 1.7 — it must match the URL the auth flow logged in against so
     /// refresh issues a token for the same audience.
+    ///
+    /// `discovery_cache_dir` (when `Some`) is a directory used to cache the
+    /// discovered RFC 8414/9728 OAuth metadata per `(server, url)` so repeated
+    /// proxy spawns don't re-hit the (throttled) upstream discovery endpoint on
+    /// every connect. `None` disables the cache (used by tests that want a live
+    /// discovery each connect).
     pub async fn connect_with_store(
         server_name: &str,
         upstream_url: &str,
         secrets: Arc<dyn SecretStore>,
         principal: &str,
+        discovery_cache_dir: Option<&Path>,
     ) -> Result<Self> {
         crate::ensure_crypto_provider();
         let cred_store = KeychainCredentialStore::new(secrets, server_name, principal, upstream_url);
+
+        // Gate discovery priming on a stored token existing. Priming (below)
+        // runs a live `.well-known` discovery on a cache miss; doing that for an
+        // unauthenticated server (no stored token) would turn the fast-fail
+        // startup path into a needless network round-trip against the (throttled)
+        // upstream. When the credential store has no token we skip priming and
+        // let `initialize_from_store` take the unauthenticated fast-fail path.
+        let has_stored_token = matches!(cred_store.load().await, Ok(Some(_)));
 
         let mut manager = AuthorizationManager::new(upstream_url)
             .await
             .map_err(|err| anyhow!("failed to init OAuth manager for `{server_name}`: {err}"))?;
         manager.set_credential_store(cred_store);
 
-        // Hydrate the manager from the stored token (discovers metadata +
-        // configures the client id). `false` means no usable stored token.
+        // (a) Prime the manager with cached OAuth discovery metadata BEFORE
+        // `initialize_from_store` (which only discovers when metadata is unset —
+        // rmcp 1.7 `transport/auth.rs`). Under bulk `mcp call` the upstream
+        // throttles the per-spawn `.well-known` discovery, surfacing as
+        // `NoAuthorizationSupport` ("No authorization support detected"); a
+        // cache hit avoids the network call entirely. On a miss we discover once
+        // and persist for subsequent spawns. Best-effort: a cache/discovery
+        // failure here is non-fatal — `initialize_from_store` still runs. Only
+        // primed when a token is stored (see `has_stored_token` above).
+        if has_stored_token {
+            prime_discovery_metadata(&mut manager, server_name, upstream_url, discovery_cache_dir).await;
+        }
+
+        // Hydrate the manager from the stored token (discovers metadata when not
+        // already primed above + configures the client id). `false` means no
+        // usable stored token.
         let hydrated = manager
             .initialize_from_store()
             .await
@@ -321,9 +369,22 @@ impl McpProxy {
     }
 }
 
-/// Drive the proxy: serve the agent over stdio until the connection closes.
+/// Drive the proxy: resolve the server URL from config, then serve the agent
+/// over stdio until the connection closes.
+///
+/// Prefer [`run_authorization_code`] when the URL is already resolved — it
+/// avoids the `config_source` round-trip this path performs.
 pub async fn run(project_root: &Path, server_name: &str, url_override: Option<&str>) -> Result<()> {
     let proxy = McpProxy::connect(project_root, server_name, url_override).await?;
+    serve_until_closed(proxy, server_name).await
+}
+
+/// Drive the proxy for an `authorization_code` (keychain) server whose upstream
+/// URL is ALREADY resolved (passed by the daemon/CLI contract via `--url`).
+/// Skips the `config_source` lookup [`run`] performs, so a bulk `mcp call`
+/// burst doesn't re-saturate the source on every proxy spawn.
+pub async fn run_authorization_code(server_name: &str, upstream_url: &str, project_root: &Path) -> Result<()> {
+    let proxy = McpProxy::connect_authorization_code(project_root, server_name, upstream_url).await?;
     serve_until_closed(proxy, server_name).await
 }
 
@@ -404,6 +465,97 @@ impl Service<RoleServer> for McpProxy {
 /// re-sending a side-effecting `tools/call` could double-execute it.
 fn is_retryable_auth_error(err: &ServiceError) -> bool {
     matches!(err, ServiceError::TransportSend(_) | ServiceError::TransportClosed)
+}
+
+/// Prime `manager` with OAuth discovery metadata for `(server_name,
+/// upstream_url)` so `initialize_from_store` skips its per-spawn `.well-known`
+/// discovery. On a cache hit, load + `set_metadata`. On a miss, discover live,
+/// `set_metadata`, and persist for next time. All failures are non-fatal (we
+/// simply leave the manager to discover itself).
+async fn prime_discovery_metadata(
+    manager: &mut AuthorizationManager,
+    server_name: &str,
+    upstream_url: &str,
+    cache_dir: Option<&Path>,
+) {
+    let Some(cache_dir) = cache_dir else {
+        return;
+    };
+    if let Some(cached) = discovery_cache::load(cache_dir, server_name, upstream_url) {
+        manager.set_metadata(cached);
+        return;
+    }
+    match manager.discover_metadata().await {
+        Ok(metadata) => {
+            discovery_cache::store(cache_dir, server_name, upstream_url, &metadata);
+            manager.set_metadata(metadata);
+        }
+        Err(err) => {
+            // Non-fatal: leave `metadata` unset so `initialize_from_store`
+            // attempts its own discovery (which will surface the real error if
+            // the upstream is genuinely unreachable).
+            tracing::warn!(server = server_name, error = %err, "oauth discovery failed while priming cache; will retry via initialize_from_store");
+        }
+    }
+}
+
+/// Best-effort on-disk cache of discovered OAuth [`AuthorizationMetadata`],
+/// keyed by `(server, upstream_url)`. The metadata is the set of public
+/// `.well-known` OAuth endpoints (RFC 8414/9728) — NOT a secret — so it lives
+/// next to (not inside) the encrypted token store. A stale entry self-heals via
+/// the TTL below; any read/parse error is treated as a miss.
+mod discovery_cache {
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime};
+
+    use rmcp::transport::auth::AuthorizationMetadata;
+    use sha2::{Digest, Sha256};
+
+    /// Cache subdirectory under the scoped state root. Versioned so a metadata
+    /// schema change can bump the directory without colliding with old entries.
+    const CACHE_SUBDIR: &str = "mcp-oauth-discovery.v1";
+    /// Entries older than this (24h) are ignored (and overwritten on the next
+    /// miss), so a genuinely rotated upstream discovery document eventually
+    /// takes hold.
+    const TTL: Duration = Duration::from_hours(24);
+
+    /// The discovery-cache directory for `project_root` (its scoped state root),
+    /// or `None` when the scope can't be resolved.
+    pub(super) fn cache_dir_for(project_root: &Path) -> Option<PathBuf> {
+        protocol::repository_scope::scoped_state_root(project_root).map(|root| root.join(CACHE_SUBDIR))
+    }
+
+    /// Stable filename for a `(server, url)` pair.
+    fn entry_path(cache_dir: &Path, server: &str, url: &str) -> PathBuf {
+        let mut hasher = Sha256::new();
+        hasher.update(server.as_bytes());
+        hasher.update([0x1f]);
+        hasher.update(url.as_bytes());
+        cache_dir.join(format!("{:x}.json", hasher.finalize()))
+    }
+
+    /// Load cached metadata for `(server, url)`, or `None` on miss / expiry /
+    /// any read or parse error.
+    pub(super) fn load(cache_dir: &Path, server: &str, url: &str) -> Option<AuthorizationMetadata> {
+        let path = entry_path(cache_dir, server, url);
+        let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+        if SystemTime::now().duration_since(modified).map(|age| age > TTL).unwrap_or(true) {
+            return None;
+        }
+        let bytes = std::fs::read(&path).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Persist `metadata` for `(server, url)`. Best-effort — any error is
+    /// ignored (the next connect simply re-discovers).
+    pub(super) fn store(cache_dir: &Path, server: &str, url: &str, metadata: &AuthorizationMetadata) {
+        if std::fs::create_dir_all(cache_dir).is_err() {
+            return;
+        }
+        if let Ok(bytes) = serde_json::to_vec(metadata) {
+            let _ = std::fs::write(entry_path(cache_dir, server, url), bytes);
+        }
+    }
 }
 
 fn auth_error_to_anyhow(err: AuthError, server_name: &str) -> anyhow::Error {

@@ -9,6 +9,28 @@ use animus_session_backend::session::{
 
 use super::plugin_backend::{discover_provider_plugins, PluginSessionBackend};
 
+/// Return the DECLARED `supports_mcp` of the provider plugin backing `tool`,
+/// or `None` when no provider plugin is installed for it.
+///
+/// This is the SOURCE OF TRUTH for whether the daemon injects an agent's
+/// profile/skill-declared MCP servers for a provider tool: it is the loaded
+/// plugin's OWN declaration (`PluginSessionBackend::capabilities().supports_mcp`,
+/// itself derived from the plugin manifest), resolved UNIFORMLY for every
+/// provider tool — NOT a kernel-maintained name->capability allow-list and NOT
+/// a name-based "unknown tool => assume MCP" heuristic. A tool with no backing
+/// provider plugin returns `None`; the caller then falls back to its minimal
+/// static behavior for genuinely in-tree/legacy tools.
+///
+/// Discovery is manifest-only (no long-running spawn) and backed by the
+/// on-disk manifest cache, so repeated calls within a process are cheap.
+pub fn provider_declared_supports_mcp(project_root: &Path, tool: &str) -> Option<bool> {
+    let lookup = canonical_tool_alias(tool);
+    discover_provider_plugins(project_root)
+        .into_iter()
+        .find(|plugin| plugin.provider_tool.eq_ignore_ascii_case(&lookup))
+        .map(|plugin| plugin.declared_supports_mcp)
+}
+
 /// Provider tool names that historically mapped to in-tree (built-in) backends.
 ///
 /// The in-tree backends were removed in v0.4.12 in favor of the standalone

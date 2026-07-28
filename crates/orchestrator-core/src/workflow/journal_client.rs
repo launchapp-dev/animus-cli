@@ -48,6 +48,9 @@ use animus_journal_protocol::{
     METHOD_JOURNAL_QUERY_IDS, METHOD_JOURNAL_RECORD, METHOD_JOURNAL_SAVE, PLUGIN_KIND_WORKFLOW_JOURNAL,
 };
 use anyhow::{anyhow, Context, Result};
+use orchestrator_plugin_host::resident_host_registry::{
+    binary_mtime_nanos, global_resident_host_registry, ResidentHostLease, ResidentHostRegistry,
+};
 use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
 
@@ -367,16 +370,16 @@ pub(crate) fn to_journal_run(workflow: &OrchestratorWorkflow) -> Result<JournalR
     // deserialize with `subject = SubjectRef::task("")` (empty id) while the real
     // id still lives in `task_id`. Mirror the `workflow_task_id` fallback used
     // elsewhere so SQLite->plugin imports of old task runs index a non-null id.
-    let subject_id = match workflow.subject.id() {
-        "" => workflow.task_id.as_str(),
-        id => id,
+    let subject_id = match workflow.subject.as_ref().map(|s| s.id()) {
+        None | Some("") => workflow.task_id.as_str(),
+        Some(id) => id,
     };
     if !subject_id.is_empty() {
         if let Some(obj) = blob.as_object_mut() {
             obj.insert(SUBJECT_ID_BLOB_KEY.to_string(), serde_json::Value::String(subject_id.to_string()));
         }
     }
-    let kind = if workflow.subject.kind.is_empty() { None } else { Some(workflow.subject.kind.clone()) };
+    let kind = workflow.subject.as_ref().map(|s| s.kind.clone()).filter(|k| !k.is_empty());
     Ok(JournalRun {
         workflow_id: workflow.id.clone(),
         workflow_ref: workflow.workflow_ref.clone(),
@@ -466,17 +469,138 @@ pub(crate) fn list(
     Ok(resp.runs.into_iter().filter_map(|run| from_journal_run(run).ok()).collect())
 }
 
+/// Like [`list`] but bounded to the `limit` newest rows in a SINGLE RPC — the
+/// fast path for the workflow-list UI. Replaces `query_ids` + a per-id `load`
+/// loop (N+1 — one RPC per run), which serialized behind other traffic on the
+/// journal plugin's stdio host and made the list intermittently slow.
+pub(crate) fn list_page(
+    plugin: &DiscoveredPlugin,
+    project_root: &Path,
+    status: Option<WorkflowStatus>,
+    workflow_ref: Option<&str>,
+    limit: usize,
+) -> Result<Vec<OrchestratorWorkflow>> {
+    let query = JournalQuery {
+        status: status.map(|s| vec![status_wire(s).to_string()]).unwrap_or_default(),
+        workflow_ref: workflow_ref.map(str::to_string),
+        updated_since: None,
+        limit: Some(limit as u32),
+    };
+    let value = run_blocking(call(plugin, project_root, METHOD_JOURNAL_LIST, query))??;
+    let resp: ListResult = serde_json::from_value(value).context("decoding journal ListResult")?;
+    Ok(resp.runs.into_iter().filter_map(|run| from_journal_run(run).ok()).collect())
+}
+
+/// Lightweight run summary sourced from the journal's no-blob projection
+/// (`journal/list { summary: true }`). Carries only the fields the daemon's
+/// stale-in-progress reconcile needs to cross-reference a run to its subject —
+/// deliberately NOT the full `OrchestratorWorkflow`, so that heartbeat sweep
+/// never fetches + deserializes every run's opaque blob (the ~6s all-runs scan
+/// that head-of-line-blocked the shared journal host).
+#[derive(Debug, Clone)]
+pub struct WorkflowRunSummary {
+    pub workflow_id: String,
+    /// Denormalized subject id (bare native id for task/requirement, e.g.
+    /// `TASK-1`; kind-qualified for generic kinds), cross-referenced against a
+    /// task id via the daemon's `task_ids_match`.
+    pub task_id: String,
+    pub workflow_ref: Option<String>,
+    pub status: WorkflowStatus,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// The terminal timestamp for a terminal run; `None` for a live run.
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl WorkflowRunSummary {
+    /// Project a full run to a summary. Used by the in-memory service hub and any
+    /// caller that already holds the whole workflow. Mirrors the `subject_id`
+    /// denormalization in [`to_journal_run`] so it matches the plugin projection.
+    pub fn from_workflow(w: &OrchestratorWorkflow) -> Self {
+        let task_id = match w.subject.as_ref().map(|s| s.id()) {
+            None | Some("") => w.task_id.clone(),
+            Some(id) => id.to_string(),
+        };
+        Self {
+            workflow_id: w.id.clone(),
+            task_id,
+            workflow_ref: w.workflow_ref.clone(),
+            status: w.status,
+            started_at: w.started_at,
+            completed_at: w.completed_at,
+        }
+    }
+}
+
+pub(crate) fn status_from_wire(s: &str) -> Option<WorkflowStatus> {
+    Some(match s {
+        "pending" => WorkflowStatus::Pending,
+        "running" => WorkflowStatus::Running,
+        "paused" => WorkflowStatus::Paused,
+        "completed" => WorkflowStatus::Completed,
+        "failed" => WorkflowStatus::Failed,
+        "escalated" => WorkflowStatus::Escalated,
+        "cancelled" => WorkflowStatus::Cancelled,
+        _ => return None,
+    })
+}
+
+/// Max rows a summary sweep pulls in one RPC. Equal to the reference backend's
+/// `MAX_QUERY_LIMIT`, so a project with fewer runs than this gets ALL of them
+/// (the reconcile needs every run to cross-reference its in-progress subjects).
+const SUMMARY_QUERY_LIMIT: u32 = 10_000;
+
+/// Every run's [`WorkflowRunSummary`] via the journal's no-blob projection —
+/// ONE bounded RPC that skips the opaque blob column entirely (`summary: true`).
+/// Replaces `list()`-then-drop-the-blob for the daemon's stale-in-progress
+/// reconcile, which only needs subject id + status + timestamps. Rows missing a
+/// workflow_id/status, or carrying an unknown wire status, are skipped.
+pub(crate) fn list_summaries(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<Vec<WorkflowRunSummary>> {
+    let params = serde_json::json!({ "status": [], "summary": true, "limit": SUMMARY_QUERY_LIMIT });
+    let value = run_blocking(call(plugin, project_root, METHOD_JOURNAL_LIST, params))??;
+    let runs = value.get("runs").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+    Ok(runs.iter().filter_map(summary_from_value).collect())
+}
+
+fn summary_from_value(v: &serde_json::Value) -> Option<WorkflowRunSummary> {
+    let obj = v.as_object()?;
+    let workflow_id = obj.get("workflow_id")?.as_str()?.to_string();
+    let status = status_from_wire(obj.get("status")?.as_str()?)?;
+    let task_id = obj.get("subject_id").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    let workflow_ref = obj.get("workflow_ref").and_then(|s| s.as_str()).map(str::to_string);
+    let started_at =
+        obj.get("created_at").and_then(|s| s.as_str()).and_then(parse_summary_ts).unwrap_or_else(chrono::Utc::now);
+    let updated_at = obj.get("updated_at").and_then(|s| s.as_str()).and_then(parse_summary_ts);
+    let terminal = matches!(
+        status,
+        WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::Escalated
+    );
+    let completed_at = if terminal { updated_at } else { None };
+    Some(WorkflowRunSummary { workflow_id, task_id, workflow_ref, status, started_at, completed_at })
+}
+
+fn parse_summary_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// Ceiling on the id set `query_ids` pulls in one RPC. The caller derives the
+/// list `total` from `ids.len()`, so an unset limit (which the reference backend
+/// defaults to 1000) would cap the reported total — and the numbered pager — at
+/// 1000 even with more runs. Request the backend's max so the count is accurate
+/// up to this ceiling (ids are cheap — just the id column, no blobs).
+const QUERY_IDS_LIMIT: u32 = 10_000;
+
 /// All run ids matching `status` (None = all). The caller paginates client-side.
 pub(crate) fn query_ids(
     plugin: &DiscoveredPlugin,
     project_root: &Path,
     status: Option<WorkflowStatus>,
+    workflow_ref: Option<&str>,
 ) -> Result<Vec<String>> {
     let query = JournalQuery {
         status: status.map(|s| vec![status_wire(s).to_string()]).unwrap_or_default(),
-        workflow_ref: None,
+        workflow_ref: workflow_ref.map(str::to_string),
         updated_since: None,
-        limit: None,
+        limit: Some(QUERY_IDS_LIMIT),
     };
     let value = run_blocking(call(plugin, project_root, METHOD_JOURNAL_QUERY_IDS, query))??;
     let resp: QueryIdsResult = serde_json::from_value(value).context("decoding journal QueryIdsResult")?;
@@ -600,14 +724,20 @@ pub async fn record_event_async(project_root: &Path, event: JournalEvent) {
 }
 
 /// Map a wire workflow-event kind (as emitted by the broadcaster) to a
-/// [`JournalEventKind`]. Returns `None` for kinds with no journal mapping
-/// (e.g. `phase_failed`), which the sink skips.
+/// [`JournalEventKind`]. Returns `None` for kinds with no journal mapping.
+///
+/// `phase_failed` maps to [`JournalEventKind::PhaseCompleted`] carrying a
+/// `status: "failed"` (the journal protocol has no dedicated `PhaseFailed`
+/// variant). This makes a failed phase — including its exit-code + stderr
+/// snippet, preserved in the event `detail` — visible in `journal_events`
+/// instead of only in the checkpoint `snapshot_json` decision history.
 fn wire_kind_to_journal(wire_kind: &str) -> Option<animus_journal_protocol::JournalEventKind> {
     use animus_journal_protocol::JournalEventKind as K;
     match wire_kind {
         "workflow_started" => Some(K::RunStarted),
         "phase_started" => Some(K::PhaseStarted),
         "phase_completed" => Some(K::PhaseCompleted),
+        "phase_failed" => Some(K::PhaseCompleted),
         "workflow_completed" => Some(K::RunCompleted),
         "workflow_failed" => Some(K::RunFailed),
         _ => None,
@@ -630,8 +760,15 @@ pub async fn record_wire_event(
     };
     let phase = payload.get("phase_id").and_then(|v| v.as_str()).map(str::to_string);
     let agent = payload.get("agent").or_else(|| payload.get("tool")).and_then(|v| v.as_str()).map(str::to_string);
-    let status =
-        payload.get("phase_status").or_else(|| payload.get("status")).and_then(|v| v.as_str()).map(str::to_string);
+    let status = payload
+        .get("phase_status")
+        .or_else(|| payload.get("status"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        // A `phase_failed` wire event folds into `PhaseCompleted`; stamp an
+        // explicit failed status when the payload didn't carry one so consumers
+        // reading `journal_events` can tell a failed phase from a successful one.
+        .or_else(|| (wire_kind == "phase_failed").then(|| "failed".to_string()));
     let workflow_ref = payload.get("workflow_ref").and_then(|v| v.as_str()).map(str::to_string);
     let event = JournalEvent {
         run_id: workflow_id.to_string(),
@@ -647,63 +784,23 @@ pub async fn record_wire_event(
 }
 
 // ---------------------------------------------------------------------------
-// Resident-host machinery (mirrors config_source_client).
+// Resident-host machinery (cross-role shared registry — 0.7 Layer B).
+//
+// Warm `workflow_journal` hosts live in the process-global
+// `ResidentHostRegistry` shared with `config_source` / `subject_backend`, keyed
+// by the plugin's binary path + mtime. A plugin binary that also serves those
+// roles is therefore ONE shared process, spawned + handshaked once.
 // ---------------------------------------------------------------------------
-
-struct ResidentHost {
-    host: PluginHost,
-    plugin_path: PathBuf,
-    binary_mtime_nanos: u128,
-    generation: u64,
-}
-
-fn next_generation() -> u64 {
-    static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-fn binary_mtime_nanos(path: &Path) -> u128 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn resident_hosts() -> &'static Mutex<HashMap<PathBuf, ResidentHost>> {
-    static HOSTS: OnceLock<Mutex<HashMap<PathBuf, ResidentHost>>> = OnceLock::new();
-    HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 fn normalize_root(project_root: &Path) -> PathBuf {
     std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf())
 }
 
-/// Reap every resident `workflow_journal` host. Wired into daemon graceful
-/// shutdown so warm plugin processes terminate cleanly. Idempotent.
+/// Reap every resident host in the shared registry. Wired into daemon graceful
+/// shutdown so warm plugin processes terminate cleanly. Idempotent — a prior
+/// config_source teardown may already have drained the shared registry.
 pub async fn shutdown_resident_hosts() {
-    let hosts: Vec<ResidentHost> = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        guard.drain().map(|(_, v)| v).collect()
-    };
-    for resident in hosts {
-        let _ = resident.host.shutdown().await;
-    }
-}
-
-async fn drop_resident_host_if_current(project_root: &Path, failed_gen: u64) {
-    let key = normalize_root(project_root);
-    let resident = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        match guard.get(&key) {
-            Some(existing) if existing.generation == failed_gen => guard.remove(&key),
-            _ => None,
-        }
-    };
-    if let Some(resident) = resident {
-        let _ = resident.host.shutdown().await;
-    }
+    global_resident_host_registry().shutdown_all().await;
 }
 
 enum ResidentCallError {
@@ -747,19 +844,40 @@ async fn journal_rpc(
         .map_err(ResidentCallError::from_host_error)
 }
 
-async fn with_resident_host<T, F, Fut>(plugin: &DiscoveredPlugin, project_root: &Path, mut call: F) -> Result<T>
+/// Acquire the shared resident host for `plugin` and run `call` against a clone
+/// of it, retrying once (reap + re-spawn) on a death-like failure. All other
+/// errors propagate without a re-spawn.
+///
+/// The host lives in the process-global [`ResidentHostRegistry`] keyed by the
+/// plugin's binary path + mtime, shared with the other resident-style roles. The
+/// lease is held across the RPC `.await` so LRU pressure from another role can
+/// never evict the host mid-call. `project_root` no longer keys the host (it is
+/// passed to the plugin per call); it is retained for the call signature.
+async fn with_resident_host<T, F, Fut>(plugin: &DiscoveredPlugin, _project_root: &Path, mut call: F) -> Result<T>
 where
     F: FnMut(PluginHost) -> Fut,
     Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
 {
-    let (host, generation) = acquire_resident_host(plugin, project_root).await?;
-    match call(host).await {
+    let registry = global_resident_host_registry();
+    let mtime = binary_mtime_nanos(&plugin.path);
+    // Spawn-context fingerprint matching `spawn_journal_host`: full parent env
+    // forwarded, no working dir, no notification hint — identical to the
+    // `config_source` context, so a plugin binary serving BOTH roles shares one
+    // process.
+    let context = journal_spawn_context();
+
+    let lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
+    let generation = lease.generation();
+    match call(lease.host().clone()).await {
         Ok(value) => Ok(value),
         Err(ResidentCallError::Other(err)) => Err(err),
         Err(ResidentCallError::Death(err)) => {
-            drop_resident_host_if_current(project_root, generation).await;
-            let (host, _gen) = acquire_resident_host(plugin, project_root).await?;
-            match call(host).await {
+            // Reap ONLY the exact host that failed (a concurrent caller may have
+            // already replaced it), then re-spawn once and retry.
+            drop(lease);
+            registry.invalidate_generation(&plugin.path, mtime, &context, generation).await;
+            let lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
+            match call(lease.host().clone()).await {
                 Ok(value) => Ok(value),
                 Err(ResidentCallError::Other(retry_err)) => Err(retry_err),
                 Err(ResidentCallError::Death(retry_err)) => Err(retry_err.context(format!(
@@ -771,60 +889,34 @@ where
     }
 }
 
-async fn acquire_resident_host(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<(PluginHost, u64)> {
-    let key = normalize_root(project_root);
-    let current_mtime = binary_mtime_nanos(&plugin.path);
-    {
-        let guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(resident) = guard.get(&key) {
-            if resident.plugin_path == plugin.path && resident.binary_mtime_nanos == current_mtime {
-                return Ok((resident.host.clone(), resident.generation));
+/// Lease the shared resident host for `plugin`, spawning + handshaking it once
+/// via the [`ResidentHostRegistry`] if it is not already live. A handshake
+/// failure inside the spawn closure tears the half-started child down (it is
+/// never inserted) so a retry re-spawns cleanly.
+async fn acquire_resident_lease(
+    registry: &ResidentHostRegistry,
+    plugin: &DiscoveredPlugin,
+    mtime: u128,
+    context: &str,
+) -> Result<ResidentHostLease> {
+    registry
+        .get_or_spawn(&plugin.path, mtime, context, || async {
+            let host = spawn_journal_host(plugin).await?;
+            if let Err(err) = host.handshake().await {
+                let _ = host.clone().shutdown().await;
+                return Err(err).with_context(|| format!("handshake with workflow_journal plugin {}", plugin.name));
             }
-        }
-    }
+            Ok(host)
+        })
+        .await
+}
 
-    let host = spawn_journal_host(plugin).await?;
-    host.handshake().await.with_context(|| format!("handshake with workflow_journal plugin {}", plugin.name))?;
-
-    enum Outcome {
-        UseExisting { winner: PluginHost, generation: u64, reap_ours: PluginHost },
-        Installed { ours: PluginHost, generation: u64, reap_old: Option<PluginHost> },
-    }
-    let outcome = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        match guard.get(&key) {
-            Some(existing) if existing.plugin_path == plugin.path && existing.binary_mtime_nanos == current_mtime => {
-                Outcome::UseExisting { winner: existing.host.clone(), generation: existing.generation, reap_ours: host }
-            }
-            _ => {
-                let ours = host.clone();
-                let generation = next_generation();
-                let replaced = guard.insert(
-                    key,
-                    ResidentHost {
-                        host,
-                        plugin_path: plugin.path.clone(),
-                        binary_mtime_nanos: current_mtime,
-                        generation,
-                    },
-                );
-                Outcome::Installed { ours, generation, reap_old: replaced.map(|r| r.host) }
-            }
-        }
-    };
-
-    match outcome {
-        Outcome::UseExisting { winner, generation, reap_ours } => {
-            let _ = reap_ours.shutdown().await;
-            Ok((winner, generation))
-        }
-        Outcome::Installed { ours, generation, reap_old } => {
-            if let Some(old) = reap_old {
-                let _ = old.shutdown().await;
-            }
-            Ok((ours, generation))
-        }
-    }
+/// Spawn-context fingerprint for a `workflow_journal` host, matching
+/// [`spawn_journal_host`]: full parent env forwarded, no working dir, no
+/// notification hint.
+fn journal_spawn_context() -> String {
+    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    orchestrator_plugin_host::resident_host_registry::spawn_context_fingerprint(&forwarded_env, None, None)
 }
 
 async fn spawn_journal_host(plugin: &DiscoveredPlugin) -> Result<PluginHost> {
@@ -862,7 +954,7 @@ mod tests {
             id: id.to_string(),
             task_id: "TASK-1".to_string(),
             workflow_ref: Some("task-default".to_string()),
-            subject: SubjectRef::task("TASK-1".to_string()),
+            subject: Some(SubjectRef::task("TASK-1".to_string())),
             input: None,
             vars: HashMap::new(),
             status: WorkflowStatus::Running,
@@ -898,7 +990,7 @@ mod tests {
         let mut wf = sample_workflow(id);
         // A generic BaaS dynamic-kind subject carries NO task_id and is
         // kind-qualified (e.g. blog:BLOG-001).
-        wf.subject = SubjectRef::new(kind, subject_id);
+        wf.subject = Some(SubjectRef::new(kind, subject_id));
         wf.task_id = String::new();
         wf.workflow_ref = Some("draft-blog".to_string());
         wf
@@ -919,8 +1011,8 @@ mod tests {
         // And it must round-trip back to the same subject (the denormalized
         // mirror is stripped; the model derives the subject from `subject`).
         let back = from_journal_run(run).expect("from run");
-        assert_eq!(back.subject.kind(), "blog");
-        assert_eq!(back.subject.id(), "blog:BLOG-001");
+        assert_eq!(back.subject.as_ref().unwrap().kind(), "blog");
+        assert_eq!(back.subject.as_ref().unwrap().id(), "blog:BLOG-001");
         assert!(back.task_id.is_empty());
     }
 
@@ -943,7 +1035,7 @@ mod tests {
         // The denormalized key must not break workflow deserialization.
         let back = from_journal_run(run).expect("from run with subject_id key");
         assert_eq!(back.id, "wf-blog-2");
-        assert_eq!(back.subject.id(), "blog:BLOG-002");
+        assert_eq!(back.subject.as_ref().unwrap().id(), "blog:BLOG-002");
     }
 
     #[test]
@@ -958,6 +1050,50 @@ mod tests {
         // The reserved key must not break workflow deserialization.
         let back = from_journal_run(run).expect("from run with actor key");
         assert_eq!(back.id, "wf-2");
+    }
+
+    #[test]
+    fn wire_kind_phase_failed_maps_to_completed_with_failed_status() {
+        use animus_journal_protocol::JournalEventKind as K;
+        // A failed phase must reach `journal_events` (it previously mapped to
+        // None and was silently dropped). The journal protocol has no dedicated
+        // PhaseFailed variant, so it folds into PhaseCompleted while the failed
+        // status + command exit-code/stderr survive in the event detail.
+        assert!(matches!(wire_kind_to_journal("phase_failed"), Some(K::PhaseCompleted)));
+        assert!(wire_kind_to_journal("nonexistent_kind").is_none());
+    }
+
+    #[test]
+    fn phase_failed_wire_event_carries_failed_status_and_detail() {
+        // The daemon tee forwards the raw phase_failed payload; record_wire_event
+        // must lift a `failed` status (even when the payload omits one) and
+        // preserve the exit-code + stderr snippet in `detail` for diagnosis.
+        let payload = serde_json::json!({
+            "phase_id": "mark-running",
+            "exit_code": 2,
+            "stderr": "--id must not be empty",
+        });
+        let kind = wire_kind_to_journal("phase_failed").expect("phase_failed maps");
+        let status = payload
+            .get("phase_status")
+            .or_else(|| payload.get("status"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| Some("failed".to_string()));
+        let event = JournalEvent {
+            run_id: "wf-1".to_string(),
+            workflow_ref: None,
+            kind,
+            phase: payload.get("phase_id").and_then(|v| v.as_str()).map(str::to_string),
+            agent: None,
+            status,
+            ts: chrono::Utc::now(),
+            detail: payload,
+        };
+        assert_eq!(event.status.as_deref(), Some("failed"));
+        assert_eq!(event.phase.as_deref(), Some("mark-running"));
+        assert_eq!(event.detail.get("exit_code").and_then(serde_json::Value::as_i64), Some(2));
+        assert_eq!(event.detail.get("stderr").and_then(serde_json::Value::as_str), Some("--id must not be empty"));
     }
 
     #[test]

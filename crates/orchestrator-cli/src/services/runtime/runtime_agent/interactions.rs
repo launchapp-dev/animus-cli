@@ -80,7 +80,13 @@ pub(super) fn handle_agent_interactions_list(
     project_root: &str,
     json_output: bool,
 ) -> Result<()> {
-    let interactions = animus_runtime_shared::list_interactions(project_root, args.all, args.agent.as_deref())?;
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+    let interactions = match actor.as_ref() {
+        Some(actor) => {
+            animus_runtime_shared::list_interactions_for_actor(project_root, args.all, args.agent.as_deref(), actor)?
+        }
+        None => animus_runtime_shared::list_interactions(project_root, args.all, args.agent.as_deref())?,
+    };
     if !json_output {
         if interactions.is_empty() {
             println!("no pending interactions");
@@ -152,8 +158,12 @@ pub(super) fn handle_agent_interactions_show(
     project_root: &str,
     json_output: bool,
 ) -> Result<()> {
-    let record = animus_runtime_shared::load_interaction(project_root, &args.id)?
-        .ok_or_else(|| anyhow!("no interaction with id '{}'", args.id))?;
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+    let record = match actor.as_ref() {
+        Some(actor) => animus_runtime_shared::load_interaction_for_actor(project_root, &args.id, actor)?,
+        None => animus_runtime_shared::load_interaction(project_root, &args.id)?,
+    }
+    .ok_or_else(|| anyhow!("no interaction with id '{}'", args.id))?;
     if !json_output && !record.questions.is_empty() {
         println!("{}\n", render_structured_questions(&record));
     }
@@ -293,6 +303,7 @@ pub(super) async fn handle_agent_interactions_answer(
     project_root: &str,
     json_output: bool,
 ) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let updated_input = args
         .updated_input
         .as_deref()
@@ -300,7 +311,7 @@ pub(super) async fn handle_agent_interactions_answer(
             serde_json::from_str::<Value>(raw).map_err(|err| anyhow!("--updated-input is not valid JSON: {err}"))
         })
         .transpose()?;
-    let (record, workflow_resume) = answer_interaction_op_with_resume(
+    let (record, workflow_resume) = answer_interaction_op_with_resume_for_actor(
         project_root,
         &args.id,
         AnswerOptions {
@@ -314,6 +325,7 @@ pub(super) async fn handle_agent_interactions_answer(
             updated_input,
             ..AnswerOptions::default()
         },
+        actor.as_ref(),
     )
     .await?;
     let mut payload = serde_json::to_value(&record)?;
@@ -324,8 +336,20 @@ pub(super) async fn handle_agent_interactions_answer(
 }
 
 pub(crate) fn answer_interaction_op(project_root: &str, id: &str, opts: &AnswerOptions) -> Result<InteractionRecord> {
-    let record = animus_runtime_shared::load_interaction(project_root, id)?
-        .ok_or_else(|| anyhow!("no interaction with id '{}'", id))?;
+    answer_interaction_op_for_actor(project_root, id, opts, None)
+}
+
+pub(crate) fn answer_interaction_op_for_actor(
+    project_root: &str,
+    id: &str,
+    opts: &AnswerOptions,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<InteractionRecord> {
+    let record = match actor {
+        Some(actor) => animus_runtime_shared::load_interaction_for_actor(project_root, id, actor)?,
+        None => animus_runtime_shared::load_interaction(project_root, id)?,
+    }
+    .ok_or_else(|| anyhow!("no interaction with id '{}'", id))?;
     let answer = match record.kind {
         InteractionKind::Question if !record.questions.is_empty() => {
             if opts.allow || opts.deny {
@@ -336,19 +360,21 @@ pub(crate) fn answer_interaction_op(project_root: &str, id: &str, opts: &AnswerO
                 return Err(anyhow!("a structured question answer requires --select and/or --text"));
             }
             let summary = structured_answer_summary(&answers, response.as_deref());
-            let answered = animus_runtime_shared::apply_interaction_answer(
-                project_root,
-                id,
-                InteractionAnswer {
-                    answer: summary,
-                    message: opts.message.clone(),
-                    answered_by: opts.answered_by.clone(),
-                    answers: Some(answers).filter(|map| !map.is_empty()),
-                    response,
-                    updated_input: None,
-                    updated_permissions: None,
-                },
-            )?;
+            let answer = InteractionAnswer {
+                answer: summary,
+                message: opts.message.clone(),
+                answered_by: opts.answered_by.clone(),
+                answers: Some(answers).filter(|map| !map.is_empty()),
+                response,
+                updated_input: None,
+                updated_permissions: None,
+            };
+            let answered = match actor {
+                Some(actor) => {
+                    animus_runtime_shared::apply_interaction_answer_for_actor(project_root, id, answer, actor)?
+                }
+                None => animus_runtime_shared::apply_interaction_answer(project_root, id, answer)?,
+            };
             emit_interaction_event("interaction_answered", project_root, &answered);
             return Ok(answered);
         }
@@ -384,19 +410,21 @@ pub(crate) fn answer_interaction_op(project_root: &str, id: &str, opts: &AnswerO
     } else {
         None
     };
-    let answered = animus_runtime_shared::apply_interaction_answer(
-        project_root,
-        id,
-        InteractionAnswer {
-            answer,
-            message: opts.message.clone(),
-            answered_by: opts.answered_by.clone(),
-            answers: None,
-            response: None,
-            updated_input: if is_allow { opts.updated_input.clone() } else { None },
-            updated_permissions,
-        },
-    )?;
+    let interaction_answer = InteractionAnswer {
+        answer,
+        message: opts.message.clone(),
+        answered_by: opts.answered_by.clone(),
+        answers: None,
+        response: None,
+        updated_input: if is_allow { opts.updated_input.clone() } else { None },
+        updated_permissions,
+    };
+    let answered = match actor {
+        Some(actor) => {
+            animus_runtime_shared::apply_interaction_answer_for_actor(project_root, id, interaction_answer, actor)?
+        }
+        None => animus_runtime_shared::apply_interaction_answer(project_root, id, interaction_answer)?,
+    };
     emit_interaction_event("interaction_answered", project_root, &answered);
     Ok(answered)
 }
@@ -407,12 +435,25 @@ pub(crate) fn answer_interaction_op(project_root: &str, id: &str, opts: &AnswerO
 // decision as feedback. Resume failures never fail the answer; they come
 // back in the second tuple slot with the exact `animus workflow resume`
 // command as guidance.
+#[cfg(test)]
 pub(crate) async fn answer_interaction_op_with_resume(
     project_root: &str,
     id: &str,
     opts: AnswerOptions,
 ) -> Result<(InteractionRecord, Option<Value>)> {
-    let record = answer_interaction_op(project_root, id, &opts)?;
+    answer_interaction_op_with_resume_for_actor(project_root, id, opts, None).await
+}
+
+pub(crate) async fn answer_interaction_op_with_resume_for_actor(
+    project_root: &str,
+    id: &str,
+    opts: AnswerOptions,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<(InteractionRecord, Option<Value>)> {
+    let record = match actor {
+        Some(actor) => answer_interaction_op_for_actor(project_root, id, &opts, Some(actor))?,
+        None => answer_interaction_op(project_root, id, &opts)?,
+    };
     let workflow_resume = resume_workflow_for_answered_interaction(project_root, &record).await;
     Ok((record, workflow_resume))
 }
@@ -724,7 +765,7 @@ async fn resolve_hook_decision(
         None,
         timeout_secs,
         args.workflow_id.as_deref(),
-        args.task_id.as_deref(),
+        args.subject_id.as_deref(),
     )
     .await;
     let decision = approval_decision_from_outcome(outcome, timeout_secs);
@@ -969,7 +1010,7 @@ phases:
                     agent_id: "swe".to_string(),
                     format: crate::ApproveHookFormat::Generic,
                     workflow_id: None,
-                    task_id: None,
+                    subject_id: None,
                     timeout_secs: Some(1),
                 };
 
@@ -1232,6 +1273,10 @@ phases:
             id: "q-1".to_string(),
             kind: InteractionKind::Question,
             agent_id: "swe".to_string(),
+            actor: None,
+            workspace_id: None,
+            initiated_by: None,
+            eligible_responder_user_ids: Vec::new(),
             workflow_id: Some("wf-1".to_string()),
             task_id: None,
             created_at: "2026-06-11T00:00:00Z".to_string(),
@@ -1289,6 +1334,10 @@ phases:
             id: "q-3".to_string(),
             kind: InteractionKind::Question,
             agent_id: "swe".to_string(),
+            actor: None,
+            workspace_id: None,
+            initiated_by: None,
+            eligible_responder_user_ids: Vec::new(),
             workflow_id: Some("wf-1".to_string()),
             task_id: None,
             created_at: "2026-06-11T00:00:00Z".to_string(),
@@ -1331,6 +1380,10 @@ phases:
             id: "q-2".to_string(),
             kind: InteractionKind::Question,
             agent_id: "swe".to_string(),
+            actor: None,
+            workspace_id: None,
+            initiated_by: None,
+            eligible_responder_user_ids: Vec::new(),
             workflow_id: None,
             task_id: None,
             created_at: "2026-06-11T00:00:00Z".to_string(),

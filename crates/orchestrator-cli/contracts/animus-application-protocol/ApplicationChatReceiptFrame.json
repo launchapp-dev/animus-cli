@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApplicationChatReceiptFrame",
+  "description": "Exact durable JSONL receipt frames used by application chat callers.",
+  "oneOf": [
+    {
+      "description": "Canonical user row was durably accepted.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "description": "Conversation identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "message_id": {
+          "description": "Canonical user-message identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "operation_id": {
+          "description": "Durable operation identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "seq": {
+          "description": "Canonical user-message sequence.",
+          "$ref": "#/$defs/ApplicationChatSequence"
+        },
+        "status": {
+          "description": "Must be `user_accepted`.",
+          "$ref": "#/$defs/UserAcceptedStatus"
+        },
+        "type": {
+          "type": "string",
+          "const": "user_message_accepted"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "status",
+        "conversation_id",
+        "seq",
+        "message_id",
+        "operation_id"
+      ]
+    },
+    {
+      "description": "Assistant row was durably completed.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "description": "Conversation identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "message_id": {
+          "description": "Canonical assistant-message identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "operation_id": {
+          "description": "Durable operation identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "seq": {
+          "description": "Canonical assistant-message sequence.",
+          "$ref": "#/$defs/ApplicationChatSequence"
+        },
+        "session_id": {
+          "description": "Optional provider continuity pointer.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApplicationProtocolString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "description": "Must be `completed`.",
+          "$ref": "#/$defs/CompletedStatus"
+        },
+        "type": {
+          "type": "string",
+          "const": "turn_completed"
+        },
+        "user_message_id": {
+          "description": "Accepted user-message identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "user_seq": {
+          "description": "Accepted user-message sequence.",
+          "$ref": "#/$defs/ApplicationChatSequence"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "status",
+        "conversation_id",
+        "seq",
+        "message_id",
+        "user_seq",
+        "user_message_id",
+        "operation_id"
+      ]
+    },
+    {
+      "description": "User row is durable but assistant execution did not complete.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "description": "Conversation identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "error_code": {
+          "description": "Stable, non-sensitive failure code.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "error_message": {
+          "description": "Safe bounded failure description.",
+          "$ref": "#/$defs/ApplicationChatErrorMessage"
+        },
+        "operation_id": {
+          "description": "Durable operation identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "status": {
+          "description": "Confirmed partial-success status.",
+          "$ref": "#/$defs/ApplicationChatFailureStatus"
+        },
+        "type": {
+          "type": "string",
+          "const": "turn_failed"
+        },
+        "user_message_id": {
+          "description": "Accepted user-message identity.",
+          "$ref": "#/$defs/ApplicationProtocolString"
+        },
+        "user_seq": {
+          "description": "Accepted user-message sequence.",
+          "$ref": "#/$defs/ApplicationChatSequence"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "status",
+        "conversation_id",
+        "user_seq",
+        "user_message_id",
+        "operation_id",
+        "error_code",
+        "error_message"
+      ]
+    }
+  ],
+  "$defs": {
+    "ApplicationChatErrorMessage": {
+      "description": "Safe bounded diagnostic for a confirmed assistant failure receipt.",
+      "type": "string",
+      "maxLength": 1024,
+      "minLength": 1
+    },
+    "ApplicationChatFailureStatus": {
+      "description": "Confirmed partial-success terminal status.",
+      "oneOf": [
+        {
+          "description": "Provider or assistant execution failed.",
+          "type": "string",
+          "const": "assistant_failed"
+        },
+        {
+          "description": "Provider or assistant execution was interrupted.",
+          "type": "string",
+          "const": "assistant_interrupted"
+        }
+      ]
+    },
+    "ApplicationChatSequence": {
+      "description": "A non-negative chat sequence exactly representable by JavaScript clients.",
+      "type": "integer",
+      "format": "uint64",
+      "maximum": 9007199254740991,
+      "minimum": 0
+    },
+    "ApplicationProtocolString": {
+      "description": "A bounded, non-empty receipt identifier with no ASCII control characters.",
+      "type": "string",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "CompletedStatus": {
+      "description": "Literal completed-turn status.",
+      "oneOf": [
+        {
+          "description": "`completed`.",
+          "type": "string",
+          "const": "completed"
+        }
+      ]
+    },
+    "UserAcceptedStatus": {
+      "description": "Literal accepted-user status.",
+      "oneOf": [
+        {
+          "description": "`user_accepted`.",
+          "type": "string",
+          "const": "user_accepted"
+        }
+      ]
+    }
+  }
+}

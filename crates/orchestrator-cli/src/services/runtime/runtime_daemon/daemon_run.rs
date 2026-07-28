@@ -460,6 +460,25 @@ where
         Err(_) => return report,
     };
     for (_path, checkpoint) in running {
+        // TASK-933: a DELEGATED coding phase's provider session lives INSIDE the
+        // remote node prepared by an `environment` plugin, NOT in a local
+        // provider plugin. The daemon must not try to resume it against a local
+        // plugin — that plugin never issued the session id and would reject it,
+        // mis-blocking the checkpoint with a misleading reinstall hint. Leave it
+        // Running so the companion runner re-dispatch reuses the node (skip
+        // prepare + `--resume` on the live handle); a dead node was already
+        // terminalized by `recover_orphaned_running_workflows`. This branch is
+        // inert until the companion runner persists `environment` (the field is
+        // `None` for every local run and for every runner without the change).
+        if checkpoint.environment.is_some() {
+            tracing::info!(
+                actor = protocol::ACTOR_DAEMON,
+                workflow_id = %checkpoint.workflow_id,
+                phase_id = %checkpoint.phase_id,
+                "delegated phase: skipping local provider resume; preserved for runner re-dispatch to reuse the node (TASK-933)"
+            );
+            continue;
+        }
         // Guard rail: provider plugins can only resume an external session
         // they themselves issued. If no provider_session_id was captured
         // before the daemon crashed, dispatching ANY id (the run_id, an
@@ -654,11 +673,18 @@ impl DaemonRunHooks for CliDaemonRunHost {
         // steady-state dispatch leg on the first tick after boot.
         let resume_orphans = journal_resume_enabled(project_root);
 
+        // STARTUP passes `skip_live_delegated = false`: `EnvironmentBroker::start`
+        // → `reap_prior_daemon_records` has already torn down the prior daemon
+        // instance's remote nodes, so a delegated `Running` row surviving into
+        // startup is DEAD and must be handled here (resumed/cancelled) — shielding
+        // it would strand it `Running` forever. Only the steady-state sweep, where
+        // the delegate is still alive on its node, passes `true`.
         let orphans = recover_orphaned_running_workflows(
             startup_hub as Arc<dyn ServiceHub>,
             project_root,
             &resumable_workflow_ids,
             resume_orphans,
+            false,
         )
         .await;
 
@@ -766,6 +792,35 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
+    // REQ-048 cross-phase environment broker: route non-local environments
+    // through a daemon-owned node shared by every phase of a run. The routing
+    // table decides which dispatches are brokered; the broker binds a private
+    // local socket and reaps any nodes leaked by a prior daemon instance. A
+    // bind failure is non-fatal — the runner then falls back to its own
+    // per-phase environment path.
+    process_manager.environment_routing = workflow_config.config.environment_routing.clone();
+    // Map each workflow's `environment:` override (id -> environment id, lowercased
+    // keys) so the broker gate can honor a workflow-level environment even when no
+    // kind-level routing rule exists — the common deploy shape. Without this the
+    // broker never engaged and each phase prepared its own node. TASK-431 / REQ-051.
+    process_manager.workflow_environments = workflow_config
+        .config
+        .workflows
+        .iter()
+        .filter_map(|workflow| workflow.environment.as_ref().map(|env| (workflow.id.to_ascii_lowercase(), env.clone())))
+        .collect();
+    match orchestrator_daemon_runtime::EnvironmentBroker::start(project_root).await {
+        Ok(broker) => {
+            process_manager = process_manager.with_environment_broker(broker);
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "animus.runtime.environment_broker",
+                %error,
+                "failed to start environment broker; workflow runners fall back to per-phase environment preparation"
+            );
+        }
+    }
     let mut host = CliDaemonRunHost::new(project_root, json, start_config);
     let logger = host.logger();
     let mut driver: SlimProjectTickDriver<'_> =
@@ -2408,7 +2463,9 @@ workflows:
             // YAML-only custom phase with decision_contract. No
             // companion entry in agent-runtime-config.v2.json — the
             // overlay merge is the ONLY surface that injects it.
-            let yaml = r#"agents:
+            let yaml = r#"tools_allowlist:
+  - cargo
+agents:
   default:
     description: default agent
     role: software_engineer
@@ -2466,7 +2523,19 @@ phases:
             let _ = orchestrator_core::FileServiceHub::new(&root).expect("hub");
             let workflows_dir = project.path().join(".animus").join("workflows");
             std::fs::create_dir_all(&workflows_dir).expect("mkdir");
-            let yaml = r#"workflows:
+            let yaml = r#"tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: default agent
+    role: software_engineer
+    tool: claude
+phases:
+  research:
+    mode: agent
+    agent_id: default
+    directive: Research the topic.
+workflows:
   - id: gated-research
     name: Gated Research
     description: research phase with on_verdict routing

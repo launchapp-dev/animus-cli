@@ -15,8 +15,22 @@ use crate::workflow_config::PhaseTransitionConfig;
 
 enum GateEvaluationResult {
     Pass,
-    Rework { reason: String, target_phase: Option<String> },
-    Fail { reason: String },
+    Rework {
+        reason: String,
+        target_phase: Option<String>,
+    },
+    Fail {
+        reason: String,
+    },
+    /// A custom verdict key resolved through the phase `on_verdict` map to an
+    /// arbitrary target phase (forward or backward jump). `backward` is true
+    /// when the target is at or before the current phase index, in which case
+    /// the transition is loop-guarded and counted like a rework.
+    Route {
+        reason: String,
+        target_phase: String,
+        backward: bool,
+    },
 }
 
 pub(crate) struct TransitionEffect {
@@ -447,6 +461,56 @@ impl WorkflowLifecycleExecutor {
         }
     }
 
+    /// Release a run that the dispatcher is HOLDING for a fan-in barrier (see
+    /// `super::dependency`): start it now that its upstream dependencies are
+    /// satisfied. This is the lifecycle primitive the dispatch/reconcile owner
+    /// calls for each `resolve_ready_joins` result whose decision is `Fire` — a held
+    /// join is represented as a `Pending` run with no phase yet started, exactly the
+    /// shape this method acts on.
+    ///
+    /// Idempotent and narrow: it acts ONLY on a still-held run — one that is
+    /// `Pending` and has not started any phase. A run that has already been
+    /// released (or is running / terminal) is left untouched and the call returns
+    /// `false`, so a duplicate release from a repeated evaluation is a safe no-op.
+    /// Returns `true` when the run was transitioned into its first running phase.
+    pub fn release_held_run(&self, workflow: &mut OrchestratorWorkflow) -> bool {
+        // A held run is Pending with no phase yet started; anything else has already
+        // advanced past the barrier and must not be re-started.
+        if workflow.status != WorkflowStatus::Pending {
+            return false;
+        }
+        if workflow.phases.iter().any(|phase| phase.started_at.is_some()) {
+            return false;
+        }
+
+        let mut machine = self.state_machine(workflow.machine_state);
+        for event in [WorkflowMachineEvent::Start, WorkflowMachineEvent::PhaseStarted] {
+            if let Err(error) = machine.apply(event) {
+                tracing::warn!(
+                    workflow_id = %workflow.id,
+                    state = ?machine.state(),
+                    event = ?event,
+                    %error,
+                    "release_held_run halted: transition unavailable; run left held"
+                );
+                return false;
+            }
+        }
+
+        workflow.machine_state = machine.state();
+        workflow.sync_status();
+        let now = Utc::now();
+        if let Some(first) = workflow.phases.get_mut(0) {
+            first.status = WorkflowPhaseStatus::Running;
+            first.started_at = Some(now);
+            first.attempt = first.attempt.saturating_add(1);
+            workflow.current_phase = Some(first.phase_id.clone());
+        }
+        workflow.current_phase_index = 0;
+        workflow.started_at = now;
+        true
+    }
+
     pub fn pause(&self, workflow: &mut OrchestratorWorkflow) {
         if matches!(
             workflow.status,
@@ -582,6 +646,9 @@ impl WorkflowLifecycleExecutor {
             }
             GateEvaluationResult::Fail { reason } => {
                 self.build_gate_fail_effect(decision, current_phase_id, reason, &workflow.id, machine)
+            }
+            GateEvaluationResult::Route { reason, target_phase, backward } => {
+                self.build_route_effect(decision, current_phase_id, target_phase, reason, *backward, workflow, machine)
             }
         }
     }
@@ -798,6 +865,79 @@ impl WorkflowLifecycleExecutor {
         })
     }
 
+    // Transition driven by a custom verdict key that resolved (via the phase
+    // `on_verdict` map) to an arbitrary target phase. A forward jump drives the
+    // advance-with-target machine path; a backward/self jump drives the retry
+    // path and is counted against the target's rework budget (the loop guard is
+    // enforced upstream in `evaluate_gates`).
+    fn build_route_effect(
+        &self,
+        decision: &Option<PhaseDecision>,
+        current_phase_id: &str,
+        target_phase: &str,
+        reason: &str,
+        backward: bool,
+        workflow: &OrchestratorWorkflow,
+        machine: &mut WorkflowStateMachine,
+    ) -> Result<TransitionEffect> {
+        let Some(target_idx) = find_phase_index(&workflow.phases, target_phase) else {
+            return self.build_gate_fail_effect(
+                decision,
+                current_phase_id,
+                &format!("verdict routing target '{target_phase}' is not a phase in this workflow"),
+                &workflow.id,
+                machine,
+            );
+        };
+        let target_phase_id = workflow.phases[target_idx].phase_id.clone();
+        let confidence = decision.as_ref().map(|d| d.confidence).unwrap_or(1.0);
+        let risk = decision.as_ref().map(|d| d.risk).unwrap_or(WorkflowDecisionRisk::Medium);
+        let guardrail_violations = decision.as_ref().map(|d| d.guardrail_violations.clone()).unwrap_or_default();
+        let (machine_version, machine_hash, machine_source) = self.machine_metadata();
+
+        let (action, final_machine_state) = if backward {
+            apply_machine_event(machine, WorkflowMachineEvent::GatesFailed, &workflow.id)?;
+            let intermediate = machine.state();
+            let mut retry_machine =
+                WorkflowStateMachine::with_definition(intermediate, self.state_machines.workflow.clone());
+            apply_machine_event(&mut retry_machine, WorkflowMachineEvent::RetryPhaseStarted, &workflow.id)?;
+            (WorkflowDecisionAction::Rework, retry_machine.state())
+        } else {
+            apply_machine_event(machine, WorkflowMachineEvent::PhaseTargetSelected, &workflow.id)?;
+            apply_machine_event(machine, WorkflowMachineEvent::Start, &workflow.id)?;
+            apply_machine_event(machine, WorkflowMachineEvent::PhaseStarted, &workflow.id)?;
+            (WorkflowDecisionAction::Advance, machine.state())
+        };
+
+        let record = WorkflowDecisionRecord {
+            timestamp: Utc::now(),
+            phase_id: current_phase_id.to_string(),
+            decision: action,
+            target_phase: Some(target_phase_id.clone()),
+            reason: reason.to_string(),
+            confidence,
+            risk,
+            source: WorkflowDecisionSource::Llm,
+            guardrail_violations,
+            machine_version,
+            machine_hash,
+            machine_source,
+        };
+
+        Ok(TransitionEffect {
+            next_phase_index: Some(target_idx),
+            phase_status: Some(WorkflowPhaseStatus::Running),
+            decision_record: Some(record),
+            workflow_status: Some(WorkflowStatus::Running),
+            machine_state: final_machine_state,
+            failure_reason: None,
+            completed_at: None,
+            current_phase: None,
+            rework_increment: if backward { Some(target_phase_id) } else { None },
+            clear_phase_completed_at: backward,
+        })
+    }
+
     fn build_gate_fail_effect(
         &self,
         decision: &Option<PhaseDecision>,
@@ -924,7 +1064,50 @@ impl WorkflowLifecycleExecutor {
                 }
                 GateEvaluationResult::Pass
             }
-            PhaseDecisionVerdict::Unknown => GateEvaluationResult::Pass,
+            PhaseDecisionVerdict::Unknown => {
+                let phase_id =
+                    workflow.phases.get(workflow.current_phase_index).map(|p| p.phase_id.as_str()).unwrap_or("unknown");
+                // A non-builtin verdict carries its raw string on `verdict_key`.
+                // Absent a key (genuinely unrecognized/empty verdict) preserve
+                // the historical tolerant behavior: pass (advance).
+                let key = decision.verdict_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
+                let Some(key) = key else {
+                    return GateEvaluationResult::Pass;
+                };
+                // Route the custom key through this phase's `on_verdict` map,
+                // honoring an agent-selected target when the mapping allows it,
+                // then the configured fixed target.
+                let target = self
+                    .resolve_agent_selected_target(workflow, phase_id, key, decision.target_phase.as_deref())
+                    .or_else(|| self.resolve_verdict_target(phase_id, key));
+                let Some(target) = target else {
+                    return GateEvaluationResult::Fail {
+                        reason: format!(
+                            "phase '{phase_id}' emitted verdict '{key}' but no on_verdict route maps it to a target phase; add an on_verdict entry for '{key}' or emit a built-in verdict (advance/rework/skip/fail)"
+                        ),
+                    };
+                };
+                let backward = find_phase_index(&workflow.phases, &target)
+                    .map(|idx| idx <= workflow.current_phase_index)
+                    .unwrap_or(false);
+                // Loop guard: a backward (or self) jump is counted and bounded by
+                // the same rework budget as an explicit rework.
+                if backward && !self.is_rework_budget_available(&target, &workflow.rework_counts) {
+                    let rework_count = workflow.rework_counts.get(target.as_str()).copied().unwrap_or(0);
+                    let max_reworks = self.max_reworks_for_phase(target.as_str());
+                    return GateEvaluationResult::Fail {
+                        reason: format!(
+                            "rework budget exceeded routing verdict '{key}' to phase {target} ({rework_count} reworks, max {max_reworks})"
+                        ),
+                    };
+                }
+                let reason = if decision.reason.is_empty() {
+                    format!("verdict '{key}' routed to {target}")
+                } else {
+                    decision.reason.clone()
+                };
+                GateEvaluationResult::Route { reason, target_phase: target, backward }
+            }
         }
     }
 

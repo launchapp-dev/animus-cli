@@ -513,7 +513,7 @@ mod tests {
             "manual-queue-enqueue-via-control",
             Utc::now(),
         );
-        assert_eq!(song.to_workflow_run_input().subject().kind(), "song");
+        assert_eq!(song.to_workflow_run_input().subject().unwrap().kind(), "song");
 
         // Canonical task subjects still round-trip as tasks.
         let task = SubjectDispatch::for_subject_with_metadata(
@@ -522,6 +522,6 @@ mod tests {
             "src",
             Utc::now(),
         );
-        assert_eq!(task.to_workflow_run_input().subject().kind(), protocol::orchestrator::SUBJECT_KIND_TASK);
+        assert_eq!(task.to_workflow_run_input().subject().unwrap().kind(), protocol::orchestrator::SUBJECT_KIND_TASK);
     }
 }

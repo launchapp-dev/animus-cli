@@ -30,27 +30,22 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 10 workspace members.
+`Cargo.toml` currently declares 9 workspace members.
 
 | Group | Crates |
 |---|---|
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` |
-| Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
+| Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-runtime` |
 | Support | `orchestrator-logging`, `animus-mcp-oauth` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
-especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
-current runtime pins the main protocol family (`protocol`,
-`animus-config-protocol`, `animus-subject-protocol`,
-`animus-provider-protocol`, `animus-session-backend`,
-`animus-journal-protocol`, and `animus-actor`) to `v0.1.26`. The CLI-specific
-`animus-control-protocol`, `animus-log-storage-protocol`,
-`animus-subject-protocol-wire`, and `animus-workflow-runner-protocol` crates
-are also pinned to `v0.1.26`, while `animus-queue-protocol` and the separate
-`animus-subject-protocol-v05` compatibility line remain on `v0.5.10`.
+especially the workspace root. The current runtime pins every Protocol crate,
+including the application, control, plugin, queue, subject, provider, session,
+journal, config, and kernel contracts, to the unified `v0.7.0-rc.12` source.
+Member crates inherit those pins and no legacy queue/subject source remains.
 
 The release/runtime binary set is:
 

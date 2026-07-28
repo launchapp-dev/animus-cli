@@ -1,5 +1,7 @@
 use clap::{Args, Subcommand};
 
+use super::ACTOR_JSON_HELP;
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum OutputCommand {
     /// Read run event payloads.
@@ -28,6 +30,13 @@ pub(crate) struct OutputRunArgs {
     /// Resolve the latest run id recorded for this workflow, then read it.
     #[arg(long)]
     pub(crate) workflow_id: Option<String>,
+    /// With --workflow-id, read the transcript of THIS phase's run (from the
+    /// phase session checkpoint) instead of the workflow's latest run. Lets the
+    /// UI load logs for a specific/earlier phase, not just the last one.
+    #[arg(long, requires = "workflow_id")]
+    pub(crate) phase: Option<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -46,6 +55,8 @@ pub(crate) struct OutputPhaseOutputsArgs {
     pub(crate) workflow_id: String,
     #[arg(long)]
     pub(crate) phase_id: Option<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

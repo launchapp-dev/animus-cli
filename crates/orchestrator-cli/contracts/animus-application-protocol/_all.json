@@ -1,0 +1,500 @@
+{
+  "$defs": {
+    "AllowedAction": {
+      "description": "Portal-derived action a client may render for a projected resource.\n\nThis enum standardizes the wire vocabulary; it does not grant an action.\nThe authenticated application boundary remains the authority that derives\nthe array for each caller and resource.",
+      "oneOf": [
+        {
+          "const": "read",
+          "description": "Read the resource projection.",
+          "type": "string"
+        },
+        {
+          "const": "inspect",
+          "description": "Inspect an agent's safe configuration projection.",
+          "type": "string"
+        },
+        {
+          "const": "launch",
+          "description": "Launch a workflow run from the resource.",
+          "type": "string"
+        },
+        {
+          "const": "stream",
+          "description": "Mint or consume a stream grant for a run.",
+          "type": "string"
+        },
+        {
+          "const": "send",
+          "description": "Send a message to a conversation.",
+          "type": "string"
+        },
+        {
+          "const": "respond",
+          "description": "Respond to an interaction.",
+          "type": "string"
+        }
+      ],
+      "title": "AllowedAction"
+    },
+    "AllowedApplicationChatControls": {
+      "additionalProperties": false,
+      "description": "Allowed application control values projected by an authenticated portal.\n\nThis is a transport shape only. The portal decides which values appear.",
+      "properties": {
+        "approvals": {
+          "default": [],
+          "description": "Allowed approval selections.",
+          "items": {
+            "type": "boolean"
+          },
+          "type": "array"
+        },
+        "permission_intent": {
+          "default": [],
+          "description": "Allowed permission intent selections.",
+          "items": {
+            "$ref": "#/$defs/ApplicationPermissionIntent"
+          },
+          "type": "array"
+        },
+        "profile_ref": {
+          "default": [],
+          "description": "Allowed canonical profile assertion.",
+          "items": {
+            "$ref": "#/$defs/ApplicationConfiguredRef"
+          },
+          "type": "array"
+        },
+        "reasoning_effort": {
+          "default": [],
+          "description": "Allowed reasoning effort selections.",
+          "items": {
+            "$ref": "#/$defs/ApplicationReasoningEffort"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/$defs/ApplicationChatControlsSchema",
+          "description": "Exact controls schema discriminator."
+        },
+        "skill_ref": {
+          "default": [],
+          "description": "Allowed configured skill references.",
+          "items": {
+            "$ref": "#/$defs/ApplicationConfiguredRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "title": "AllowedApplicationChatControls",
+      "type": "object"
+    },
+    "ApplicationChatControls": {
+      "additionalProperties": false,
+      "description": "Closed application controls envelope accepted by `animus chat send`.",
+      "properties": {
+        "approvals": {
+          "description": "Request kernel-mediated approvals when authorized by the profile.",
+          "type": "boolean"
+        },
+        "permission_intent": {
+          "$ref": "#/$defs/ApplicationPermissionIntent",
+          "description": "Requested provider-neutral permission intent."
+        },
+        "profile_ref": {
+          "$ref": "#/$defs/ApplicationConfiguredRef",
+          "description": "Assertion of the conversation's canonical configured profile."
+        },
+        "reasoning_effort": {
+          "$ref": "#/$defs/ApplicationReasoningEffort",
+          "description": "Requested reasoning effort."
+        },
+        "schema": {
+          "$ref": "#/$defs/ApplicationChatControlsSchema",
+          "description": "Exact controls schema discriminator."
+        },
+        "skill_ref": {
+          "$ref": "#/$defs/ApplicationConfiguredRef",
+          "description": "Configured skill selected from the profile's authorized options."
+        }
+      },
+      "required": [
+        "schema"
+      ],
+      "title": "ApplicationChatControls",
+      "type": "object"
+    },
+    "ApplicationChatControlsSchema": {
+      "description": "Stable schema discriminator for [`ApplicationChatControls`].",
+      "oneOf": [
+        {
+          "const": "animus.chat.application_controls.v1",
+          "description": "`animus.chat.application_controls.v1`.",
+          "type": "string"
+        }
+      ]
+    },
+    "ApplicationChatErrorMessage": {
+      "description": "Safe bounded diagnostic for a confirmed assistant failure receipt.",
+      "maxLength": 1024,
+      "minLength": 1,
+      "type": "string"
+    },
+    "ApplicationChatFailureStatus": {
+      "description": "Confirmed partial-success terminal status.",
+      "oneOf": [
+        {
+          "const": "assistant_failed",
+          "description": "Provider or assistant execution failed.",
+          "type": "string"
+        },
+        {
+          "const": "assistant_interrupted",
+          "description": "Provider or assistant execution was interrupted.",
+          "type": "string"
+        }
+      ]
+    },
+    "ApplicationChatReceiptFrame": {
+      "description": "Exact durable JSONL receipt frames used by application chat callers.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Canonical user row was durably accepted.",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Conversation identity."
+            },
+            "message_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Canonical user-message identity."
+            },
+            "operation_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Durable operation identity."
+            },
+            "seq": {
+              "$ref": "#/$defs/ApplicationChatSequence",
+              "description": "Canonical user-message sequence."
+            },
+            "status": {
+              "$ref": "#/$defs/UserAcceptedStatus",
+              "description": "Must be `user_accepted`."
+            },
+            "type": {
+              "const": "user_message_accepted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "conversation_id",
+            "seq",
+            "message_id",
+            "operation_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Assistant row was durably completed.",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Conversation identity."
+            },
+            "message_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Canonical assistant-message identity."
+            },
+            "operation_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Durable operation identity."
+            },
+            "seq": {
+              "$ref": "#/$defs/ApplicationChatSequence",
+              "description": "Canonical assistant-message sequence."
+            },
+            "session_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ApplicationProtocolString"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional provider continuity pointer."
+            },
+            "status": {
+              "$ref": "#/$defs/CompletedStatus",
+              "description": "Must be `completed`."
+            },
+            "type": {
+              "const": "turn_completed",
+              "type": "string"
+            },
+            "user_message_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Accepted user-message identity."
+            },
+            "user_seq": {
+              "$ref": "#/$defs/ApplicationChatSequence",
+              "description": "Accepted user-message sequence."
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "conversation_id",
+            "seq",
+            "message_id",
+            "user_seq",
+            "user_message_id",
+            "operation_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "User row is durable but assistant execution did not complete.",
+          "properties": {
+            "conversation_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Conversation identity."
+            },
+            "error_code": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Stable, non-sensitive failure code."
+            },
+            "error_message": {
+              "$ref": "#/$defs/ApplicationChatErrorMessage",
+              "description": "Safe bounded failure description."
+            },
+            "operation_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Durable operation identity."
+            },
+            "status": {
+              "$ref": "#/$defs/ApplicationChatFailureStatus",
+              "description": "Confirmed partial-success status."
+            },
+            "type": {
+              "const": "turn_failed",
+              "type": "string"
+            },
+            "user_message_id": {
+              "$ref": "#/$defs/ApplicationProtocolString",
+              "description": "Accepted user-message identity."
+            },
+            "user_seq": {
+              "$ref": "#/$defs/ApplicationChatSequence",
+              "description": "Accepted user-message sequence."
+            }
+          },
+          "required": [
+            "type",
+            "status",
+            "conversation_id",
+            "user_seq",
+            "user_message_id",
+            "operation_id",
+            "error_code",
+            "error_message"
+          ],
+          "type": "object"
+        }
+      ],
+      "title": "ApplicationChatReceiptFrame"
+    },
+    "ApplicationChatSequence": {
+      "description": "A non-negative chat sequence exactly representable by JavaScript clients.",
+      "format": "uint64",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ApplicationChatTurnStatus": {
+      "description": "Terminal status carried by an application chat receipt.",
+      "oneOf": [
+        {
+          "const": "completed",
+          "description": "Assistant message persisted successfully.",
+          "type": "string"
+        },
+        {
+          "const": "assistant_failed",
+          "description": "User message persisted but the provider failed.",
+          "type": "string"
+        },
+        {
+          "const": "assistant_interrupted",
+          "description": "User message persisted but the provider was interrupted.",
+          "type": "string"
+        }
+      ],
+      "title": "ApplicationChatTurnStatus"
+    },
+    "ApplicationConfiguredRef": {
+      "description": "A bounded reference to a server-configured agent profile or skill.",
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "type": "string"
+    },
+    "ApplicationPermissionIntent": {
+      "description": "Provider-neutral permission intent selected by an application.",
+      "oneOf": [
+        {
+          "const": "default",
+          "description": "Inherit safe provider defaults.",
+          "type": "string"
+        },
+        {
+          "const": "review",
+          "description": "Review without broad edit permission.",
+          "type": "string"
+        },
+        {
+          "const": "auto_edit",
+          "description": "Permit ordinary automated edits.",
+          "type": "string"
+        },
+        {
+          "const": "unrestricted",
+          "description": "Request the profile's explicitly authorized unrestricted mode.",
+          "type": "string"
+        }
+      ]
+    },
+    "ApplicationProtocolString": {
+      "description": "A bounded, non-empty receipt identifier with no ASCII control characters.",
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$",
+      "type": "string"
+    },
+    "ApplicationReasoningEffort": {
+      "description": "Application-safe reasoning effort requested from an authorized profile.",
+      "oneOf": [
+        {
+          "const": "low",
+          "description": "Low reasoning effort.",
+          "type": "string"
+        },
+        {
+          "const": "medium",
+          "description": "Medium reasoning effort.",
+          "type": "string"
+        },
+        {
+          "const": "high",
+          "description": "High reasoning effort.",
+          "type": "string"
+        }
+      ]
+    },
+    "ApplicationResourceKind": {
+      "description": "Resource kinds exposed by the application projection boundary.",
+      "oneOf": [
+        {
+          "const": "agent",
+          "description": "Configured agent profile.",
+          "type": "string"
+        },
+        {
+          "const": "chat",
+          "description": "Durable chat conversation.",
+          "type": "string"
+        },
+        {
+          "const": "workflow",
+          "description": "Workflow definition.",
+          "type": "string"
+        },
+        {
+          "const": "run",
+          "description": "Workflow execution.",
+          "type": "string"
+        },
+        {
+          "const": "subject",
+          "description": "Backend-owned subject.",
+          "type": "string"
+        },
+        {
+          "const": "queue_entry",
+          "description": "Queue entry.",
+          "type": "string"
+        },
+        {
+          "const": "operation",
+          "description": "Durable operation record.",
+          "type": "string"
+        },
+        {
+          "const": "interaction",
+          "description": "Human interaction request.",
+          "type": "string"
+        }
+      ],
+      "title": "ApplicationResourceKind"
+    },
+    "CompletedStatus": {
+      "description": "Literal completed-turn status.",
+      "oneOf": [
+        {
+          "const": "completed",
+          "description": "`completed`.",
+          "type": "string"
+        }
+      ]
+    },
+    "ResourceVisibility": {
+      "description": "Visibility vocabulary carried by application resource projections.",
+      "oneOf": [
+        {
+          "const": "private",
+          "description": "Visible only through an explicit relationship or administration.",
+          "type": "string"
+        },
+        {
+          "const": "org",
+          "description": "Visible within the authenticated organization boundary.",
+          "type": "string"
+        },
+        {
+          "const": "public",
+          "description": "Publicly readable.",
+          "type": "string"
+        }
+      ],
+      "title": "ResourceVisibility"
+    },
+    "UserAcceptedStatus": {
+      "description": "Literal accepted-user status.",
+      "oneOf": [
+        {
+          "const": "user_accepted",
+          "description": "`user_accepted`.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "animus-application-protocol",
+  "x-animus-limits": {
+    "application_chat_control_ref_max_utf8_bytes": 64,
+    "application_chat_controls_max_utf8_bytes": 2048,
+    "application_chat_controls_schema": "animus.chat.application_controls.v1",
+    "application_chat_error_max_utf8_bytes": 1024,
+    "application_chat_sequence_max": 9007199254740991,
+    "application_protocol_string_max_utf8_bytes": 512,
+    "schema": "animus.application.limits.v1"
+  }
+}

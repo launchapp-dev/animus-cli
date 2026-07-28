@@ -11,11 +11,14 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
+use orchestrator_plugin_host::resident_host_registry::{
+    binary_mtime_nanos, global_resident_host_registry, ResidentHostLease,
+};
 use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
 
@@ -24,55 +27,6 @@ use super::types::{LoadedWorkflowConfig, WorkflowConfig};
 const CONFIG_SOURCE_KIND: &str = "config_source";
 const CONFIG_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const CONFIG_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// One resident `config_source` plugin host, kept warm across `config/load`
-/// and `config/write` calls for a single project root.
-///
-/// v0.6.6 replaces the v0.6.3 spawn+reap-per-call model (one fork on every
-/// scheduler-loop config load, ~50-60/min) with EXACTLY ONE host per root,
-/// reused for the life of the process. The host is reaped only when it dies
-/// (re-spawn) or on explicit teardown via [`shutdown_resident_hosts`].
-struct ResidentHost {
-    host: PluginHost,
-    /// Path the host was spawned from. A re-spawn re-discovers, so this lets a
-    /// caller confirm the cached host still matches the installed plugin.
-    plugin_path: PathBuf,
-    /// Binary mtime (nanos) at spawn time. If the plugin is upgraded/replaced
-    /// in place (same path, new bytes) while the daemon runs, the mtime changes
-    /// and the cached host is dropped + re-spawned so loads/writes never keep
-    /// using the stale binary/capabilities until a daemon restart.
-    binary_mtime_nanos: u128,
-    /// Monotonic id assigned at insert. Lets a death-like retry reap ONLY the
-    /// exact host that failed: a concurrent caller may have already replaced the
-    /// dead host with a fresh one, and we must not shut down that healthy
-    /// replacement.
-    generation: u64,
-}
-
-/// Source of monotonic [`ResidentHost::generation`] ids.
-fn next_generation() -> u64 {
-    static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Best-effort binary mtime (nanos since epoch); `0` when unavailable. Used only
-/// as a resident-host invalidation signal (an unreadable mtime collides to `0`,
-/// and a later successful read differs and forces a re-spawn).
-fn binary_mtime_nanos(path: &Path) -> u128 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-/// Process-global resident-host cache keyed by project root. The daemon is one
-/// root; the CLI may target several, so a map (not a single slot) is required.
-fn resident_hosts() -> &'static Mutex<HashMap<PathBuf, ResidentHost>> {
-    static HOSTS: OnceLock<Mutex<HashMap<PathBuf, ResidentHost>>> = OnceLock::new();
-    HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 /// Compiled-config cache map: `(normalized project root, actor partition)` =>
 /// `(CacheToken version, compiled config)`. The actor partition (see
@@ -180,33 +134,13 @@ fn normalize_root(project_root: &Path) -> PathBuf {
 /// processes are terminated cleanly (and the CLI's short-lived processes do
 /// not leak a host on exit). Idempotent.
 pub async fn shutdown_resident_hosts() {
-    let hosts: Vec<ResidentHost> = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        guard.drain().map(|(_, v)| v).collect()
-    };
-    for resident in hosts {
-        let _ = resident.host.shutdown().await;
-    }
+    // Cross-role host sharing (0.7 Layer B): resident hosts now live in the
+    // process-global `ResidentHostRegistry` shared with the other resident-style
+    // roles. Draining it here reaps every warm plugin process (a multi-role
+    // plugin shared with `workflow_journal` / `subject_backend` is one process,
+    // reaped once). Idempotent — a later journal/subject teardown drains nothing.
+    global_resident_host_registry().shutdown_all().await;
     compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).clear();
-}
-
-/// Drop + reap the resident host for `project_root` ONLY if the cached entry is
-/// still the generation `failed_gen` that failed. A concurrent caller may have
-/// already reaped that dead host and installed a fresh replacement; reaping by
-/// generation guarantees we never shut down that healthy replacement out from
-/// under the other caller.
-async fn drop_resident_host_if_current(project_root: &Path, failed_gen: u64) {
-    let key = normalize_root(project_root);
-    let resident = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        match guard.get(&key) {
-            Some(existing) if existing.generation == failed_gen => guard.remove(&key),
-            _ => None,
-        }
-    };
-    if let Some(resident) = resident {
-        let _ = resident.host.shutdown().await;
-    }
 }
 
 /// True if a `config_source` plugin is installed (cheap discovery, no spawn).
@@ -220,6 +154,16 @@ pub fn config_source_installed(project_root: &Path) -> bool {
 /// caller surfaces an actionable "no config_source plugin installed" error.
 /// Returns `(base WorkflowConfig, cache_token_version)`.
 pub fn resolve_plugin_base(project_root: &Path, actor: Option<&Actor>) -> Result<Option<(WorkflowConfig, String)>> {
+    // Test-only seam: simulate a config_source plugin whose load FAILS (spawn /
+    // handshake / RPC / DB overload) so tests can exercise the non-swallowing
+    // classification in `try_load_workflow_config` (a present-but-failing source
+    // must surface as `SourceUnavailable`, never as an empty config). Checked
+    // before the success seam so an installed-failure wins.
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(message) = test_seam::failure_for(project_root) {
+        return Err(anyhow!(message));
+    }
+
     // Test-only seam: a synthetic base config injected via
     // `set_test_plugin_base` stands in for an installed config_source plugin so
     // unit tests can exercise the kernel's pack-merge + validate pipeline (which
@@ -266,16 +210,20 @@ impl ResidentCallError {
     }
 }
 
-/// Acquire the resident host for `project_root` (spawning it once if absent),
-/// then run `call` against a clone of it. On a death-like failure (the warm
-/// host's process is presumed dead), reap it, re-spawn exactly once, and retry
-/// the call. All other errors propagate without a re-spawn.
+/// Acquire the resident host for `plugin` (spawning + handshaking it once if
+/// absent), then run `call` against a clone of it. On a death-like failure (the
+/// warm host's process is presumed dead), reap it, re-spawn, and retry the call
+/// with backoff. All other errors propagate without a re-spawn.
 ///
-/// The map lock is never held across the RPC `.await`: we take a clone of the
-/// `PluginHost` (cheap — it is `Arc`-backed) while holding the lock, then drop
-/// the lock before calling. Distinct roots therefore never serialize on each
-/// other's RPCs.
-async fn with_resident_host<T, F, Fut>(plugin: DiscoveredPlugin, project_root: &Path, mut call: F) -> Result<T>
+/// Cross-role host sharing (0.7 Layer B): the host lives in the process-global
+/// [`ResidentHostRegistry`], keyed by the plugin's binary path + mtime — so a
+/// plugin binary that also serves `workflow_journal` / `subject_backend` is ONE
+/// shared process, spawned + handshaked once. The lease returned by the registry
+/// is held across the RPC `.await` so LRU pressure from other roles can never
+/// evict the host out from under an in-flight `config/load` / `config/write`.
+/// `project_root` no longer keys the host (it is passed to the plugin per call);
+/// it is retained in the signature for callers and future diagnostics.
+async fn with_resident_host<T, F, Fut>(plugin: DiscoveredPlugin, _project_root: &Path, mut call: F) -> Result<T>
 where
     F: FnMut(PluginHost) -> Fut,
     Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
@@ -287,20 +235,31 @@ where
     // self-heals rather than surfacing as a hard config error. Structured
     // ("Other") call errors propagate immediately — a genuine backend fault is
     // not retried. `attempt == 0` runs immediately; later attempts reap the last
-    // generation and back off first.
+    // failed generation and back off first.
     const RESPAWN_BACKOFF_MS: [u64; 2] = [150, 600];
-    let mut generation: Option<u64> = None;
+    let registry = global_resident_host_registry();
+    // Snapshot the mtime once: the retry loop reaps the exact failed generation
+    // at this key, and an in-place binary swap mid-retry is vanishingly rare.
+    let mtime = binary_mtime_nanos(&plugin.path);
+    // Spawn-context fingerprint matching `spawn_config_source_host`: the FULL
+    // parent env is forwarded (config_source replaces the kernel's env-reading
+    // YAML interpolator), no working dir, no notification hint. This keeps the
+    // config_source host in a slot distinct from a subject_backend spawn of the
+    // same binary (which forwards only manifest env) — sharing only with roles
+    // that spawn identically (e.g. workflow_journal).
+    let context = config_source_spawn_context();
+    let mut failed_generation: Option<u64> = None;
     let mut first_err_msg: Option<String> = None;
     let mut last_err: Option<anyhow::Error> = None;
     for attempt in 0..=RESPAWN_BACKOFF_MS.len() {
         if attempt > 0 {
-            if let Some(gen) = generation {
-                drop_resident_host_if_current(project_root, gen).await;
+            if let Some(gen) = failed_generation.take() {
+                registry.invalidate_generation(&plugin.path, mtime, &context, gen).await;
             }
             tokio::time::sleep(std::time::Duration::from_millis(RESPAWN_BACKOFF_MS[attempt - 1])).await;
         }
-        let (host, gen) = match acquire_resident_host(&plugin, project_root).await {
-            Ok(pair) => pair,
+        let lease = match acquire_resident_lease(&registry, &plugin, mtime, &context).await {
+            Ok(lease) => lease,
             Err(spawn_err) => {
                 if first_err_msg.is_none() {
                     first_err_msg = Some(format!("{spawn_err}"));
@@ -309,8 +268,10 @@ where
                 continue;
             }
         };
-        generation = Some(gen);
-        match call(host).await {
+        let generation = lease.generation();
+        // `lease` is held for the whole `call(...).await` below, pinning the
+        // shared host against LRU eviction while the RPC is in flight.
+        match call(lease.host().clone()).await {
             Ok(value) => return Ok(value),
             Err(ResidentCallError::Other(err)) => return Err(err),
             Err(ResidentCallError::Death(err)) => {
@@ -318,6 +279,7 @@ where
                     first_err_msg = Some(format!("{err}"));
                 }
                 last_err = Some(err);
+                failed_generation = Some(generation);
             }
         }
     }
@@ -330,83 +292,35 @@ where
     )))
 }
 
-/// Return a clone of the resident host for `project_root` plus its generation
-/// id, spawning + handshaking it if none is cached (or the cached one was
-/// spawned from a different path / a changed binary).
-async fn acquire_resident_host(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<(PluginHost, u64)> {
-    let key = normalize_root(project_root);
-    // A cached host is only reused when it was spawned from the SAME path AND
-    // the binary's mtime is unchanged — so an in-place plugin upgrade/replace
-    // (new bytes at the same path) drops the stale host and re-spawns.
-    let current_mtime = binary_mtime_nanos(&plugin.path);
-    {
-        let guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(resident) = guard.get(&key) {
-            if resident.plugin_path == plugin.path && resident.binary_mtime_nanos == current_mtime {
-                return Ok((resident.host.clone(), resident.generation));
+/// Lease the shared resident host for `plugin`, spawning + handshaking it once
+/// via the [`ResidentHostRegistry`] if it is not already live. A handshake
+/// failure inside the registry's spawn closure tears the half-started child down
+/// (it is never inserted), so the retry loop re-spawns cleanly instead of piling
+/// up orphaned config_source processes.
+async fn acquire_resident_lease(
+    registry: &orchestrator_plugin_host::resident_host_registry::ResidentHostRegistry,
+    plugin: &DiscoveredPlugin,
+    mtime: u128,
+    context: &str,
+) -> Result<ResidentHostLease> {
+    registry
+        .get_or_spawn(&plugin.path, mtime, context, || async {
+            let host = spawn_config_source_host(plugin).await?;
+            if let Err(err) = host.handshake().await {
+                let _ = host.clone().shutdown().await;
+                return Err(err).with_context(|| format!("handshake with config_source plugin {}", plugin.name));
             }
-        }
-    }
+            Ok(host)
+        })
+        .await
+}
 
-    // Spawn + handshake OUTSIDE the map lock so a slow spawn for one root never
-    // blocks another root's cache lookups.
-    let host = spawn_config_source_host(plugin).await?;
-    // Tear the half-started child down on a handshake failure rather than leaking
-    // it (its reader task would otherwise keep the process + slot alive). The
-    // retry loop in `with_resident_host` re-spawns cleanly instead of piling up
-    // orphaned config_source processes under transient handshake failures.
-    if let Err(err) = host.handshake().await {
-        let _ = host.clone().shutdown().await;
-        return Err(err).with_context(|| format!("handshake with config_source plugin {}", plugin.name));
-    }
-
-    // Decide the outcome WITHOUT holding the std Mutex across an `.await`: take
-    // any host that needs reaping out under the lock, drop the guard, then await
-    // the shutdown. (`acquire_resident_host` is the only place that mutates the
-    // map besides shutdown/drop, so the brief window between unlock and reap is
-    // benign — the loser host is owned solely by this stack frame.)
-    enum Outcome {
-        /// A concurrent caller already inserted a matching host: keep theirs,
-        /// reap ours.
-        UseExisting { winner: PluginHost, generation: u64, reap_ours: PluginHost },
-        /// We installed ours; reap the (stale-path) host it replaced, if any.
-        Installed { ours: PluginHost, generation: u64, reap_old: Option<PluginHost> },
-    }
-    let outcome = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        match guard.get(&key) {
-            Some(existing) if existing.plugin_path == plugin.path && existing.binary_mtime_nanos == current_mtime => {
-                Outcome::UseExisting { winner: existing.host.clone(), generation: existing.generation, reap_ours: host }
-            }
-            _ => {
-                let ours = host.clone();
-                let generation = next_generation();
-                let replaced = guard.insert(
-                    key,
-                    ResidentHost {
-                        host,
-                        plugin_path: plugin.path.clone(),
-                        binary_mtime_nanos: current_mtime,
-                        generation,
-                    },
-                );
-                Outcome::Installed { ours, generation, reap_old: replaced.map(|r| r.host) }
-            }
-        }
-    };
-
-    match outcome {
-        Outcome::UseExisting { winner, generation, reap_ours } => {
-            let _ = reap_ours.shutdown().await;
-            Ok((winner, generation))
-        }
-        Outcome::Installed { ours, generation, reap_old } => {
-            if let Some(old) = reap_old {
-                let _ = old.shutdown().await;
-            }
-            Ok((ours, generation))
-        }
-    }
+/// Spawn-context fingerprint for a `config_source` host, matching
+/// [`spawn_config_source_host`]: full parent env forwarded, no working dir, no
+/// notification hint.
+fn config_source_spawn_context() -> String {
+    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    orchestrator_plugin_host::resident_host_registry::spawn_context_fingerprint(&forwarded_env, None, None)
 }
 
 /// Spawn a `config_source` plugin host with the full parent env forwarded.
@@ -597,18 +511,53 @@ async fn config_load_call(
     }
 }
 
-/// Bridge an async future into the sync config-load path. Works whether or not
-/// a tokio runtime is already running (daemon = inside a runtime; CLI = none).
-fn run_blocking<F: Future>(fut: F) -> Result<F::Output> {
+/// One bounded executor for sync config-source calls made from a current-thread
+/// Tokio runtime (or with no runtime at all). A current-thread executor cannot
+/// use `block_in_place`, and constructing a helper thread/runtime per call would
+/// grow without bound under concurrent callers.
+static CONFIG_SOURCE_BRIDGE_RUNTIME: LazyLock<std::result::Result<tokio::runtime::Runtime, String>> =
+    LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("animus-config-source")
+            .enable_all()
+            .build()
+            .map_err(|err| format!("building tokio runtime for config_source load: {err}"))
+    });
+
+fn bridge_runtime() -> Result<&'static tokio::runtime::Runtime> {
+    CONFIG_SOURCE_BRIDGE_RUNTIME.as_ref().map_err(|message| anyhow!(message.clone()))
+}
+
+/// Run a future on the bounded bridge while the calling current-thread runtime
+/// remains synchronously blocked. The future is owned and independent of that
+/// caller runtime; config-source I/O is driven by the bridge's single worker.
+fn run_on_bridge<F>(fut: F) -> Result<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    bridge_runtime()?.spawn(async move {
+        let _ = sender.send(fut.await);
+    });
+    receiver.recv().context("config_source bridge task stopped before returning a result")
+}
+
+/// Bridge an async future into the sync config-load path. Works whether the
+/// caller is outside Tokio, on the daemon's multi-thread runtime, or on a
+/// current-thread runtime used by embedders and tests.
+fn run_blocking<F>(fut: F) -> Result<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => Ok(tokio::task::block_in_place(|| handle.block_on(fut))),
-        Err(_) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .context("building tokio runtime for config_source load")?;
-            Ok(rt.block_on(fut))
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
         }
+        Ok(_) => run_on_bridge(fut),
+        Err(_) => Ok(bridge_runtime()?.block_on(fut)),
     }
 }
 
@@ -646,6 +595,13 @@ pub mod test_seam {
         REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
+    // Roots for which `resolve_plugin_base` should simulate a config_source
+    // load FAILURE (an installed-but-failing plugin), keyed to an error message.
+    fn failure_registry() -> &'static Mutex<HashMap<PathBuf, String>> {
+        static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+        REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     // Normalize the key so a test that installs against `tempdir().path()` is
     // still found when the loader resolves the project root via git-common-root
     // (which canonicalizes, e.g. /var -> /private/var on macOS). Falls back to
@@ -671,6 +627,23 @@ pub mod test_seam {
         let key = (normalize(project_root), actor_cache_key(Some(actor)));
         actor_registry().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), base);
         ActorTestBaseGuard { key }
+    }
+
+    /// Install a simulated config_source load FAILURE for `project_root`.
+    /// `resolve_plugin_base` returns `Err(message)` while the guard is held, so
+    /// tests can prove a present-but-failing source surfaces as
+    /// `SourceUnavailable` (never as an empty config).
+    #[must_use]
+    pub fn install_failure(project_root: &Path, message: &str) -> FailureGuard {
+        let key = normalize(project_root);
+        failure_registry().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), message.to_string());
+        FailureGuard { key }
+    }
+
+    /// The simulated failure message installed for `project_root`, if any.
+    pub fn failure_for(project_root: &Path) -> Option<String> {
+        let root = normalize(project_root);
+        failure_registry().lock().unwrap_or_else(|p| p.into_inner()).get(&root).cloned()
     }
 
     /// Clone the synthetic base installed for `(project_root, actor)`. Prefers an
@@ -708,6 +681,17 @@ pub mod test_seam {
             actor_registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
         }
     }
+
+    /// RAII guard that clears the simulated config_source failure on drop.
+    pub struct FailureGuard {
+        key: PathBuf,
+    }
+
+    impl Drop for FailureGuard {
+        fn drop(&mut self) {
+            failure_registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
+        }
+    }
 }
 
 /// v0.6 cross-crate test seam: stand in for an installed `config_source` plugin
@@ -736,10 +720,30 @@ pub fn install_yaml_config_source_base(project_root: &Path) -> test_seam::TestBa
     test_seam::install(project_root, base)
 }
 
+/// v0.6 cross-crate test seam: simulate an installed `config_source` plugin
+/// whose base load FAILS, so dependent crates' tests can drive the
+/// non-swallowing `try_load_workflow_config` classification (a present-but-
+/// failing source must surface as `SourceUnavailable`, never as an empty
+/// config). Returns a guard that clears the failure on drop.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn install_config_source_failure(project_root: &Path, message: &str) -> test_seam::FailureGuard {
+    test_seam::install_failure(project_root, message)
+}
+
 #[cfg(test)]
 mod resident_cache_tests {
     use super::*;
     use animus_config_protocol::builtins::builtin_workflow_config;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_blocking_reuses_bounded_bridge_from_current_thread_runtime() {
+        let caller = std::thread::current().id();
+        let first = run_blocking(async { std::thread::current().id() }).expect("first bridge call");
+        let second = run_blocking(async { std::thread::current().id() }).expect("second bridge call");
+
+        assert_ne!(first, caller, "the future must not block its current-thread caller runtime");
+        assert_eq!(first, second, "config_source calls must reuse the one bounded bridge worker");
+    }
 
     fn loaded(root: &Path) -> LoadedWorkflowConfig {
         loaded_marked(root, "")
@@ -812,6 +816,24 @@ mod resident_cache_tests {
             cached_compiled(root, None, "tok").is_none(),
             "per-actor stores must not populate the global partition"
         );
+    }
+
+    #[test]
+    fn compiled_cache_never_leaks_across_tenants_for_the_same_user() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let tenant_a = Actor { user_id: "alice".into(), claims: Vec::new(), tenant_id: Some("tenant-a".into()) };
+        let tenant_b = Actor { user_id: "alice".into(), claims: Vec::new(), tenant_id: Some("tenant-b".into()) };
+
+        store_compiled(root, Some(&tenant_a), "tok".to_string(), loaded_marked(root, "tenant-a-wf"));
+        assert!(
+            cached_compiled(root, Some(&tenant_b), "tok").is_none(),
+            "same user in another tenant must not hit tenant A's compiled config"
+        );
+        store_compiled(root, Some(&tenant_b), "tok".to_string(), loaded_marked(root, "tenant-b-wf"));
+
+        assert_eq!(cached_compiled(root, Some(&tenant_a), "tok").unwrap().config.default_workflow_ref, "tenant-a-wf");
+        assert_eq!(cached_compiled(root, Some(&tenant_b), "tok").unwrap().config.default_workflow_ref, "tenant-b-wf");
     }
 
     #[test]

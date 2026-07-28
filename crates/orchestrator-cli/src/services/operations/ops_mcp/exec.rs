@@ -2,6 +2,7 @@ use super::exec_errors::{batch_item_error_from_result, build_tool_error_payload,
 use super::{build_guarded_list_result, AoMcpServer, BatchItemExec, ListGuardInput, OnError, BATCH_RESULT_SCHEMA};
 use animus_actor::Actor;
 use anyhow::Result;
+use orchestrator_daemon_runtime::{Audit, AuditActor, AuditEvent, AuditEventKind};
 use rmcp::{model::CallToolResult, ErrorData as McpError};
 use serde_json::{json, Value};
 
@@ -11,11 +12,37 @@ impl AoMcpServer {
     /// authenticated run), or `None` for a global-scope / local server.
     ///
     /// Every tool call routes through [`Self::run_tool`] / [`Self::run_list_tool`],
-    /// which surface this for per-user audit. Per-user ENFORCEMENT (scoping the
-    /// underlying subject / queue / integration ops to the actor) is the
-    /// consumer-side change tracked separately — see the WU-G design note.
+    /// which surface this for per-user audit. Actor-aware child CLI commands
+    /// receive the same identity via their existing `--actor-json` boundary.
+    /// Commands whose protocols do not yet carry Actor remain unchanged rather
+    /// than pretending to enforce a scope they cannot represent.
     pub(super) fn pinned_actor(&self) -> Option<&Actor> {
         self.pinned_actor.as_ref()
+    }
+
+    pub(super) fn audit_actor_tool_invocation(&self, tool_name: &str, requested_args: &[String]) {
+        let command_actor_aware = super::ao_exec::command_accepts_actor(requested_args);
+        self.audit_actor_tool_decision(
+            tool_name,
+            command_actor_aware,
+            if command_actor_aware { "forward" } else { "deny" },
+        );
+    }
+
+    pub(super) fn audit_actor_tool_decision(&self, tool_name: &str, command_actor_aware: bool, decision: &str) {
+        let Some(actor) = self.pinned_actor() else {
+            return;
+        };
+        Audit::at_scoped_root(&self.scoped_state_root()).log_event(AuditEvent::new(
+            AuditActor::Principal { id: actor.user_id.clone(), kind: "user" },
+            AuditEventKind::McpToolInvocation,
+            json!({
+                "tool": tool_name,
+                "tenant_id": actor.tenant_id,
+                "command_actor_aware": command_actor_aware,
+                "decision": decision,
+            }),
+        ));
     }
 
     pub(super) async fn run_tool(
@@ -28,8 +55,14 @@ impl AoMcpServer {
         // The actor reaches this server per-agent-spawn via `--actor-json`; this
         // is the single choke point every typed tool routes through.
         if let Some(actor) = self.pinned_actor() {
-            tracing::debug!(tool = tool_name, actor_user = %actor.user_id, "MCP tool invoked for actor");
+            tracing::debug!(
+                tool = tool_name,
+                actor_user = %actor.user_id,
+                actor_tenant = ?actor.tenant_id,
+                "MCP tool invoked for actor"
+            );
         }
+        self.audit_actor_tool_invocation(tool_name, &requested_args);
         match self.execute_ao(requested_args, project_root_override).await {
             Ok(result) => {
                 if result.success {
@@ -57,6 +90,7 @@ impl AoMcpServer {
         project_root_override: Option<String>,
         guard: ListGuardInput,
     ) -> Result<CallToolResult, McpError> {
+        self.audit_actor_tool_invocation(tool_name, &requested_args);
         match self.execute_ao(requested_args, project_root_override).await {
             Ok(result) => {
                 if result.success {
@@ -89,9 +123,11 @@ impl AoMcpServer {
         on_error: &OnError,
         project_root_override: Option<String>,
     ) -> Result<CallToolResult, McpError> {
-        let result =
-            run_batch_items(tool_name, items, on_error, |args| self.execute_ao(args, project_root_override.clone()))
-                .await;
+        let result = run_batch_items(tool_name, items, on_error, |args| {
+            self.audit_actor_tool_invocation(tool_name, &args);
+            self.execute_ao(args, project_root_override.clone())
+        })
+        .await;
         Ok(CallToolResult::structured(result))
     }
 }

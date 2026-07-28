@@ -172,7 +172,8 @@ impl WorkflowRouting for WorkflowRoutingImpl {
         let query = WorkflowQuery {
             filter: WorkflowFilter {
                 status: request.status.map(wire_status_to_core),
-                workflow_ref: None,
+                // v0.7.0-rc.7: the workflow-type filter is now wire-expressible.
+                workflow_ref: request.workflow_ref.clone(),
                 task_id: None,
                 phase_id: None,
                 search_text: None,
@@ -181,9 +182,10 @@ impl WorkflowRouting for WorkflowRoutingImpl {
             sort: Default::default(),
         };
         let page: ListPage<OrchestratorWorkflow> = hub.workflows().query(query).await.map_err(internal)?;
+        let total = page.total as u32;
         let runs: Vec<WireRunSummary> = page.items.iter().map(workflow_summary_from_core).collect();
         let next_cursor = page.next_offset.map(|n| n.to_string());
-        Ok(WireListResponse { runs, next_cursor })
+        Ok(WireListResponse { runs, next_cursor, total: Some(total) })
     }
 
     async fn workflow_get(&self, request: WireGetRequest) -> Result<WireWorkflowRun, ControlError> {
@@ -269,9 +271,12 @@ impl WorkflowRouting for WorkflowRoutingImpl {
 
     async fn workflow_pause(&self, request: WirePauseRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
+        let root = self.project_root_str();
+        let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(&root, hub.clone()).await;
         let _ = dispatch_workflow_event(
             hub,
-            &self.project_root_str(),
+            task_store.as_ref(),
+            &root,
             WorkflowEvent::Pause { workflow_id: request.id, reason_detail: None },
         )
         .await
@@ -293,8 +298,10 @@ impl WorkflowRouting for WorkflowRoutingImpl {
 
     async fn workflow_cancel(&self, request: WireCancelRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
+        let root = self.project_root_str();
+        let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(&root, hub.clone()).await;
         let _ =
-            dispatch_workflow_event(hub, &self.project_root_str(), WorkflowEvent::Cancel { workflow_id: request.id })
+            dispatch_workflow_event(hub, task_store.as_ref(), &root, WorkflowEvent::Cancel { workflow_id: request.id })
                 .await
                 .map_err(internal)?;
         Ok(Unit::default())

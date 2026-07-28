@@ -15,7 +15,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
         id: "WF-test".to_string(),
         task_id: "TASK-1".to_string(),
         workflow_ref: Some("standard-workflow".to_string()),
-        subject: SubjectRef::task("TASK-1".to_string()),
+        subject: Some(SubjectRef::task("TASK-1".to_string())),
         input: None,
         vars: std::collections::HashMap::new(),
         status,
@@ -67,6 +67,7 @@ fn skip_decision(reason: &str) -> PhaseDecision {
         guardrail_violations: Vec::new(),
         commit_message: None,
         target_phase: None,
+        verdict_key: None,
     }
 }
 
@@ -375,6 +376,80 @@ fn resume_clears_failure_and_can_complete_after_retry() {
     assert!(workflow.failure_reason.is_none());
 }
 
+// A dispatcher-held fan-in join: a `Pending` run with no phase started (the shape
+// `release_held_run` acts on). Carries a dependency spec in `vars` for realism.
+fn make_held_join_run(id: &str, upstreams: &[&str]) -> OrchestratorWorkflow {
+    let mut vars = std::collections::HashMap::new();
+    super::dependency::RunDependencySpec {
+        upstreams: upstreams.iter().map(|s| s.to_string()).collect(),
+        policy: super::dependency::UpstreamFailurePolicy::Block,
+    }
+    .write_into_vars(&mut vars);
+    OrchestratorWorkflow {
+        id: id.to_string(),
+        task_id: "TASK-join".to_string(),
+        workflow_ref: Some("standard-workflow".to_string()),
+        subject: Some(SubjectRef::task("TASK-join".to_string())),
+        input: None,
+        vars,
+        status: WorkflowStatus::Pending,
+        current_phase_index: 0,
+        phases: vec![WorkflowPhaseExecution {
+            phase_id: "implementation".to_string(),
+            status: WorkflowPhaseStatus::Pending,
+            started_at: None,
+            completed_at: None,
+            attempt: 0,
+            error_message: None,
+        }],
+        machine_state: WorkflowMachineState::Idle,
+        current_phase: None,
+        started_at: Utc::now(),
+        completed_at: None,
+        failure_reason: None,
+        checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+        rework_counts: std::collections::HashMap::new(),
+        total_reworks: 0,
+        decision_history: Vec::<WorkflowDecisionRecord>::new(),
+    }
+}
+
+#[test]
+fn release_held_run_starts_the_run_exactly_once() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut held = make_held_join_run("WF-join", &["WF-a"]);
+    assert!(super::dependency::is_awaiting_release(held.status));
+    assert!(held.phases.iter().all(|p| p.started_at.is_none()), "held join has not started a phase");
+
+    // Release: the barrier cleared, so the dispatcher starts the run.
+    assert!(executor.release_held_run(&mut held), "first release transitions the held run");
+    assert_eq!(held.status, WorkflowStatus::Running);
+    assert_eq!(held.phases[0].status, WorkflowPhaseStatus::Running);
+    assert!(held.phases[0].started_at.is_some());
+
+    // Idempotent: a duplicate release from a repeated evaluation is a no-op.
+    assert!(!executor.release_held_run(&mut held), "a running run is not re-released");
+    assert_eq!(held.status, WorkflowStatus::Running);
+
+    // The released run then completes normally through the standard lifecycle.
+    executor.mark_current_phase_success(&mut held).expect("phase success");
+    assert_eq!(held.status, WorkflowStatus::Completed);
+}
+
+#[test]
+fn release_held_run_ignores_a_run_that_already_started() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    // A normally-bootstrapped (already Running) run is never re-started by a
+    // stray release call.
+    let mut running = executor.bootstrap(
+        "WF-running".to_string(),
+        WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard-workflow".to_string())),
+    );
+    assert_eq!(running.status, WorkflowStatus::Running);
+    assert!(!executor.release_held_run(&mut running));
+    assert_eq!(running.phases[0].attempt, 1, "attempt count untouched");
+}
+
 #[test]
 fn lifecycle_marks_completed_workflow_as_merge_conflict() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
@@ -426,6 +501,7 @@ fn make_rework_decision(target_phase: Option<String>) -> PhaseDecision {
         guardrail_violations: vec![],
         commit_message: None,
         target_phase,
+        verdict_key: None,
     }
 }
 
@@ -549,6 +625,172 @@ fn rework_without_target_reruns_current_phase() {
     assert_eq!(last_decision.target_phase.as_deref(), Some("code-review"));
 }
 
+// ---- TASK-207: extensible decision keys + conditional routing ----
+
+// A decision carrying a custom (non-builtin) verdict key. Both agent structured
+// output and command-phase JSON verdicts land here as `verdict = Unknown` with
+// the raw key preserved on `verdict_key`, so this stands in for either producer.
+fn make_custom_key_decision(phase_id: &str, key: &str, target_phase: Option<String>) -> PhaseDecision {
+    PhaseDecision {
+        kind: "phase_decision".to_string(),
+        phase_id: phase_id.to_string(),
+        verdict: PhaseDecisionVerdict::Unknown,
+        confidence: 0.9,
+        risk: WorkflowDecisionRisk::Low,
+        reason: String::new(),
+        evidence: vec![],
+        guardrail_violations: vec![],
+        commit_message: None,
+        target_phase,
+        verdict_key: Some(key.to_string()),
+    }
+}
+
+fn fixed_route(target: &str) -> crate::workflow_config::PhaseTransitionConfig {
+    crate::workflow_config::PhaseTransitionConfig {
+        target: target.to_string(),
+        guard: None,
+        allow_agent_target: false,
+        allowed_targets: vec![],
+    }
+}
+
+#[test]
+fn custom_verdict_key_routes_forward_to_mapped_target() {
+    let mut verdict_routing = HashMap::new();
+    let mut research_verdicts = HashMap::new();
+    research_verdicts.insert("needs-review".to_string(), fixed_route("review"));
+    verdict_routing.insert("research".to_string(), research_verdicts);
+
+    let executor = WorkflowLifecycleExecutor::with_verdict_routing(
+        vec!["research".to_string(), "implementation".to_string(), "review".to_string()],
+        verdict_routing,
+    );
+    let mut workflow = executor.bootstrap(
+        "WF-fwd".to_string(),
+        WorkflowRunInput::for_task("TASK-fwd".to_string(), Some("standard-workflow".to_string())),
+    );
+    assert_eq!(workflow.current_phase.as_deref(), Some("research"));
+
+    let decision = make_custom_key_decision("research", "needs-review", None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
+
+    // Forward jump: research -> review (skipping implementation).
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 2);
+    assert_eq!(workflow.current_phase.as_deref(), Some("review"));
+    assert_eq!(workflow.phases[2].status, WorkflowPhaseStatus::Running);
+    // A forward route is not a rework — no rework counted.
+    assert!(!workflow.rework_counts.contains_key("review"));
+    let last = workflow.decision_history.last().unwrap();
+    assert_eq!(last.decision, WorkflowDecisionAction::Advance);
+    assert_eq!(last.target_phase.as_deref(), Some("review"));
+}
+
+#[test]
+fn custom_verdict_key_routes_backward_to_prior_phase() {
+    let mut verdict_routing = HashMap::new();
+    let mut review_verdicts = HashMap::new();
+    review_verdicts.insert("send-back".to_string(), fixed_route("implementation"));
+    verdict_routing.insert("review".to_string(), review_verdicts);
+
+    let executor = WorkflowLifecycleExecutor::with_verdict_routing(
+        vec!["implementation".to_string(), "review".to_string()],
+        verdict_routing,
+    );
+    let mut workflow = executor.bootstrap(
+        "WF-back".to_string(),
+        WorkflowRunInput::for_task("TASK-back".to_string(), Some("standard-workflow".to_string())),
+    );
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
+    assert_eq!(workflow.current_phase.as_deref(), Some("review"));
+
+    let decision = make_custom_key_decision("review", "send-back", None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
+
+    // Backward jump: review -> implementation, counted like a rework.
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase_index, 0);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
+    assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Running);
+    assert_eq!(*workflow.rework_counts.get("implementation").unwrap(), 1);
+    let last = workflow.decision_history.last().unwrap();
+    assert_eq!(last.decision, WorkflowDecisionAction::Rework);
+    assert_eq!(last.target_phase.as_deref(), Some("implementation"));
+}
+
+#[test]
+fn custom_verdict_key_without_mapping_fails() {
+    // `research` has an on_verdict map, but not for the emitted key.
+    let mut verdict_routing = HashMap::new();
+    let mut research_verdicts = HashMap::new();
+    research_verdicts.insert("needs-review".to_string(), fixed_route("review"));
+    verdict_routing.insert("research".to_string(), research_verdicts);
+
+    let executor = WorkflowLifecycleExecutor::with_verdict_routing(
+        vec!["research".to_string(), "review".to_string()],
+        verdict_routing,
+    );
+    let mut workflow = executor.bootstrap(
+        "WF-unknown".to_string(),
+        WorkflowRunInput::for_task("TASK-unknown".to_string(), Some("standard-workflow".to_string())),
+    );
+
+    let decision = make_custom_key_decision("research", "totally-unmapped", None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("apply decision");
+
+    // Unmapped custom key is an explicit failure, not a silent advance.
+    assert!(
+        matches!(workflow.status, WorkflowStatus::Failed | WorkflowStatus::Escalated),
+        "unmapped verdict key must fail the workflow, got {:?}",
+        workflow.status
+    );
+    assert_ne!(workflow.current_phase.as_deref(), Some("review"), "must not advance on an unmapped key");
+    let reason = workflow.failure_reason.as_deref().unwrap_or_default();
+    assert!(reason.contains("totally-unmapped"), "failure reason should name the key: {reason}");
+}
+
+#[test]
+fn custom_verdict_key_backward_jump_respects_rework_budget() {
+    use crate::agent_runtime_config::PhaseRetryConfig;
+
+    let mut verdict_routing = HashMap::new();
+    let mut review_verdicts = HashMap::new();
+    review_verdicts.insert("send-back".to_string(), fixed_route("implementation"));
+    verdict_routing.insert("review".to_string(), review_verdicts);
+
+    let mut retry_configs = HashMap::new();
+    retry_configs.insert("implementation".to_string(), PhaseRetryConfig { max_attempts: 1, backoff: None });
+
+    let executor = WorkflowLifecycleExecutor::with_verdict_routing(
+        vec!["implementation".to_string(), "review".to_string()],
+        verdict_routing,
+    )
+    .with_retry_configs(retry_configs);
+    let mut workflow = executor.bootstrap(
+        "WF-budget".to_string(),
+        WorkflowRunInput::for_task("TASK-budget".to_string(), Some("standard-workflow".to_string())),
+    );
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
+    assert_eq!(workflow.current_phase.as_deref(), Some("review"));
+    // Budget already spent for implementation (max_attempts = 1).
+    workflow.rework_counts.insert("implementation".to_string(), 1);
+
+    let decision = make_custom_key_decision("review", "send-back", None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("apply decision");
+
+    // The loop guard trips: no backward jump, workflow escalates/fails instead.
+    assert!(
+        matches!(workflow.status, WorkflowStatus::Failed | WorkflowStatus::Escalated),
+        "exhausted rework budget must block the backward route, got {:?}",
+        workflow.status
+    );
+    assert_ne!(
+        workflow.current_phase_index, 0,
+        "must not jump back to implementation once its rework budget is exhausted"
+    );
+}
+
 #[test]
 fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
     use crate::agent_runtime_config::PhaseRetryConfig;
@@ -580,6 +822,7 @@ fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
                 guardrail_violations: Vec::new(),
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
         )
         .expect("phase success");
@@ -624,6 +867,7 @@ fn phase_with_max_attempts_5_allows_more_retries() {
                     guardrail_violations: Vec::new(),
                     commit_message: None,
                     target_phase: None,
+                    verdict_key: None,
                 }),
             )
             .expect("phase success");
@@ -651,6 +895,7 @@ fn phase_with_max_attempts_5_allows_more_retries() {
                 guardrail_violations: Vec::new(),
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
         )
         .expect("phase success");
@@ -833,6 +1078,7 @@ fn advance_ignores_agent_target_phase_and_uses_default_order() {
         guardrail_violations: vec![],
         commit_message: None,
         target_phase: Some("testing".to_string()),
+        verdict_key: None,
     };
     executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
@@ -929,6 +1175,7 @@ fn advance_can_follow_agent_selected_target_when_yaml_allows_it() {
         guardrail_violations: vec![],
         commit_message: None,
         target_phase: Some("testing".to_string()),
+        verdict_key: None,
     };
     executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
@@ -968,6 +1215,7 @@ fn default_max_attempts_is_3_when_no_config() {
                     guardrail_violations: Vec::new(),
                     commit_message: None,
                     target_phase: None,
+                    verdict_key: None,
                 }),
             )
             .expect("phase success");
@@ -996,6 +1244,7 @@ fn default_max_attempts_is_3_when_no_config() {
                 guardrail_violations: Vec::new(),
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
         )
         .expect("phase success");

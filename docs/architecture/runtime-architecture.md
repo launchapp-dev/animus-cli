@@ -83,22 +83,17 @@ graph TB
 | Services | `orchestrator-core`, `orchestrator-config` | Bootstrap, config, workflow config, and file-backed state mutation APIs |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `animus-mcp-oauth` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and protected MCP OAuth proxy/token handling |
 | Providers | `orchestrator-plugin-host::session`, external `launchapp-dev/animus-provider-oai-agent` plugin | Provider plugin sessions and the OpenAI-compatible runner binary resolved from installed plugins |
-| Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
+| Plugins | `orchestrator-plugin-host`, `animus-plugin-runtime`, external `animus-plugin-protocol` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
 | Support | `orchestrator-logging`, external `protocol` dependency | Tracing, log plumbing, shared types, config, and repository-scope helpers |
 
 ## Startup Flow
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
-especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
-current runtime pins the main protocol family (`protocol`,
-`animus-config-protocol`, `animus-subject-protocol`,
-`animus-provider-protocol`, `animus-session-backend`,
-`animus-journal-protocol`, and `animus-actor`) to `v0.1.26`. The CLI-specific
-`animus-control-protocol`, `animus-log-storage-protocol`,
-`animus-subject-protocol-wire`, and `animus-workflow-runner-protocol` crates
-are also pinned to `v0.1.26`, while `animus-queue-protocol` and the separate
-`animus-subject-protocol-v05` compatibility line remain on `v0.5.10`.
+especially the workspace root. The current runtime pins every Protocol crate,
+including the application, control, plugin, queue, subject, provider, session,
+journal, config, and kernel contracts, to the unified `v0.7.0-rc.12` source.
+This removes the former queue/subject compatibility source split.
 
 1. Parse global flags and top-level command in `orchestrator-cli`.
 2. Resolve the project root with this precedence:

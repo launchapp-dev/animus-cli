@@ -280,11 +280,19 @@ impl PluginStatusRegistry {
 
     /// Bump `last_rpc_at` for the named plugin. Called after every successful
     /// RPC round-trip.
+    ///
+    /// A successful round-trip is definitive proof the plugin's handshake
+    /// completed and it is serving, so any `last_error` captured earlier — e.g.
+    /// a transient connection-lost recorded during the boot window before the
+    /// subject router resolved — is cleared here. Without this the stale error
+    /// latched forever and `daemon health` kept surfacing a misleading
+    /// "subject_backend unroutable" (or similar) long after the plugin came up.
     pub fn record_rpc(&self, name: &str) {
         let mut guard = self.inner.write().expect("plugin status registry poisoned");
         if let Some(entry) = guard.get_mut(name) {
             entry.last_rpc = Some(Instant::now());
             entry.last_rpc_at = Some(Utc::now());
+            entry.last_error = None;
             if matches!(entry.state, PluginRuntimeState::Discovered | PluginRuntimeState::Stopped) {
                 entry.state = PluginRuntimeState::Running;
             }
@@ -412,6 +420,33 @@ mod tests {
         assert_eq!(row.pid, None);
         let err = row.last_error.expect("last_error captured");
         assert_eq!(err.code, "ConnectionLost");
+    }
+
+    #[test]
+    fn successful_rpc_clears_latched_last_error_from_boot_window() {
+        // Regression: a transient connection-lost during the ~4s boot window
+        // latched `last_error` (e.g. "subject_backend unroutable"). Once the
+        // plugin handshake completed and it began serving RPCs, the stale
+        // error must be superseded so health stops reading as degraded.
+        let reg = PluginStatusRegistry::new();
+        reg.record_discovered("animus-subject-default", "task", None, None);
+        reg.record_spawn("animus-subject-default", Some(1));
+        reg.record_exit("animus-subject-default", Some(("ConnectionLost".into(), "subject_backend unroutable".into())));
+        assert!(
+            reg.get("animus-subject-default").expect("entry").last_error.is_some(),
+            "precondition: boot-window error is latched",
+        );
+
+        reg.record_spawn("animus-subject-default", Some(2));
+        reg.record_rpc("animus-subject-default");
+
+        let row = reg.get("animus-subject-default").expect("entry");
+        assert_eq!(row.state, PluginRuntimeState::Running);
+        assert!(
+            row.last_error.is_none(),
+            "a successful RPC round-trip must clear the stale boot-window error, got {:?}",
+            row.last_error,
+        );
     }
 
     #[test]

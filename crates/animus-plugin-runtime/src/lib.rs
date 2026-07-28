@@ -55,6 +55,7 @@ impl ProviderInfo {
             name: self.plugin_name.to_string(),
             version: self.plugin_version.to_string(),
             plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+            plugin_kinds: Vec::new(),
             description: self.description.to_string(),
             protocol_version: PROTOCOL_VERSION.to_string(),
             capabilities: vec![
@@ -65,6 +66,12 @@ impl ProviderInfo {
             ],
             env_required: Vec::new(),
             notification_buffer_size: None,
+            // TODO(codex-p2): plumb an opt-out through `ProviderInfo` so a
+            // runtime-built provider can declare `supports_mcp: false`. For now
+            // it stays undeclared (None) => the kernel's historical MCP-capable
+            // default, matching the protocol repo's `provider_main` deferral
+            // (REQUIREMENT-039).
+            supports_mcp: None,
         }
     }
 
@@ -75,6 +82,7 @@ impl ProviderInfo {
                 name: self.plugin_name.to_string(),
                 version: self.plugin_version.to_string(),
                 plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+                plugin_kinds: Vec::new(),
                 description: Some(self.description.to_string()),
             },
             capabilities: PluginCapabilities {
@@ -91,6 +99,7 @@ impl ProviderInfo {
                 subject_kinds: Vec::new(),
                 mcp_tools: Vec::new(),
             },
+            kind_capabilities: std::collections::HashMap::new(),
         }
     }
 }

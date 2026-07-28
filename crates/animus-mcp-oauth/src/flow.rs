@@ -46,7 +46,7 @@ enum Exchange {
 }
 
 use crate::callback::CallbackListener;
-use crate::config::{build_secret_store, resolve_principal_id, resolve_server_url};
+use crate::config::{build_secret_store, resolve_principal_id, resolve_server_url, ServerResolutionError};
 use crate::keychain_store::KeychainCredentialStore;
 use crate::pending::{PendingAuth, PendingStore};
 use crate::state_store::PersistentStateStore;
@@ -448,7 +448,14 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
     //   pinned id, failing on servers that don't support DCR.
     // - No pinned id: `AuthorizationSession::new` performs DCR.
     let (auth_url, csrf_state, exchange) = if let Some(client_id) = pinned_client_id {
-        let config = OAuthClientConfig::new(client_id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        let mut config =
+            OAuthClientConfig::new(client_id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        // Confidential pre-registered app: attach the resolved client_secret so
+        // the token exchange authenticates as that app (public/PKCE clients
+        // leave this unset).
+        if let Some(secret) = resolution.client_secret.as_deref() {
+            config = config.with_client_secret(secret.to_string());
+        }
         manager
             .configure_client(config)
             .map_err(|err| anyhow!("failed to configure pinned client_id for `{server}`: {err}"))?;
@@ -608,11 +615,18 @@ pub async fn begin_auth(project_root: &Path, server: &str, opts: BeginOptions<'_
     // still return a confidential client; carry the secret so completion can
     // authenticate the exchange with the same client begin registered.
     let (client_id, client_secret) = if let Some(id) = pinned_client_id {
-        let config = OAuthClientConfig::new(id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        let mut config = OAuthClientConfig::new(id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        // Confidential pre-registered app: carry the resolved client_secret into
+        // the pending record so `complete_auth` authenticates the exchange as the
+        // same app. Public/PKCE pinned clients leave it `None`.
+        let pinned_secret = resolution.client_secret.clone();
+        if let Some(secret) = pinned_secret.as_deref() {
+            config = config.with_client_secret(secret.to_string());
+        }
         manager
             .configure_client(config)
             .map_err(|err| anyhow!("failed to configure pinned client_id for `{server}`: {err}"))?;
-        (id.to_string(), None)
+        (id.to_string(), pinned_secret)
     } else {
         // register_client runs DCR and internally calls configure_client.
         let config = manager
@@ -745,17 +759,26 @@ pub async fn auth_status(project_root: &Path, server: Option<&str>, url_override
 
     let servers: Vec<String> = match server {
         Some(s) => vec![s.to_string()],
-        None => authorization_code_servers(project_root),
+        // Non-swallowing enumeration: a transient config_source failure surfaces
+        // as an Err here rather than an empty `servers:[]` that would read as
+        // "no OAuth servers configured".
+        None => authorization_code_servers(project_root)?,
     };
 
     let mut out = Vec::with_capacity(servers.len());
     for name in servers {
         // Tokens are keyed by the upstream URL too, so resolve it. A server
         // that can't be resolved (e.g. dropped from config and no --url) is
-        // reported as unauthenticated rather than failing the whole report.
-        let Some(url) = resolve_server_url(project_root, &name, url_override).ok().map(|r| r.url) else {
-            out.push(server_state_from_creds(&name, &principal, None));
-            continue;
+        // reported as unauthenticated rather than failing the whole report —
+        // EXCEPT a transient config_source failure, which must surface (not be
+        // silently reported as an unauthenticated server) so the user retries.
+        let url = match resolve_server_url(project_root, &name, url_override) {
+            Ok(resolution) => resolution.url,
+            Err(err @ ServerResolutionError::ConfigSourceUnavailable(..)) => return Err(err.into()),
+            Err(_) => {
+                out.push(server_state_from_creds(&name, &principal, None));
+                continue;
+            }
         };
         let store = KeychainCredentialStore::new(secrets.clone(), &name, &principal, &url);
         let creds =
@@ -814,14 +837,27 @@ fn server_state_from_creds(server: &str, principal: &str, creds: Option<StoredCr
 
 /// Servers in workflow/project config carrying an `authorization_code`
 /// oauth flow.
-fn authorization_code_servers(project_root: &Path) -> Vec<String> {
-    use orchestrator_config::workflow_config::{load_workflow_config_or_default, OauthFlow};
+///
+/// Uses the NON-SWALLOWING loader: a transient `config_source` failure returns
+/// `Err` so `auth_status` reports a transient error rather than an empty
+/// `servers:[]` (which would read as "no OAuth servers configured"). A genuinely
+/// absent config source (`NoSource`) is benign — enumeration proceeds from
+/// project config only.
+fn authorization_code_servers(project_root: &Path) -> Result<Vec<String>> {
+    use orchestrator_config::workflow_config::{try_load_workflow_config, OauthFlow, WorkflowConfigAvailability};
     let mut names = std::collections::BTreeSet::new();
 
-    let loaded = load_workflow_config_or_default(project_root);
-    for (name, def) in &loaded.config.mcp_servers {
-        if def.oauth.as_ref().is_some_and(|o| o.flow == OauthFlow::AuthorizationCode) {
-            names.insert(name.clone());
+    match try_load_workflow_config(project_root, None) {
+        WorkflowConfigAvailability::Loaded(loaded) => {
+            for (name, def) in &loaded.config.mcp_servers {
+                if def.oauth.as_ref().is_some_and(|o| o.flow == OauthFlow::AuthorizationCode) {
+                    names.insert(name.clone());
+                }
+            }
+        }
+        WorkflowConfigAvailability::NoSource => {}
+        WorkflowConfigAvailability::SourceUnavailable(err) => {
+            return Err(anyhow!("workflow config source unavailable while listing OAuth servers: {err}"));
         }
     }
 
@@ -838,7 +874,7 @@ fn authorization_code_servers(project_root: &Path) -> Vec<String> {
         }
     }
 
-    names.into_iter().collect()
+    Ok(names.into_iter().collect())
 }
 
 /// Extract the `state` query parameter from an authorization URL.

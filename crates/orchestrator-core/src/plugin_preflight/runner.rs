@@ -72,6 +72,7 @@ fn role_is_satisfied(role: &RequiredRole, installed: &[InstalledPluginSummary]) 
         RequiredRole::Queue => installed.iter().any(|p| p.is_queue()),
         RequiredRole::ConfigSource => installed.iter().any(|p| p.is_config_source()),
         RequiredRole::WorkflowJournal => installed.iter().any(|p| p.is_workflow_journal()),
+        RequiredRole::Environment => installed.iter().any(|p| p.is_environment()),
     }
 }
 
@@ -106,6 +107,9 @@ fn fix_command_for(role: &RequiredRole, default_repo: Option<&str>) -> String {
         }
         RequiredRole::WorkflowJournal => {
             format!("animus plugin install {target}  # workflow_journal backend (optional; SQLite by default)")
+        }
+        RequiredRole::Environment => {
+            format!("animus plugin install {target}  # environment backend (optional; local execution by default)")
         }
     }
 }

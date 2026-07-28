@@ -96,6 +96,18 @@ pub struct PluginSessionBackend {
     /// back to all-false for plugin-specific capabilities" (the most
     /// conservative posture — never overclaim).
     pub(crate) declared_methods: Vec<String>,
+    /// Whether the plugin DECLARES it consumes host-injected MCP servers.
+    ///
+    /// This backs `capabilities().supports_mcp`, which is the SOURCE OF TRUTH
+    /// for whether the daemon injects an agent's profile/skill MCP servers into
+    /// the wire request for this provider tool — consulted in place of the
+    /// kernel's name-based capability table. Every provider plugin consumes MCP,
+    /// so it defaults to `true`. The plugin protocol has no per-plugin
+    /// MCP-consume flag yet, so discovery leaves it at the default today;
+    /// sourcing it from a first-class manifest/handshake capability is tracked
+    /// as TASK-277. The field + `with_declared_supports_mcp` builder already
+    /// make it the single overridable source of truth.
+    pub(crate) declared_supports_mcp: bool,
     /// The plugin manifest's `notification_buffer_size` hint, forwarded to
     /// the spawn options so the host's broadcast capacity honors the
     /// documented priority chain.
@@ -127,6 +139,10 @@ impl PluginSessionBackend {
             supervisor,
             dispatch_observer,
             declared_methods: Vec::new(),
+            // Default to MCP-capable: every provider plugin consumes host MCP
+            // servers unless its manifest explicitly opts out. Overridden from
+            // the manifest via `with_declared_supports_mcp` during discovery.
+            declared_supports_mcp: true,
             notification_buffer_hint: None,
         }
     }
@@ -148,6 +164,15 @@ impl PluginSessionBackend {
     #[must_use]
     pub fn with_declared_methods(mut self, methods: Vec<String>) -> Self {
         self.declared_methods = methods;
+        self
+    }
+
+    /// Plumb the plugin's DECLARED MCP capability (see
+    /// [`PluginSessionBackend::declared_supports_mcp`]). Discovery derives this
+    /// from the manifest; direct constructors default to `true` (MCP-capable).
+    #[must_use]
+    pub fn with_declared_supports_mcp(mut self, supports_mcp: bool) -> Self {
+        self.declared_supports_mcp = supports_mcp;
         self
     }
 
@@ -878,7 +903,10 @@ impl SessionBackend for PluginSessionBackend {
             supports_resume: self.manifest_supports_resume(),
             supports_terminate: self.manifest_supports_terminate(),
             supports_permissions: true,
-            supports_mcp: true,
+            // Plugin-declared (manifest-derived), NOT hardcoded: the injection
+            // decision for this provider tool's profile/skill MCP servers reads
+            // this value. Defaults true; a provider opts out via the manifest.
+            supports_mcp: self.declared_supports_mcp,
             supports_tool_events: false,
             supports_thinking_events: false,
             supports_artifact_events: false,
@@ -1189,6 +1217,12 @@ pub struct DiscoveredProviderPlugin {
     /// Forwarded into `PluginSessionBackend::declared_methods` so the
     /// backend reports honest `SessionCapabilities`.
     pub declared_methods: Vec<String>,
+    /// The plugin's DECLARED MCP capability, derived from the manifest via
+    /// [`provider_capabilities_declare_mcp`]. Forwarded into
+    /// `PluginSessionBackend::declared_supports_mcp` so the backend's
+    /// `capabilities().supports_mcp` — the source of truth for MCP-server
+    /// injection — reflects the plugin's own declaration.
+    pub declared_supports_mcp: bool,
     /// The manifest's `notification_buffer_size` hint, forwarded so spawned
     /// hosts honor the documented broadcast-capacity priority chain.
     pub notification_buffer_size: Option<usize>,
@@ -1199,6 +1233,7 @@ impl DiscoveredProviderPlugin {
         let mut backend = PluginSessionBackend::new(self.plugin_name, self.binary_path, self.provider_tool)
             .with_env_required(self.env_required)
             .with_declared_methods(self.declared_methods)
+            .with_declared_supports_mcp(self.declared_supports_mcp)
             .with_notification_buffer_hint(self.notification_buffer_size);
         if let Some(root) = self.project_root {
             backend = backend.with_project_root(root);
@@ -1207,16 +1242,31 @@ impl DiscoveredProviderPlugin {
     }
 }
 
+/// Resolve a provider's MCP-consume decision from its DECLARED manifest
+/// capability (TASK-277 / REQUIREMENT-039), rather than a hardcoded per-tool
+/// default.
+///
+/// Back-compat: an undeclared field (`None` — older plugins built before
+/// protocol 1.2.0, which omit the field entirely) means the provider keeps the
+/// historical default of MCP-capable. Only an explicit `Some(false)` opts a
+/// provider out of host MCP-server injection.
+fn declared_supports_mcp_from_manifest(manifest: &animus_plugin_protocol::PluginManifest) -> bool {
+    manifest.supports_mcp.unwrap_or(true)
+}
+
 /// Inspect manifests of every discovered plugin under `project_root` and return only
 /// the provider-kind plugins. Provider tool name defaults to the plugin name minus the
 /// `animus-provider-` prefix.
 pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<DiscoveredProviderPlugin> {
-    use crate::discover_plugins;
+    use crate::discover_by_kind;
     let project_root = project_root.to_path_buf();
-    discover_plugins(&project_root)
+    // v0.7 multi-kind: `discover_by_kind` matches a plugin's primary
+    // `plugin_kind` OR any of its additional `plugin_kinds`, so a
+    // consolidated plugin that serves `provider` as a secondary role is
+    // resolved for agent dispatch.
+    discover_by_kind(&project_root, animus_plugin_protocol::PLUGIN_KIND_PROVIDER)
         .unwrap_or_default()
         .into_iter()
-        .filter(|plugin| plugin.manifest.plugin_kind == animus_plugin_protocol::PLUGIN_KIND_PROVIDER)
         .map(|plugin| {
             let provider_tool = plugin
                 .name
@@ -1225,6 +1275,7 @@ pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<Discover
                 .unwrap_or_else(|| plugin.name.clone());
             let env_required = plugin.manifest.env_required.clone();
             let declared_methods = plugin.manifest.capabilities.clone();
+            let declared_supports_mcp = declared_supports_mcp_from_manifest(&plugin.manifest);
             let notification_buffer_size = plugin.manifest.notification_buffer_size;
             DiscoveredProviderPlugin {
                 plugin_name: plugin.name,
@@ -1233,6 +1284,7 @@ pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<Discover
                 project_root: Some(project_root.clone()),
                 env_required,
                 declared_methods,
+                declared_supports_mcp,
                 notification_buffer_size,
             }
         })
@@ -1761,6 +1813,56 @@ mod tests {
         assert!(
             !caps_default.supports_resume && !caps_default.supports_terminate,
             "no declared_methods plumbed → must default to false, not the legacy hardcoded true"
+        );
+    }
+
+    #[test]
+    fn capabilities_supports_mcp_reflects_declared_field_not_a_hardcoded_true() {
+        use animus_session_backend::session::session_backend::SessionBackend;
+
+        // Default constructor => MCP-capable.
+        let default_backend = PluginSessionBackend::new("p", PathBuf::from("/nonexistent/p"), "p");
+        assert!(default_backend.capabilities().supports_mcp, "provider defaults to MCP-capable");
+
+        // A provider that DECLARES it does not consume MCP reports false, so the
+        // daemon injects no profile/skill MCP servers for it.
+        let opted_out =
+            PluginSessionBackend::new("q", PathBuf::from("/nonexistent/q"), "q").with_declared_supports_mcp(false);
+        assert!(!opted_out.capabilities().supports_mcp, "declared supports_mcp:false must be honored");
+    }
+
+    #[test]
+    fn declared_supports_mcp_from_manifest_sources_the_declared_field() {
+        fn manifest(supports_mcp: Option<bool>) -> animus_plugin_protocol::PluginManifest {
+            animus_plugin_protocol::PluginManifest {
+                name: "animus-provider-portal".to_string(),
+                version: "0.1.0".to_string(),
+                plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+                plugin_kinds: Vec::new(),
+                description: "out-of-tree provider".to_string(),
+                protocol_version: "1.2.0".to_string(),
+                capabilities: vec!["agent/run".to_string()],
+                env_required: Vec::new(),
+                notification_buffer_size: None,
+                supports_mcp,
+            }
+        }
+
+        // Back-compat: an older plugin that omits the field (None) keeps the
+        // historical MCP-capable default.
+        assert!(
+            declared_supports_mcp_from_manifest(&manifest(None)),
+            "undeclared supports_mcp must default to MCP-capable (back-compat)"
+        );
+        // An explicit opt-out is honored.
+        assert!(
+            !declared_supports_mcp_from_manifest(&manifest(Some(false))),
+            "declared supports_mcp:false must be sourced from the manifest"
+        );
+        // An explicit opt-in is honored.
+        assert!(
+            declared_supports_mcp_from_manifest(&manifest(Some(true))),
+            "declared supports_mcp:true must be sourced from the manifest"
         );
     }
 

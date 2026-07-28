@@ -5,6 +5,7 @@
 
 pub(crate) mod aggregator;
 pub(crate) mod breach_summary;
+pub(crate) mod budget_report;
 pub(crate) mod cap_check;
 pub(crate) mod daily_cap;
 pub(crate) mod enforcement;
@@ -15,6 +16,10 @@ pub(crate) mod scanner;
 pub(crate) use aggregator::{CostState, PhaseCost, WorkflowCost};
 #[allow(unused_imports)]
 pub(crate) use breach_summary::{summarize_breaches, BudgetBreachSummary};
+#[allow(unused_imports)]
+pub(crate) use budget_report::{
+    build_budget_report, daily_cap_report, dispatch_paused_reason, BudgetReport, DailyCapReport,
+};
 #[allow(unused_imports)]
 pub(crate) use daily_cap::{read_max_daily_usd, DailyCapStatus};
 pub(crate) use persistence::save_cost_state;
@@ -43,9 +48,21 @@ pub(crate) use persistence::{
 pub(crate) const DISABLE_BUDGET_ENFORCEMENT_ENV: &str = "ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT";
 
 /// `true` when the budget-enforcement leg is enabled (kill-switch unset or
-/// not a truthy `1`/`true`).
+/// not a truthy `1`/`true`) in THIS process's environment.
 pub(crate) fn budget_enforcement_enabled() -> bool {
     !matches!(std::env::var(DISABLE_BUDGET_ENFORCEMENT_ENV).ok().as_deref(), Some("1") | Some("true"))
+}
+
+/// Effective enforcement state for a project, from the point of view of a
+/// reader that may be a different process than the daemon. The daemon's
+/// housekeeping sweep persists `enabled` (its own kill-switch reading) to
+/// scoped state each tick, so a CLI/MCP process querying budget health must
+/// trust that persisted status over its own environment — otherwise a daemon
+/// started with `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT=1` reads as
+/// enforcing from a caller that lacks the env var. Falls back to this
+/// process's env only when the daemon has not recorded a sweep yet.
+pub(crate) fn effective_budget_enforcement_enabled(project_root: &Path) -> bool {
+    load_budget_enforcement_status(project_root).map(|status| status.enabled).unwrap_or_else(budget_enforcement_enabled)
 }
 
 use std::path::Path;

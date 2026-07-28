@@ -143,7 +143,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.daemon.config-set",
-        description = "Update daemon configuration. Purpose: Persist daemon automation settings and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, stale_threshold_hours, phase_timeout_secs, notification_config_json, notification_config_file, clear_notification_config). Runtime settings are hot-reloaded by the running daemon without restart. Prerequisites: None. Example: {\"pool_size\": 4, \"interval_secs\": 10}. Sequencing: Use animus.daemon.config to read current values first.",
+        description = "Update daemon configuration. Purpose: Persist daemon automation settings and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, stale_threshold_hours, phase_timeout_secs, max_daily_usd, notification_config_json, notification_config_file, clear_notification_config). Runtime settings are hot-reloaded by the running daemon without restart. For the fleet daily spend cap prefer animus.budget.set. Prerequisites: None. Example: {\"pool_size\": 4, \"interval_secs\": 10}. Sequencing: Use animus.daemon.config to read current values first.",
         input_schema = ao_schema_for_type::<DaemonConfigSetInput>()
     )]
     async fn ao_daemon_config_set(&self, params: Parameters<DaemonConfigSetInput>) -> Result<CallToolResult, McpError> {

@@ -14,6 +14,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use rand::RngCore;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use zeroize::Zeroizing;
 
 /// Length of the wrapping key (and the master key it wraps).
@@ -306,15 +307,102 @@ pub fn resolve_key_source(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<d
             Ok(Box::new(PassphraseKeySource::resolve(config.passphrase.as_ref().map(|p| p.as_str()), salt)?))
         }
         KeySourceKind::DeviceId => Ok(Box::new(DeviceIdKeySource::resolve(salt)?)),
-        KeySourceKind::Auto => resolve_auto(salt),
+        KeySourceKind::Auto => resolve_auto(config, salt),
     }
 }
 
-/// `auto`: prefer an OS hardware-backed key, fall back to `device-id`. Hardware
-/// providers (Secure Enclave / DPAPI / TPM) are wired in per platform; until a
-/// platform's provider lands, `auto` resolves to `device-id` there.
-fn resolve_auto(salt: &[u8]) -> Result<Box<dyn KeySource>> {
-    Ok(Box::new(DeviceIdKeySource::resolve(salt)?))
+/// The material `auto` selects, after weighing available key sources against the
+/// execution context. A pure decision so it is deterministically testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoDecision {
+    /// Real operator-supplied key material is available (`ANIMUS_SECRET_KEY` or
+    /// a configured key file).
+    UserKey,
+    /// A passphrase is available (`ANIMUS_SECRET_PASSPHRASE`).
+    Passphrase,
+    /// No real key material: bind to the (locally-decryptable) device id.
+    DeviceId,
+    /// No real key material on a headless/server host: refuse rather than
+    /// silently protect secrets with a device key any local user can rederive.
+    HardError,
+}
+
+/// One-shot guard so the device-id fallback warning fires at most once per
+/// process instead of on every secret read/write.
+static DEVICE_ID_FALLBACK_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Pure `auto` selection: prefer real key material, then a passphrase, then fall
+/// back to `device-id` — but only on an interactive local host. On a
+/// server/headless host (no TTY or `ANIMUS_SERVER=1`) with no real key material,
+/// refuse instead of using the locally-decryptable device key.
+// The four booleans are the deliberate pure-decision seam: each captures an
+// independent, orthogonal input (key material, passphrase, host posture, TTY)
+// so the precedence can be exhaustively unit-tested without touching real
+// env/TTY. Collapsing them into enums would obscure the truth table.
+#[allow(clippy::fn_params_excessive_bools)]
+fn decide_auto(has_user_key: bool, has_passphrase: bool, is_server: bool, has_tty: bool) -> AutoDecision {
+    if has_user_key {
+        AutoDecision::UserKey
+    } else if has_passphrase {
+        AutoDecision::Passphrase
+    } else if is_server || !has_tty {
+        AutoDecision::HardError
+    } else {
+        AutoDecision::DeviceId
+    }
+}
+
+/// True when this process looks like a server/headless host: `ANIMUS_SERVER=1`
+/// is set explicitly.
+fn is_server_env() -> bool {
+    std::env::var("ANIMUS_SERVER").map(|v| v.trim() == "1").unwrap_or(false)
+}
+
+/// True when this process looks interactive: any of stdin/stdout/stderr is a
+/// terminal. Checking all three (not just stdin) keeps supported local flows
+/// like `printf token | animus secret set KEY` working — piping stdin from an
+/// interactive shell still leaves stdout/stderr on the TTY. A fully-detached
+/// server/daemon process has none of the three on a terminal and is treated as
+/// headless.
+fn has_interactive_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() || std::io::stdout().is_terminal() || std::io::stderr().is_terminal()
+}
+
+/// `auto`: prefer real operator key material (`ANIMUS_SECRET_KEY` / key file),
+/// then a passphrase (`ANIMUS_SECRET_PASSPHRASE`), and only otherwise fall back
+/// to the device-id source. The device-id fallback is device-binding but NOT
+/// on-device secrecy (any local user can rederive the key), so it is allowed
+/// only on interactive local hosts (with a one-time warning) and is a hard error
+/// on server/headless hosts.
+///
+/// Hardware providers (Secure Enclave / DPAPI / TPM) will slot in ahead of the
+/// device-id fallback per platform as they land.
+fn resolve_auto(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<dyn KeySource>> {
+    let has_user_key = std::env::var_os(ENV_USER_KEY).is_some() || config.key_file.is_some();
+    let has_passphrase = config.passphrase.is_some() || std::env::var_os(ENV_PASSPHRASE).is_some();
+    match decide_auto(has_user_key, has_passphrase, is_server_env(), has_interactive_tty()) {
+        AutoDecision::UserKey => Ok(Box::new(UserKeySource::resolve(config.key_file.as_deref())?)),
+        AutoDecision::Passphrase => {
+            Ok(Box::new(PassphraseKeySource::resolve(config.passphrase.as_ref().map(|p| p.as_str()), salt)?))
+        }
+        AutoDecision::DeviceId => {
+            if !DEVICE_ID_FALLBACK_WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "secret_key_source = auto fell back to device-id: the secret store is bound to \
+                     this machine but is decryptable by any local user (the device id is not secret). \
+                     Set {ENV_USER_KEY} (hex/base64 32-byte key), a secret_key_file, or {ENV_PASSPHRASE} \
+                     for real at-rest secrecy."
+                );
+            }
+            Ok(Box::new(DeviceIdKeySource::resolve(salt)?))
+        }
+        AutoDecision::HardError => bail!(
+            "secret_key_source = auto has no key material on a server/headless host, and the \
+             device-id fallback is decryptable by any local user. Provide real key material: set \
+             {ENV_USER_KEY} (hex/base64 32-byte key), configure secret_key_file, or set {ENV_PASSPHRASE}."
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +438,39 @@ mod tests {
         let b = PassphraseKeySource::derive(b"correct horse", &salt_b).unwrap();
         assert_eq!(*a1.key().unwrap(), *a2.key().unwrap(), "same passphrase+salt must derive the same key");
         assert_ne!(*a1.key().unwrap(), *b.key().unwrap(), "different salt must derive a different key");
+    }
+
+    #[test]
+    fn decide_auto_prefers_user_key_then_passphrase() {
+        // Real key material always wins, regardless of host/TTY.
+        for &is_server in &[false, true] {
+            for &has_tty in &[false, true] {
+                assert_eq!(decide_auto(true, false, is_server, has_tty), AutoDecision::UserKey);
+                assert_eq!(decide_auto(true, true, is_server, has_tty), AutoDecision::UserKey);
+            }
+        }
+        // Passphrase wins when no user key is present.
+        for &is_server in &[false, true] {
+            for &has_tty in &[false, true] {
+                assert_eq!(decide_auto(false, true, is_server, has_tty), AutoDecision::Passphrase);
+            }
+        }
+    }
+
+    #[test]
+    fn decide_auto_falls_back_to_device_id_only_when_interactive() {
+        // Neither key nor passphrase, interactive local host with a TTY.
+        assert_eq!(decide_auto(false, false, false, true), AutoDecision::DeviceId);
+    }
+
+    #[test]
+    fn decide_auto_hard_errors_on_server_or_no_tty() {
+        // Explicit server marker.
+        assert_eq!(decide_auto(false, false, true, true), AutoDecision::HardError);
+        // No TTY (headless).
+        assert_eq!(decide_auto(false, false, false, false), AutoDecision::HardError);
+        // Both.
+        assert_eq!(decide_auto(false, false, true, false), AutoDecision::HardError);
     }
 
     #[test]

@@ -43,8 +43,8 @@ This keeps the runtime aligned with the plugin-pack kernel design:
 | Command | Canonical Ref |
 |---|---|
 | `animus workflow run animus.requirement/draft --title "..." --sync` | `animus.requirement/draft` |
-| `animus workflow run animus.requirement/execute --requirement-id REQ-001` | `animus.requirement/execute` |
-| `animus workflow run animus.task/standard --task-id TASK-001` | `animus.task/standard` |
+| `animus workflow run animus.requirement/execute --subject-id requirement:REQ-001` | `animus.requirement/execute` |
+| `animus workflow run animus.task/standard --subject-id TASK-001` | `animus.task/standard` |
 
 ## Related Docs
 

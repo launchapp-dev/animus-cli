@@ -52,6 +52,8 @@ mcp_servers:
         - repo
         - read:user
       client_id: my-pre-registered-client      # skip Dynamic Client Registration
+      # optional — only for a CONFIDENTIAL pre-registered app (requires client_id):
+      client_secret_env: MY_APP_CLIENT_SECRET   # names a keychain/env secret
 ```
 
 Fields:
@@ -62,11 +64,14 @@ Fields:
 | `url` | yes | Upstream HTTP MCP endpoint; also the OAuth `resource` indicator (RFC 8707), the discovery seed (RFC 9728 protected-resource metadata → authorization server), and the proxy target |
 | `scopes` | no | Requested at authorization. **When omitted, Animus auto-detects the server's advertised `scopes_supported`** from discovery metadata and requests those (see "Scope posture" below); if the server advertises none, nothing is requested and it applies its own minimal default. Set this to pin a specific (narrower) scope set, or `[none]` to force no scopes (opt out of auto-detection). |
 | `client_id` | no | Pre-registered client id; when omitted, Dynamic Client Registration (RFC 7591) is used |
+| `client_secret_env` | no | For a **confidential** pre-registered app (e.g. HubSpot) that requires a `client_secret` at token exchange. Names the env var / keychain entry (`animus secret set <NAME>`) holding the secret — resolved from the process env first, then the project keychain. Requires a pinned `client_id`; leave unset for public (PKCE-only) clients and DCR. |
 
-The machine-to-machine credential pointers (`token_url`, `client_id_env`,
-`client_secret_env`, `refresh_token_env`, `bearer_env`) must **not** be set on
-an `authorization_code` server — discovery fills those endpoints in, and
-validation rejects them if present.
+The remaining machine-to-machine credential pointers (`token_url`,
+`client_id_env`, `refresh_token_env`, `bearer_env`) must **not** be set on an
+`authorization_code` server — discovery fills those endpoints in, and validation
+rejects them if present. `client_secret_env` is the one exception (see above):
+it pins the secret of a confidential pre-registered app and is only valid
+alongside a `client_id`.
 
 ## CLI
 

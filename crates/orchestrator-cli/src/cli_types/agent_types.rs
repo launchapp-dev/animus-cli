@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
-use super::{parse_positive_u64, ReasoningEffortArg};
+use super::{parse_positive_u64, ReasoningEffortArg, ACTOR_JSON_HELP};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
@@ -81,8 +81,12 @@ pub(crate) struct AgentApproveHookArgs {
     pub(crate) format: ApproveHookFormat,
     #[arg(long, value_name = "WORKFLOW_ID", help = "Optional workflow id context recorded on any escalation.")]
     pub(crate) workflow_id: Option<String>,
-    #[arg(long, value_name = "TASK_ID", help = "Optional task id context recorded on any escalation.")]
-    pub(crate) task_id: Option<String>,
+    #[arg(
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
+        help = "Optional subject id context recorded on any escalation."
+    )]
+    pub(crate) subject_id: Option<String>,
     #[arg(
         long,
         value_name = "SECONDS",
@@ -108,12 +112,16 @@ pub(crate) struct AgentInteractionsListArgs {
     pub(crate) all: bool,
     #[arg(long, value_name = "AGENT_ID", help = "Filter interactions by requesting agent id.")]
     pub(crate) agent: Option<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentInteractionsShowArgs {
     #[arg(value_name = "ID", help = "Interaction id.")]
     pub(crate) id: String,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -151,6 +159,8 @@ pub(crate) struct AgentInteractionsAnswerArgs {
     pub(crate) updated_input: Option<String>,
     #[arg(long = "by", value_name = "NAME", help = "Who answered. Defaults to 'human'.")]
     pub(crate) answered_by: Option<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

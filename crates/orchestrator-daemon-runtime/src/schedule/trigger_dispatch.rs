@@ -301,7 +301,11 @@ mod tests {
 
     use super::*;
 
-    fn write_trigger_config(project_root: &std::path::Path, trigger_id: &str, paths: &[&str]) {
+    fn write_trigger_config(
+        project_root: &std::path::Path,
+        trigger_id: &str,
+        paths: &[&str],
+    ) -> crate::test_env::WorkflowConfigFixtureGuard {
         let mut config = orchestrator_core::builtin_workflow_config();
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "auto-test".to_string(),
@@ -311,6 +315,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -323,10 +329,13 @@ mod tests {
             }),
             input: None,
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+        crate::test_env::write_workflow_config_fixture(project_root, &mut config, &["requirements"])
     }
 
-    fn write_webhook_trigger_config(project_root: &std::path::Path, trigger_id: &str) {
+    fn write_webhook_trigger_config(
+        project_root: &std::path::Path,
+        trigger_id: &str,
+    ) -> crate::test_env::WorkflowConfigFixtureGuard {
         let mut config = orchestrator_core::builtin_workflow_config();
         config.workflows.push(orchestrator_core::WorkflowDefinition {
             id: "respond-to-webhook".to_string(),
@@ -336,6 +345,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -345,7 +356,7 @@ mod tests {
             config: json!({ "max_triggers_per_minute": 10 }),
             input: Some(json!({ "source": "webhook" })),
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+        crate::test_env::write_workflow_config_fixture(project_root, &mut config, &["requirements"])
     }
 
     #[test]
@@ -357,7 +368,7 @@ mod tests {
         let watched_file = project_root.join("watched.rs");
         std::fs::write(&watched_file, "fn main() {}").expect("write file");
 
-        write_trigger_config(project_root, "on-change", &[watched_file.to_string_lossy().as_ref()]);
+        let _config = write_trigger_config(project_root, "on-change", &[watched_file.to_string_lossy().as_ref()]);
 
         let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
 
@@ -395,6 +406,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: "disabled-watcher".to_string(),
@@ -404,7 +417,7 @@ mod tests {
             config: json!({ "paths": [watched_file.to_string_lossy().as_ref()], "debounce_secs": 0 }),
             input: None,
         });
-        orchestrator_core::write_workflow_config(project_root, &config).expect("write config");
+        let _config = crate::test_env::write_workflow_config_fixture(project_root, &mut config, &["requirements"]);
 
         let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
         let calls = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -430,7 +443,7 @@ mod tests {
         std::fs::write(&watched_file, "// debounce test").expect("write file");
 
         // Seed baseline first.
-        write_trigger_config(project_root, "debounced", &[watched_file.to_string_lossy().as_ref()]);
+        let _config = write_trigger_config(project_root, "debounced", &[watched_file.to_string_lossy().as_ref()]);
 
         let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
 
@@ -477,7 +490,7 @@ mod tests {
         let watched_file = project_root.join("retry.rs");
         std::fs::write(&watched_file, "// retry test").expect("write file");
 
-        write_trigger_config(project_root, "retry-watcher", &[watched_file.to_string_lossy().as_ref()]);
+        let _config = write_trigger_config(project_root, "retry-watcher", &[watched_file.to_string_lossy().as_ref()]);
 
         let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
 
@@ -534,7 +547,7 @@ mod tests {
         let project_root = temp.path();
 
         let watched_file = project_root.join("appears-later.rs");
-        write_trigger_config(project_root, "first-file", &[watched_file.to_string_lossy().as_ref()]);
+        let _config = write_trigger_config(project_root, "first-file", &[watched_file.to_string_lossy().as_ref()]);
 
         let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
 
@@ -571,7 +584,7 @@ mod tests {
         let watched_file = project_root.join("idle.rs");
         std::fs::write(&watched_file, "// idle").expect("write file");
 
-        write_trigger_config(project_root, "idle-watcher", &[watched_file.to_string_lossy().as_ref()]);
+        let _config = write_trigger_config(project_root, "idle-watcher", &[watched_file.to_string_lossy().as_ref()]);
 
         let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
 
@@ -604,7 +617,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
 
-        write_webhook_trigger_config(project_root, "on-webhook");
+        let _config = write_webhook_trigger_config(project_root, "on-webhook");
 
         // Manually inject two pending events into TriggerState.
         let mut state = orchestrator_core::load_trigger_state(project_root).unwrap_or_default();
@@ -657,7 +670,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
 
-        write_webhook_trigger_config(project_root, "on-webhook");
+        let _config = write_webhook_trigger_config(project_root, "on-webhook");
 
         let mut state = orchestrator_core::load_trigger_state(project_root).unwrap_or_default();
         let run_state = state.triggers.entry("on-webhook".to_string()).or_default();
@@ -707,7 +720,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
 
-        write_webhook_trigger_config(project_root, "on-webhook");
+        let _config = write_webhook_trigger_config(project_root, "on-webhook");
 
         let mut state = orchestrator_core::load_trigger_state(project_root).unwrap_or_default();
         let run_state = state.triggers.entry("on-webhook".to_string()).or_default();
@@ -754,7 +767,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let project_root = temp.path();
 
-        write_webhook_trigger_config(project_root, "on-empty-webhook");
+        let _config = write_webhook_trigger_config(project_root, "on-empty-webhook");
 
         let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
         let calls = Arc::new(Mutex::new(0usize));

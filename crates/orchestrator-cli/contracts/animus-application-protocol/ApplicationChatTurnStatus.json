@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ApplicationChatTurnStatus",
+  "description": "Terminal status carried by an application chat receipt.",
+  "oneOf": [
+    {
+      "description": "Assistant message persisted successfully.",
+      "type": "string",
+      "const": "completed"
+    },
+    {
+      "description": "User message persisted but the provider failed.",
+      "type": "string",
+      "const": "assistant_failed"
+    },
+    {
+      "description": "User message persisted but the provider was interrupted.",
+      "type": "string",
+      "const": "assistant_interrupted"
+    }
+  ]
+}

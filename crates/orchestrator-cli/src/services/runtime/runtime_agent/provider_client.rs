@@ -128,7 +128,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         .permission_mode
         .clone()
         .or_else(|| context_str(context_object.as_ref(), "permission_mode"))
-        .or_else(|| profile_permission_mode(&project_root_path, args.agent.as_deref()));
+        .or_else(|| profile_permission_mode(&project_root_path, args.agent.as_deref(), None));
     if let Some(mode) = permission_mode.as_deref() {
         warn_unknown_permission_mode(mode);
     }
@@ -151,7 +151,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
     // `ApprovalPolicy::evaluate` then auto-allows/denies/asks (auto_deny wins).
     // Neither overrides the other; they compose. See
     // `docs/reference/agent-runtime-config.md` and `docs/guides/agents.md`.
-    if args.approvals || profile_has_approval_policy(&project_root_path, args.agent.as_deref()) {
+    if args.approvals || profile_has_approval_policy(&project_root_path, args.agent.as_deref(), None) {
         extras.insert("approvals".to_string(), Value::Bool(true));
     }
 
@@ -195,6 +195,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
             &tool,
             args.agent.as_deref(),
             args.skill.as_deref(),
+            None,
         )?)
     } else {
         None
@@ -397,7 +398,7 @@ pub(crate) fn graft_skill_launch_contract(
 /// claude: swap the default `--dangerously-skip-permissions` for
 /// `--permission-mode <mode>`; codex: upsert `-c approval_policy="<mode>"`.
 /// Other tools pass through (their transports do not map a mode flag today).
-fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, permission_mode: Option<&str>) {
+pub(super) fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, permission_mode: Option<&str>) {
     let Some(mode) = permission_mode.map(str::trim).filter(|mode| !mode.is_empty()) else {
         return;
     };
@@ -436,9 +437,13 @@ fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, permission_
 /// Resolve the `permission_mode` declared on an agent profile. Reads the
 /// compiled agent runtime config, which already folds workflow YAML
 /// `agents:` overlays onto the builtin profiles.
-pub(crate) fn profile_permission_mode(project_root: &Path, agent_id: Option<&str>) -> Option<String> {
+pub(crate) fn profile_permission_mode(
+    project_root: &Path,
+    agent_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Option<String> {
     let agent_id = agent_id?;
-    orchestrator_core::load_agent_runtime_config_or_default(project_root)
+    orchestrator_core::load_agent_runtime_config_or_default_for_actor(project_root, actor)
         .agent_profile(agent_id)
         .and_then(|profile| profile.permission_mode.as_deref())
         .map(str::trim)
@@ -448,11 +453,15 @@ pub(crate) fn profile_permission_mode(project_root: &Path, agent_id: Option<&str
 
 /// Whether the agent profile declares an `approval_policy`. Reads the
 /// compiled agent runtime config, same as [`profile_permission_mode`].
-pub(crate) fn profile_has_approval_policy(project_root: &Path, agent_id: Option<&str>) -> bool {
+pub(crate) fn profile_has_approval_policy(
+    project_root: &Path,
+    agent_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> bool {
     let Some(agent_id) = agent_id else {
         return false;
     };
-    orchestrator_core::load_agent_runtime_config_or_default(project_root)
+    orchestrator_core::load_agent_runtime_config_or_default_for_actor(project_root, actor)
         .agent_profile(agent_id)
         .is_some_and(|profile| profile.approval_policy.is_some())
 }
@@ -953,6 +962,99 @@ agents:
             !serialized.contains("tok-profile-secret"),
             "the resolved bearer token must never appear in extras: {serialized}"
         );
+    }
+
+    /// Write an executable `#!/bin/sh` provider-plugin stub that answers a
+    /// `--manifest` probe with a provider manifest declaring `capabilities`, so
+    /// plugin discovery treats it as an installed provider whose DECLARED
+    /// capabilities drive MCP support.
+    #[cfg(unix)]
+    fn write_fake_provider_plugin(install_dir: &std::path::Path, name: &str, capabilities: &[&str]) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(install_dir).unwrap();
+        let manifest = json!({
+            "name": name,
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "test provider",
+            "protocol_version": "1.0.0",
+            "capabilities": capabilities,
+        })
+        .to_string();
+        let path = install_dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_provider_tool_receives_profile_scoped_mcp_servers_on_the_wire() {
+        // End-to-end proof for the OAuth/krisp bridge: a provider tool with NO
+        // entry in any hardcoded capability table (LaunchApp's `portal`) gets
+        // its `--agent` profile's `mcp_servers` injected onto the wire PURELY
+        // because its installed plugin DECLARES `supports_mcp` — the plugin's
+        // own manifest capability, resolved uniformly, not a name heuristic.
+        // Isolate HOME + the global plugin install dir so discovery sees only
+        // our fake provider.
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let install_dir = root.join("plugins");
+        // No opt-out token => the provider DECLARES it consumes MCP (default).
+        write_fake_provider_plugin(&install_dir, "animus-provider-portal", &["agent/run"]);
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(""));
+        let _plugin_dir_guard = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_string_lossy().as_ref()));
+
+        let bearer_env = "ANIMUS_TEST_PORTAL_WIRE_BEARER";
+        let _bearer_guard = EnvVarGuard::set(bearer_env, Some("tok-portal-secret"));
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            format!(
+                r#"
+mcp_servers:
+  trading:
+    transport: http
+    url: "https://trading.example.com/mcp"
+    oauth:
+      flow: manual_bearer
+      bearer_env: {bearer_env}
+agents:
+  trader:
+    description: "Trading agent"
+    tool: portal
+    mcp_servers: [trading]
+"#
+            ),
+        )
+        .unwrap();
+
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
+        let mut args = base_args(&root_str);
+        // A plugin-provider tool name with no entry in any hardcoded CLI table.
+        args.tool = "portal".to_string();
+        args.model = Some("z-ai/glm-5.2".to_string());
+        args.agent = Some("trader".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+
+        let servers = request
+            .extras
+            .pointer("/mcp_servers")
+            .and_then(Value::as_object)
+            .expect("a plugin-provider agent's profile servers must ride extras.mcp_servers");
+        let trading = servers.get("trading").expect("the profile-scoped server is in the wire map");
+        let command = trading.get("command").and_then(Value::as_str).expect("proxy stdio entry carries command");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        assert!(trading.get("url").is_none(), "proxy entry carries no upstream url; got {trading}");
+        let serialized = serde_json::to_string(&request.extras).unwrap();
+        assert!(!serialized.contains("tok-portal-secret"), "resolved bearer must never appear: {serialized}");
     }
 
     #[test]

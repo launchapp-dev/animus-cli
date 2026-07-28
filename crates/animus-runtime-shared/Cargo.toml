@@ -37,6 +37,11 @@ thiserror = "2"
 zstd = "0.13"
 animus-actor             = { workspace = true }
 animus-plugin-protocol   = { workspace = true }
+# TASK-933/793/811: the phase session checkpoint now carries the delegated
+# environment binding (plugin id + prepared-context handle) so a daemon
+# restart can reap/reattach the node by handle instead of leaking it. Only
+# the wire types (`EnvironmentHandle`) are used here — no plugin RPC.
+animus-environment-protocol = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 
 # When vendored inside the ao-cli workspace this crate uses the in-tree

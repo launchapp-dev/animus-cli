@@ -638,6 +638,14 @@ pub struct PluginHost {
 }
 
 impl PluginHost {
+    /// Test-only identity handle: the address of the shared inner state. Two
+    /// clones of the same host (e.g. two role leases sharing one process) return
+    /// the same pointer; two distinct processes return different pointers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn inner_ptr(&self) -> *const () {
+        Arc::as_ptr(&self.inner).cast::<()>()
+    }
+
     /// Spawn a plugin without forwarding any environment beyond
     /// [`PLUGIN_BASE_ENV_ALLOWLIST`]. Most production callers should use
     /// [`PluginHost::spawn_with_options`] instead so the plugin sees the
@@ -1053,6 +1061,8 @@ impl PluginHost {
             protocol_version: PROTOCOL_VERSION.to_string(),
             host_info: HostInfo { name: "animus".to_string(), version: env!("CARGO_PKG_VERSION").to_string() },
             capabilities: HostCapabilities { streaming: true, progress: true, cancellation: true },
+            // No init extensions from this host yet (empty = back-compat).
+            init_extensions: std::collections::HashMap::new(),
         };
 
         let response = self
@@ -1657,9 +1667,11 @@ mod tests {
                     name: "test".to_string(),
                     version: "0.1.0".to_string(),
                     plugin_kind: "custom".to_string(),
+                    plugin_kinds: Vec::new(),
                     description: None,
                 },
                 capabilities: PluginCapabilities::default(),
+                kind_capabilities: std::collections::HashMap::new(),
             }),
         )
     }

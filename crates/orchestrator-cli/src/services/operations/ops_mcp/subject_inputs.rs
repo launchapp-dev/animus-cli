@@ -41,6 +41,12 @@ pub(super) struct SubjectCreateInput {
     pub(super) labels: Vec<String>,
     #[serde(default)]
     pub(super) body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (declared kind fields that have no dedicated arg, e.g. a
+    /// transcript's `source`, `occurred_at`, `participants`). Merges with —
+    /// does not replace — the other fields.
+    #[serde(default)]
+    pub(super) data: Option<serde_json::Value>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
@@ -49,6 +55,9 @@ pub(super) struct SubjectCreateInput {
 pub(super) struct SubjectUpdateInput {
     pub(super) kind: String,
     pub(super) id: String,
+    /// Rename the subject. Replaces the subject's title with this value.
+    #[serde(default)]
+    pub(super) title: Option<String>,
     #[serde(default)]
     pub(super) status: Option<String>,
     #[serde(default)]
@@ -60,6 +69,11 @@ pub(super) struct SubjectUpdateInput {
     /// detail views.
     #[serde(default)]
     pub(super) body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (declared kind fields that have no dedicated arg). Merges with —
+    /// does not replace — the other fields.
+    #[serde(default)]
+    pub(super) data: Option<serde_json::Value>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
@@ -75,6 +89,10 @@ pub(super) struct SubjectBatchCreateItem {
     pub(super) labels: Vec<String>,
     #[serde(default)]
     pub(super) body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (declared kind fields that have no dedicated arg).
+    #[serde(default)]
+    pub(super) data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -96,6 +114,10 @@ pub(super) struct SubjectBatchUpdateItem {
     pub(super) priority: Option<String>,
     #[serde(default)]
     pub(super) labels: Vec<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (declared kind fields that have no dedicated arg).
+    #[serde(default)]
+    pub(super) data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]

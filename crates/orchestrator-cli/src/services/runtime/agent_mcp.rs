@@ -219,7 +219,7 @@ pub(crate) fn assemble_agent_mcp_contract_with_actor(
 
     if !named_servers.is_empty() {
         let project_root_str = project_root.to_string_lossy().into_owned();
-        let ctx = RuntimeConfigContext::load(&project_root_str);
+        let ctx = RuntimeConfigContext::load_for_actor(&project_root_str, actor);
 
         // Pre-validate each requested name against the SELECTED definition
         // sources so an unknown name yields the spec's clear error rather
@@ -619,6 +619,7 @@ pub(crate) fn strip_actor_from_contract(runtime_contract: &Value) -> Value {
             let remove_to = (pos + 2).min(args.len());
             args.drain(pos..remove_to);
         }
+        args.retain(|arg| arg.as_str() != Some("--require-actor"));
     }
     sanitized
 }
@@ -645,6 +646,27 @@ pub(crate) struct ResolvedAgentScope {
     pub(crate) skill_application: Option<orchestrator_config::skill_definition::SkillApplicationResult>,
 }
 
+/// Resolve a caller-supplied profile id to the exact configured map key and
+/// its compiled profile. Persisting the map key (rather than the caller's
+/// casing) gives conversations a stable canonical identity.
+pub(crate) fn resolve_canonical_agent_profile(
+    project_root: &Path,
+    agent_id: &str,
+    actor: Option<&Actor>,
+) -> Result<(String, orchestrator_config::agent_runtime_config::AgentProfile)> {
+    let config = orchestrator_config::agent_runtime_config::load_agent_runtime_config_with_metadata_for_actor(
+        project_root,
+        actor,
+    )?
+    .config;
+    config
+        .agents
+        .iter()
+        .find(|(configured_id, _)| configured_id.eq_ignore_ascii_case(agent_id))
+        .map(|(configured_id, profile)| (configured_id.clone(), profile.clone()))
+        .ok_or_else(|| anyhow!("unknown agent profile '{agent_id}'; not visible in this project and actor scope"))
+}
+
 /// Resolve the MCP server names that an `--agent` profile and `--skill`
 /// declare, reading the agent runtime config and skill sources for the
 /// project.
@@ -663,6 +685,7 @@ pub(crate) fn resolve_agent_scope(
     tool: &str,
     agent: Option<&str>,
     skill: Option<&str>,
+    actor: Option<&Actor>,
 ) -> Result<ResolvedAgentScope> {
     let mut tool_policy = orchestrator_config::agent_runtime_config::AgentToolPolicy::default();
     let profile_servers = match agent {
@@ -673,9 +696,9 @@ pub(crate) fn resolve_agent_scope(
             // empty); when the YAML profile OMITS them the agent runtime
             // config profile's `mcp_servers` are used as the fallback. A
             // profile present in NEITHER source errors.
-            let workflow = orchestrator_core::load_workflow_config_or_default(project_root);
+            let workflow = orchestrator_core::load_workflow_config_or_default_for_actor(project_root, actor);
             let yaml_profile = workflow.config.agent_profiles.get(agent_id).cloned();
-            let runtime_config = orchestrator_core::load_agent_runtime_config_or_default(project_root);
+            let runtime_config = orchestrator_core::load_agent_runtime_config_or_default_for_actor(project_root, actor);
             let runtime_profile = runtime_config.agent_profile(agent_id).cloned();
 
             if yaml_profile.is_none() && runtime_profile.is_none() {
@@ -815,6 +838,7 @@ mod tests {
             .filter_map(Value::as_str)
             .collect();
         assert!(!args.contains(&"--actor-json"), "actor flag must be dropped: {args:?}");
+        assert!(!args.contains(&"--require-actor"), "actor requirement must be dropped with the identity: {args:?}");
         assert!(!args.iter().any(|a| a.contains("alice")), "actor json value must be dropped: {args:?}");
         // The rest of the args (incl. --agent-id) survive intact.
         assert!(args.contains(&"--agent-id") && args.contains(&"swe"), "non-actor args must survive: {args:?}");
@@ -888,7 +912,13 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_tool_injects_nothing() {
+    fn unknown_tool_falls_back_to_the_mcp_capable_provider_shape() {
+        // MCP support for a provider tool is decided by the loaded plugin's
+        // DECLARED capability (see the discovery-backed wire test in
+        // `runtime_agent::provider_client`). When NO provider plugin backs the
+        // tool (e.g. an unknown name that cannot be dispatched anyway), the
+        // built-in provider fallback still assembles an MCP-capable contract —
+        // here, with no scope selected, the baseline `animus` stdio server.
         let tmp = tempfile::tempdir().unwrap();
         let contract = assemble_agent_mcp_contract(
             tmp.path(),
@@ -902,8 +932,13 @@ mod tests {
             false,
             None,
         )
-        .unwrap();
-        assert!(contract.is_none(), "an unknown/unsupported tool must inject no MCP contract");
+        .unwrap()
+        .expect("the built-in provider fallback assembles an MCP-capable contract");
+        assert_eq!(contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
+        assert!(
+            contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some(),
+            "the baseline animus stdio server must be injected; got {contract}"
+        );
     }
 
     #[test]
@@ -1570,7 +1605,7 @@ mod tests {
     #[test]
     fn unknown_agent_profile_errors() {
         let tmp = tempfile::tempdir().unwrap();
-        let err = resolve_agent_scope(tmp.path(), "claude", Some("does-not-exist-profile"), None)
+        let err = resolve_agent_scope(tmp.path(), "claude", Some("does-not-exist-profile"), None, None)
             .expect_err("an unknown --agent profile must error");
         assert!(
             err.to_string().contains("unknown agent profile 'does-not-exist-profile'"),
@@ -1618,7 +1653,7 @@ mod tests {
         .unwrap();
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(tmp.path());
-        let scope = resolve_agent_scope(tmp.path(), "claude", Some("default"), None)
+        let scope = resolve_agent_scope(tmp.path(), "claude", Some("default"), None, None)
             .expect("a known profile must resolve without error");
         // We don't assert specific servers (config-defined), only that the
         // known profile path does not error.

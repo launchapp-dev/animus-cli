@@ -15,6 +15,7 @@
 //! kind so the downstream queue lease / runner dispatch resolves the subject
 //! via `<kind>/get` instead of `task/get`.
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use std::path::Path;
@@ -45,13 +46,53 @@ pub(crate) fn subject_ref_for_kind(kind: &str, id: impl Into<String>) -> Subject
     }
 }
 
+/// Build the dispatch [`SubjectRef`] for `kind`, choosing the native-id shape
+/// that keeps [`SubjectRef::subject_key()`] — the queue dedupe / daemon
+/// active-subject key — consistent across dispatch surfaces:
+///
+/// - **Built-in kinds** (`task` / `requirement` / `custom`) key on the bare `id`
+///   field, so `subject_key()` is the id verbatim. The dedicated `--task-id` /
+///   `--requirement-id` enqueue path stores (and therefore keys on) the
+///   QUALIFIED `<kind>:<native>` id, so this path keeps the qualified shape too —
+///   otherwise the same task would enqueue/dispatch under two different keys
+///   (`task:TASK-1` vs `TASK-1`) depending on the flag used, defeating dedupe.
+/// - **Dynamic kinds** key as `<kind>::<id>`, so an already-qualified native
+///   double-prefixes (`transcript::transcript:TRANSCRIPT-001`). Store the BARE
+///   native id so the key is the clean `<kind>::<native>` and the payload subject
+///   id is the bare native the backend stores.
+///
+/// The built-in vs dynamic distinction is read from `subject_key()` itself
+/// (rather than re-listing the built-in kind constants) so it stays in lockstep
+/// with the protocol's keying rule: a ref built from the qualified id whose
+/// `subject_key()` equals that qualified id keys on the bare `id` field (built-in)
+/// and is kept as-is; anything else is a dynamic kind and is rebuilt bare.
+fn subject_ref_preserving_key(kind: &str, qualified: &str, bare_native: &str) -> SubjectRef {
+    let qualified_ref = subject_ref_for_kind(kind, qualified.to_string());
+    if qualified_ref.subject_key() == qualified {
+        qualified_ref
+    } else {
+        subject_ref_for_kind(kind, bare_native.to_string())
+    }
+}
+
 /// Abstraction over the subject router used to resolve a bare id's real kind.
 /// Split out as a trait so the resolution logic is unit-testable with a stub
 /// router (no plugin processes spawned).
 #[async_trait]
 pub(crate) trait SubjectKindProbe: Send + Sync {
-    /// Concrete kinds to probe for a bare id, in priority order. The `*`
-    /// catch-all is excluded (it is not a concrete kind).
+    /// Concrete kinds to probe for a bare id, in priority order.
+    ///
+    /// The `*` catch-all is deliberately EXCLUDED. It is not a concrete kind:
+    /// resolving a bare id "under" it would build a `SubjectRef` with kind `*`
+    /// (non-dispatchable), and a backend cannot resolve a bare id through the
+    /// catch-all anyway — routing `*/get` fails (`subject '*:<id>' not found` /
+    /// `subject '<kind>:<id>' is not kind '*'`), because the wildcard is not a
+    /// real subject kind the backend serves. A runtime-declared kind that lives
+    /// ONLY behind the catch-all (e.g. `transcript`, created via a portal
+    /// `declare_kind` and absent from the plugin manifest) is therefore not
+    /// enumerable from a bare id; such subjects must be dispatched with a
+    /// qualified `<kind>:<native>` id (which routes `<kind>/get` through the
+    /// catch-all and resolves).
     fn candidate_kinds(&self) -> Vec<String>;
 
     /// `true` when `<kind>/get` resolves a subject for the qualified id.
@@ -77,11 +118,19 @@ pub(crate) async fn resolve_subject_id_ref(subject_id: &str, probe: &dyn Subject
     // typo surfaces as a clean not-found instead of a dangling dispatch.
     if let Some((kind, native)) = trimmed.split_once(':') {
         let kind = kind.trim();
-        if !kind.is_empty() && !native.trim().is_empty() {
+        let native = native.trim();
+        if !kind.is_empty() && !native.is_empty() {
+            // Existence is validated with the QUALIFIED id — the backend keys
+            // subjects as `<kind>:<native>`. The stored SubjectRef shape is then
+            // chosen to keep `subject_key()` consistent: dynamic kinds carry the
+            // bare native id (avoiding the `<kind>::<kind>:<native>` double-prefix
+            // that broke the transcript dispatch), while built-in kinds keep the
+            // qualified id for dedupe parity with the --task-id / --requirement-id
+            // path. See `subject_ref_preserving_key`.
             if !probe.subject_exists(kind, trimmed).await? {
                 return Err(not_found_error(format!("subject '{trimmed}' not found under kind '{kind}'")));
             }
-            return Ok(subject_ref_for_kind(kind, trimmed.to_string()));
+            return Ok(subject_ref_preserving_key(kind, trimmed, native));
         }
     }
 
@@ -94,14 +143,21 @@ pub(crate) async fn resolve_subject_id_ref(subject_id: &str, probe: &dyn Subject
         )));
     }
     for kind in &candidates {
+        // Probe with the QUALIFIED id (backends key subjects `<kind>:<native>`),
+        // then store the shape that keeps `subject_key()` consistent — bare native
+        // for dynamic kinds (no `<kind>::<kind>:<native>` double-prefix), qualified
+        // for built-ins (dedupe parity with the --task-id path). See
+        // `subject_ref_preserving_key`.
         let qualified = crate::qualify_subject_id(trimmed, kind);
         if probe.subject_exists(kind, &qualified).await? {
-            return Ok(subject_ref_for_kind(kind, qualified));
+            return Ok(subject_ref_preserving_key(kind, &qualified, trimmed));
         }
     }
     Err(not_found_error(format!(
         "subject id '{trimmed}' not found under any installed subject kind (probed: {}); \
-         for BaaS dynamic kinds pass a qualified id like '<kind>:{trimmed}' (e.g. 'blog:{trimmed}')",
+         for BaaS dynamic kinds pass a qualified id like '<kind>:{trimmed}' (e.g. 'blog:{trimmed}'). \
+         A runtime-declared kind served only by the '*' catch-all backend (e.g. 'transcript') is not \
+         enumerable from a bare id and MUST be passed qualified.",
         candidates.join(", ")
     )))
 }
@@ -112,6 +168,7 @@ pub(crate) async fn resolve_subject_id_ref(subject_id: &str, probe: &dyn Subject
 /// dynamic kinds.
 pub(crate) struct RouterSubjectProbe {
     dispatch: SubjectPluginDispatch,
+    actor: Option<Actor>,
 }
 
 impl RouterSubjectProbe {
@@ -119,8 +176,31 @@ impl RouterSubjectProbe {
     /// over the resulting router. No plugin is spawned until a `<kind>/get`
     /// routes to it.
     pub(crate) async fn discover(project_root: &Path) -> Result<Self> {
+        Self::discover_for_actor(project_root, None).await
+    }
+
+    /// Discover installed subject backends and bind every existence probe to
+    /// the transport-asserted actor. Once an actor is present this probe never
+    /// falls back to the legacy v1 route.
+    pub(crate) async fn discover_for_actor(project_root: &Path, actor: Option<&Actor>) -> Result<Self> {
         let resolution = resolve_subject_dispatch(project_root).await?;
-        Ok(Self { dispatch: resolution.selected })
+        let probe = Self { dispatch: resolution.selected, actor: actor.cloned() };
+        tracing::debug!(
+            resolver_mode = probe.resolver_mode(),
+            actor_present = probe.actor.is_some(),
+            actor_user_id = probe.actor.as_ref().map(|actor| actor.user_id.as_str()),
+            actor_tenant_id = probe.actor.as_ref().and_then(|actor| actor.tenant_id.as_deref()),
+            "resolved workflow subject existence probe"
+        );
+        Ok(probe)
+    }
+
+    fn resolver_mode(&self) -> &'static str {
+        if self.actor.is_some() {
+            "actor-v2"
+        } else {
+            "legacy-v1"
+        }
     }
 }
 
@@ -151,7 +231,17 @@ impl SubjectKindProbe for RouterSubjectProbe {
         // plugin) must NOT masquerade as not-found: surface it so a temporarily
         // unhealthy backend yields an actionable error instead of silently
         // failing to dispatch a valid subject.
-        match self.dispatch.route_call(&format!("{kind}/get"), Some(json!({ "id": qualified_id }))).await {
+        let method = format!("{kind}/get");
+        tracing::debug!(
+            resolver_mode = self.resolver_mode(),
+            subject_kind = kind,
+            "probing workflow subject existence"
+        );
+        let result = match self.actor.as_ref() {
+            Some(actor) => self.dispatch.route_actor_call(&method, Some(json!({ "id": qualified_id })), actor).await,
+            None => self.dispatch.route_call(&method, Some(json!({ "id": qualified_id }))).await,
+        };
+        match result {
             Ok(value) => Ok(response_has_subject(&value)),
             Err(err)
                 if matches!(
@@ -207,12 +297,24 @@ mod tests {
         assert_eq!(blog.id(), "blog:BLOG-001");
     }
 
+    #[test]
+    fn router_probe_mode_is_non_downgradable_when_actor_is_present() {
+        let actor =
+            Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("workspace-a".to_string()) };
+        let actor_probe = RouterSubjectProbe { dispatch: SubjectPluginDispatch::empty(), actor: Some(actor) };
+        let legacy_probe = RouterSubjectProbe { dispatch: SubjectPluginDispatch::empty(), actor: None };
+        assert_eq!(actor_probe.resolver_mode(), "actor-v2");
+        assert_eq!(legacy_probe.resolver_mode(), "legacy-v1");
+    }
+
     #[tokio::test]
     async fn qualified_blog_id_resolves_kind_blog() {
         let probe = StubProbe::new(&["task"], &[("blog", "blog:BLOG-001")]);
         let r = resolve_subject_id_ref("blog:BLOG-001", &probe).await.expect("qualified resolves");
         assert_eq!(r.kind(), "blog");
-        assert_eq!(r.id(), "blog:BLOG-001");
+        // The native id is stored BARE (not the qualified input): the backend
+        // keys on the bare id and `subject_key()` re-qualifies dynamic kinds.
+        assert_eq!(r.id(), "BLOG-001");
     }
 
     #[tokio::test]
@@ -220,7 +322,29 @@ mod tests {
         let probe = StubProbe::new(&[], &[("task", "task:TASK-1")]);
         let r = resolve_subject_id_ref("task:TASK-1", &probe).await.expect("qualified task resolves");
         assert_eq!(r.kind(), SUBJECT_KIND_TASK);
+        // Built-in kinds keep the QUALIFIED id so `subject_key()` matches the
+        // dedicated `--task-id` enqueue path (dedupe parity): a built-in's
+        // subject_key is the bare id field, so it is not double-prefixed.
         assert_eq!(r.id(), "task:TASK-1");
+        assert_eq!(r.subject_key(), "task:TASK-1");
+    }
+
+    #[tokio::test]
+    async fn qualified_dynamic_id_stores_bare_native_id_without_double_prefix() {
+        // Regression: enqueuing `transcript:TRANSCRIPT-001` used to build a
+        // SubjectRef whose id kept the qualified prefix, so `subject_key()`
+        // emitted the double-prefixed `transcript::transcript:TRANSCRIPT-001`
+        // into the queue item + dispatch payload. The ref must carry the bare
+        // native id + kind, yielding the clean queue key `transcript::TRANSCRIPT-001`.
+        let probe = StubProbe::new(
+            &["task", "requirement", "blog", "knowledge"],
+            &[("transcript", "transcript:TRANSCRIPT-001")],
+        );
+        let r =
+            resolve_subject_id_ref("transcript:TRANSCRIPT-001", &probe).await.expect("qualified transcript resolves");
+        assert_eq!(r.kind(), "transcript");
+        assert_eq!(r.id(), "TRANSCRIPT-001");
+        assert_eq!(r.subject_key(), "transcript::TRANSCRIPT-001");
     }
 
     #[tokio::test]
@@ -236,7 +360,10 @@ mod tests {
         let probe = StubProbe::new(&["task", "blog"], &[("blog", "blog:BLOG-001")]);
         let r = resolve_subject_id_ref("BLOG-001", &probe).await.expect("bare blog resolves");
         assert_eq!(r.kind(), "blog");
-        assert_eq!(r.id(), "blog:BLOG-001");
+        // Bare native id: the probe validates the qualified form but the ref
+        // stores the bare id so `subject_key()` does not double-prefix.
+        assert_eq!(r.id(), "BLOG-001");
+        assert_eq!(r.subject_key(), "blog::BLOG-001");
     }
 
     #[tokio::test]
@@ -244,7 +371,29 @@ mod tests {
         let probe = StubProbe::new(&["task", "blog"], &[("task", "task:TASK-9")]);
         let r = resolve_subject_id_ref("TASK-9", &probe).await.expect("bare task resolves");
         assert_eq!(r.kind(), SUBJECT_KIND_TASK);
+        // Built-in: keep the qualified id so `subject_key()` matches the
+        // dedicated `--task-id` path (dedupe parity).
         assert_eq!(r.id(), "task:TASK-9");
+        assert_eq!(r.subject_key(), "task:TASK-9");
+    }
+
+    #[tokio::test]
+    async fn bare_dynamic_id_only_behind_catch_all_is_unresolvable_with_hint() {
+        // A runtime-declared kind served ONLY by the `*` catch-all (e.g.
+        // `transcript`) is NOT in the concrete candidate set (it is absent from
+        // the plugin manifest), and the catch-all cannot resolve a bare id. The
+        // resolver must surface an actionable not-found telling the caller to
+        // pass the qualified form, rather than mis-resolving under `task`.
+        let probe = StubProbe::new(
+            &["task", "requirement", "blog", "knowledge"],
+            &[("transcript", "transcript:TRANSCRIPT-001")],
+        );
+        let err = resolve_subject_id_ref("TRANSCRIPT-001", &probe).await.expect_err("bare catch-all kind unresolvable");
+        let msg = err.to_string();
+        assert!(msg.contains("not found"), "got: {msg}");
+        assert!(msg.contains(":TRANSCRIPT-001"), "hint suggests the qualified `<kind>:<native>` form: {msg}");
+        assert!(msg.contains("catch-all"), "hint explains the catch-all limitation: {msg}");
+        assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::NotFound);
     }
 
     #[tokio::test]
@@ -277,9 +426,9 @@ mod tests {
         let subject_ref = subject_ref_for_kind("blog", "blog:BLOG-001");
         let dispatch =
             SubjectDispatch::for_subject_with_metadata(subject_ref, "draft-post", "manual-queue-enqueue", Utc::now());
-        assert_eq!(dispatch.subject_kind(), "blog");
-        assert_eq!(dispatch.to_workflow_run_input().subject().kind(), "blog");
-        assert_eq!(dispatch.to_workflow_run_input().subject().id(), "blog:BLOG-001");
+        assert_eq!(dispatch.subject_kind(), Some("blog"));
+        assert_eq!(dispatch.to_workflow_run_input().subject().unwrap().kind(), "blog");
+        assert_eq!(dispatch.to_workflow_run_input().subject().unwrap().id(), "blog:BLOG-001");
     }
 
     #[test]

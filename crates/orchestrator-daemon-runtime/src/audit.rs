@@ -102,6 +102,7 @@ pub enum AuditEventKind {
     TrustOrgRevoked,
     PolicyOverride,
     LockfileMismatch,
+    McpToolInvocation,
 }
 
 impl AuditEventKind {
@@ -118,6 +119,7 @@ impl AuditEventKind {
             Self::TrustOrgRevoked => "trust_org_revoked",
             Self::PolicyOverride => "policy_override",
             Self::LockfileMismatch => "lockfile_mismatch",
+            Self::McpToolInvocation => "mcp_tool_invocation",
         }
     }
 }
@@ -421,5 +423,6 @@ mod tests {
         assert_eq!(AuditEventKind::TrustOrgRevoked.as_str(), "trust_org_revoked");
         assert_eq!(AuditEventKind::PolicyOverride.as_str(), "policy_override");
         assert_eq!(AuditEventKind::LockfileMismatch.as_str(), "lockfile_mismatch");
+        assert_eq!(AuditEventKind::McpToolInvocation.as_str(), "mcp_tool_invocation");
     }
 }

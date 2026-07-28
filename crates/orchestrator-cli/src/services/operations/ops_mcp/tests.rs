@@ -1,6 +1,7 @@
 use super::*;
 use crate::services::runtime::daemon_events_log_path;
 use crate::services::runtime::DaemonEventRecord;
+use crate::McpServeArgs;
 use chrono::{Duration, Utc};
 use protocol::CLI_SCHEMA_ID;
 use std::collections::{BTreeSet, HashMap};
@@ -88,7 +89,7 @@ fn save_workflow(
             rework_counts: HashMap::new(),
             total_reworks: 0,
             decision_history: Vec::new(),
-            subject: protocol::SubjectRef::task(task_id.to_string()),
+            subject: Some(protocol::SubjectRef::task(task_id.to_string())),
         })
         .expect("workflow should be written");
 }
@@ -137,6 +138,81 @@ fn documented_reference_tool_names() -> BTreeSet<String> {
         .collect()
 }
 
+#[tokio::test]
+async fn mcp_serve_rejects_malformed_explicit_actor_instead_of_downgrading_scope() {
+    let command = McpCommand::Serve(McpServeArgs {
+        management: false,
+        agent_id: None,
+        workflow_id: None,
+        actor_json: Some("not-json".to_string()),
+        require_actor: false,
+    });
+
+    let error = handle_mcp(command, "/tmp/project", true)
+        .await
+        .expect_err("malformed explicit MCP actor must fail before the server starts");
+    assert!(error.to_string().contains("invalid --actor-json"));
+}
+
+#[tokio::test]
+async fn mcp_serve_require_actor_rejects_missing_identity() {
+    let command = McpCommand::Serve(McpServeArgs {
+        management: false,
+        agent_id: None,
+        workflow_id: None,
+        actor_json: None,
+        require_actor: true,
+    });
+
+    let error = handle_mcp(command, "/tmp/project", true)
+        .await
+        .expect_err("actor-required MCP server must fail before binding stdio");
+    assert!(error.to_string().contains("--actor-json was omitted"));
+}
+
+#[test]
+fn actor_bound_server_exposes_only_actor_enforced_tools() {
+    let actor = Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("tenant-a".to_string()) };
+    let server = new_ao_mcp_server_with_options("/tmp/project", true, None, None, Some(actor));
+    let names: BTreeSet<String> = server.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect();
+    let expected: BTreeSet<String> = ACTOR_BOUND_MCP_TOOLS.iter().map(|name| (*name).to_string()).collect();
+    assert_eq!(names, expected);
+    assert!(names.contains("animus.subject.list"));
+    assert!(names.contains("animus.subject.status"));
+    assert!(!names.contains("animus.subject.next"));
+    assert!(!names.contains("animus.queue.list"));
+    assert!(!names.contains("animus.workflow.config.set"));
+    assert!(!names.contains("animus.memory.get"));
+    assert!(names.contains("animus.interactions.list"));
+    assert!(names.contains("animus.interactions.answer"));
+}
+
+#[test]
+fn actor_bound_tool_audit_attributes_user_and_tenant() {
+    let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("project root");
+    let actor = Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("tenant-a".to_string()) };
+    let server =
+        new_ao_mcp_server_with_options(project_root.to_string_lossy().as_ref(), false, None, None, Some(actor));
+
+    server.audit_actor_tool_invocation(
+        "animus.workflow.run",
+        &["workflow", "run"].into_iter().map(str::to_string).collect::<Vec<_>>(),
+    );
+
+    let body = std::fs::read_to_string(server.scoped_state_root().join("audit.jsonl")).expect("audit log");
+    let event: Value = serde_json::from_str(body.trim()).expect("audit event json");
+    assert_eq!(event["event"], "mcp_tool_invocation");
+    assert_eq!(event["principal"]["id"], "alice");
+    assert_eq!(event["principal"]["kind"], "user");
+    assert_eq!(event["details"]["tenant_id"], "tenant-a");
+    assert_eq!(event["details"]["tool"], "animus.workflow.run");
+    assert_eq!(event["details"]["decision"], "forward");
+}
+
 #[test]
 fn build_cli_error_payload_prefers_stderr_envelope_over_stdout_envelope() {
     let mut result = sample_cli_failure_result();
@@ -173,15 +249,18 @@ fn build_cli_error_payload_falls_back_to_stdout_envelope_when_stderr_json_missin
 
 #[test]
 fn build_bulk_workflow_run_item_args_basic() {
-    let item = BulkWorkflowRunItem { task_id: "TASK-4".to_string(), workflow_ref: None, input_json: None };
+    let item = BulkWorkflowRunItem { subject_id: "TASK-4".to_string(), workflow_ref: None, input_json: None };
     let args = build_bulk_workflow_run_item_args(&item);
-    assert_eq!(args, vec!["workflow".to_string(), "run".to_string(), "--task-id".to_string(), "TASK-4".to_string(),]);
+    assert_eq!(
+        args,
+        vec!["workflow".to_string(), "run".to_string(), "--subject-id".to_string(), "TASK-4".to_string(),]
+    );
 }
 
 #[test]
 fn build_bulk_workflow_run_item_args_with_workflow_ref_and_input() {
     let item = BulkWorkflowRunItem {
-        task_id: "TASK-5".to_string(),
+        subject_id: "TASK-5".to_string(),
         workflow_ref: Some("my-pipeline".to_string()),
         input_json: Some(r#"{"key":"val"}"#.to_string()),
     };
@@ -192,7 +271,7 @@ fn build_bulk_workflow_run_item_args_with_workflow_ref_and_input() {
             "workflow".to_string(),
             "run".to_string(),
             "my-pipeline".to_string(),
-            "--task-id".to_string(),
+            "--subject-id".to_string(),
             "TASK-5".to_string(),
             "--input-json".to_string(),
             r#"{"key":"val"}"#.to_string(),
@@ -207,17 +286,21 @@ fn validate_workflow_run_multiple_rejects_empty() {
 }
 
 #[test]
-fn validate_workflow_run_multiple_rejects_empty_task_id() {
-    let runs = vec![BulkWorkflowRunItem { task_id: "".to_string(), workflow_ref: None, input_json: None }];
+fn validate_workflow_run_multiple_rejects_empty_subject_id() {
+    let runs = vec![BulkWorkflowRunItem { subject_id: "".to_string(), workflow_ref: None, input_json: None }];
     let err = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).unwrap_err();
-    assert!(err.contains("task_id must not be empty"), "expected empty-task-id error, got: {err}");
+    assert!(err.contains("subject_id must not be empty"), "expected empty-subject-id error, got: {err}");
 }
 
 #[test]
 fn validate_workflow_run_multiple_accepts_valid_runs() {
     let runs = vec![
-        BulkWorkflowRunItem { task_id: "TASK-1".to_string(), workflow_ref: None, input_json: None },
-        BulkWorkflowRunItem { task_id: "TASK-2".to_string(), workflow_ref: Some("p1".to_string()), input_json: None },
+        BulkWorkflowRunItem { subject_id: "TASK-1".to_string(), workflow_ref: None, input_json: None },
+        BulkWorkflowRunItem {
+            subject_id: "TASK-2".to_string(),
+            workflow_ref: Some("p1".to_string()),
+            input_json: None,
+        },
     ];
     assert!(validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).is_ok());
 }
@@ -237,14 +320,21 @@ fn on_error_continue_as_str() {
 #[test]
 fn validate_workflow_run_multiple_rejects_over_max() {
     let runs: Vec<BulkWorkflowRunItem> = (0..=MAX_BATCH_SIZE)
-        .map(|i| BulkWorkflowRunItem { task_id: format!("TASK-{i}"), workflow_ref: None, input_json: None })
+        .map(|i| BulkWorkflowRunItem { subject_id: format!("TASK-{i}"), workflow_ref: None, input_json: None })
         .collect();
     let err = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).unwrap_err();
     assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
 }
 
 fn batch_create_item(title: &str) -> SubjectBatchCreateItem {
-    SubjectBatchCreateItem { title: title.to_string(), status: None, priority: None, labels: Vec::new(), body: None }
+    SubjectBatchCreateItem {
+        title: title.to_string(),
+        status: None,
+        priority: None,
+        labels: Vec::new(),
+        body: None,
+        data: None,
+    }
 }
 
 fn batch_update_item(id: &str, status: Option<&str>) -> SubjectBatchUpdateItem {
@@ -253,6 +343,7 @@ fn batch_update_item(id: &str, status: Option<&str>) -> SubjectBatchUpdateItem {
         status: status.map(str::to_string),
         priority: None,
         labels: Vec::new(),
+        data: None,
     }
 }
 
@@ -737,7 +828,7 @@ fn build_workflow_list_args_includes_filters_and_sort() {
     let args = build_workflow_list_args(&WorkflowListInput {
         status: Some("running".to_string()),
         workflow_ref: Some("default".to_string()),
-        task_id: Some("TASK-123".to_string()),
+        subject_id: Some("TASK-123".to_string()),
         phase_id: Some("implementation".to_string()),
         search: Some("retry".to_string()),
         sort: Some("started_at".to_string()),
@@ -755,7 +846,7 @@ fn build_workflow_list_args_includes_filters_and_sort() {
             "running".to_string(),
             "--workflow-ref".to_string(),
             "default".to_string(),
-            "--task-id".to_string(),
+            "--subject-id".to_string(),
             "TASK-123".to_string(),
             "--phase-id".to_string(),
             "implementation".to_string(),
@@ -862,10 +953,8 @@ fn build_daemon_config_set_args_wires_all_runtime_settings() {
 #[test]
 fn build_queue_enqueue_args_includes_optional_fields() {
     let input = QueueEnqueueInput {
-        task_id: Some("TASK-123".to_string()),
-        requirement_id: None,
         title: None,
-        subject_id: None,
+        subject_id: Some("TASK-123".to_string()),
         description: None,
         workflow_ref: Some("ops".to_string()),
         input_json: Some("{\"mode\":\"fast\"}".to_string()),
@@ -879,7 +968,7 @@ fn build_queue_enqueue_args_includes_optional_fields() {
         vec![
             "queue".to_string(),
             "enqueue".to_string(),
-            "--task-id".to_string(),
+            "--subject-id".to_string(),
             "TASK-123".to_string(),
             "--workflow-ref".to_string(),
             "ops".to_string(),
@@ -1543,7 +1632,7 @@ fn mcp_workflow_list_routes_via_control_when_socket_present() {
     let input = WorkflowListInput {
         status: Some("running".to_string()),
         workflow_ref: None,
-        task_id: Some("TASK-1".to_string()),
+        subject_id: Some("TASK-1".to_string()),
         phase_id: None,
         search: None,
         sort: None,
@@ -1557,7 +1646,7 @@ fn mcp_workflow_list_routes_via_control_when_socket_present() {
     assert_eq!(args[1], "list");
     assert!(args.contains(&"--status".to_string()));
     assert!(args.contains(&"running".to_string()));
-    assert!(args.contains(&"--task-id".to_string()));
+    assert!(args.contains(&"--subject-id".to_string()));
     assert!(args.contains(&"TASK-1".to_string()));
 }
 
@@ -1631,6 +1720,7 @@ fn mcp_subject_create_builds_labels_csv() {
         priority: Some("p1".to_string()),
         labels: vec!["bug".to_string(), "urgent".to_string()],
         body: Some("Body text".to_string()),
+        data: None,
         project_root: None,
     };
     let args = build_subject_create_args(&input);
@@ -1658,10 +1748,12 @@ fn mcp_subject_update_requires_at_least_one_field_args() {
     let input = SubjectUpdateInput {
         kind: "task".to_string(),
         id: "TASK-1".to_string(),
+        title: None,
         status: Some("in_progress".to_string()),
         priority: None,
         labels: vec![],
         body: None,
+        data: None,
         project_root: None,
     };
     let args = build_subject_update_args(&input);
@@ -1678,6 +1770,96 @@ fn mcp_subject_update_requires_at_least_one_field_args() {
             "in_progress".to_string(),
         ]
     );
+}
+
+#[test]
+fn mcp_subject_update_forwards_title_flag() {
+    // The `title` input field must reach the CLI as `--title` so an MCP
+    // caller can rename a subject (TASK-192: the schema advertised `title`
+    // but the arg was never forwarded, so `animus subject update` rejected
+    // the unknown `--title`).
+    let input = SubjectUpdateInput {
+        kind: "task".to_string(),
+        id: "TASK-1".to_string(),
+        title: Some("Renamed title".to_string()),
+        status: None,
+        priority: None,
+        labels: vec![],
+        body: None,
+        data: None,
+        project_root: None,
+    };
+    let args = build_subject_update_args(&input);
+    assert_eq!(
+        args,
+        vec![
+            "subject".to_string(),
+            "update".to_string(),
+            "--kind".to_string(),
+            "task".to_string(),
+            "--id".to_string(),
+            "TASK-1".to_string(),
+            "--title".to_string(),
+            "Renamed title".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn mcp_subject_create_forwards_data_flag() {
+    // A `data` object input must reach the CLI as `--data <json>` so an MCP
+    // caller can set declared kind fields that have no dedicated arg.
+    let input = SubjectCreateInput {
+        kind: "transcript".to_string(),
+        title: "Weekly sync".to_string(),
+        status: None,
+        priority: None,
+        labels: vec![],
+        body: None,
+        data: Some(json!({ "source": "krisp" })),
+        project_root: None,
+    };
+    let args = build_subject_create_args(&input);
+    let idx = args.iter().position(|a| a == "--data").expect("--data forwarded");
+    let rendered: Value = serde_json::from_str(&args[idx + 1]).expect("data flag is valid json");
+    assert_eq!(rendered.pointer("/source").and_then(Value::as_str), Some("krisp"));
+}
+
+#[test]
+fn mcp_subject_update_forwards_data_flag() {
+    let input = SubjectUpdateInput {
+        kind: "transcript".to_string(),
+        id: "TRANSCRIPT-1".to_string(),
+        title: None,
+        status: None,
+        priority: None,
+        labels: vec![],
+        body: None,
+        data: Some(json!({ "occurred_at": "2026-07-09T21:00:00Z" })),
+        project_root: None,
+    };
+    let args = build_subject_update_args(&input);
+    let idx = args.iter().position(|a| a == "--data").expect("--data forwarded");
+    let rendered: Value = serde_json::from_str(&args[idx + 1]).expect("data flag is valid json");
+    assert_eq!(rendered.pointer("/occurred_at").and_then(Value::as_str), Some("2026-07-09T21:00:00Z"));
+}
+
+#[test]
+fn mcp_subject_batch_update_item_forwards_data() {
+    let item = SubjectBatchUpdateItem {
+        id: "TRANSCRIPT-1".to_string(),
+        status: None,
+        priority: None,
+        labels: Vec::new(),
+        data: Some(json!({ "summary": "done" })),
+    };
+    // A data-only batch-update item is valid and forwards `--data`.
+    validate_subject_batch_update_input("animus.subject.batch-update", "transcript", std::slice::from_ref(&item))
+        .expect("data-only item is valid");
+    let args = build_subject_batch_update_item_args("transcript", &item);
+    let idx = args.iter().position(|a| a == "--data").expect("--data forwarded");
+    let rendered: Value = serde_json::from_str(&args[idx + 1]).expect("data flag is valid json");
+    assert_eq!(rendered.pointer("/summary").and_then(Value::as_str), Some("done"));
 }
 
 #[test]
@@ -1756,4 +1938,41 @@ async fn daemon_agents_inproc_returns_value_without_subprocess() {
     let project_root = temp.path().to_string_lossy().to_string();
     let value = daemon_agents_inproc(&project_root, None).await.expect("inproc agents should not panic");
     assert!(value.is_object(), "expected agents object, got {value}");
+}
+
+#[test]
+fn resolve_call_arguments_parses_inline_json_object() {
+    let args = resolve_call_arguments(Some(r#"{"query":"x","limit":3}"#), None)
+        .expect("valid JSON object parses")
+        .expect("arguments present");
+    assert_eq!(args.get("query").and_then(|v| v.as_str()), Some("x"));
+    assert_eq!(args.get("limit").and_then(|v| v.as_u64()), Some(3));
+}
+
+#[test]
+fn resolve_call_arguments_defaults_to_none() {
+    assert!(resolve_call_arguments(None, None).expect("no args is ok").is_none());
+    // Whitespace-only inline args collapse to no arguments rather than an error.
+    assert!(resolve_call_arguments(Some("   "), None).expect("blank is ok").is_none());
+}
+
+#[test]
+fn resolve_call_arguments_rejects_non_object_json() {
+    let err = resolve_call_arguments(Some("[1,2,3]"), None).expect_err("a JSON array is not a valid argument map");
+    assert!(err.to_string().contains("must be a JSON object"), "got: {err}");
+}
+
+#[test]
+fn resolve_call_arguments_rejects_malformed_json() {
+    let err = resolve_call_arguments(Some("{not json"), None).expect_err("malformed JSON must error");
+    assert!(err.to_string().contains("must be valid JSON"), "got: {err}");
+}
+
+#[test]
+fn resolve_call_arguments_reads_from_file() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = temp.path().join("args.json");
+    std::fs::write(&path, r#"{"from_file":true}"#).expect("write args file");
+    let args = resolve_call_arguments(None, Some(&path)).expect("file parses").expect("arguments present");
+    assert_eq!(args.get("from_file").and_then(|v| v.as_bool()), Some(true));
 }

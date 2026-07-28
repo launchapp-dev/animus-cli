@@ -7,8 +7,12 @@
 //! injects into the additional MCP server entry.
 //!
 //! Tokens are cached under `~/.animus/<scope>/mcp-oauth-cache/<server>.json`
-//! with 0600 permissions on Unix. A 60s skew margin guards against clock
-//! drift and in-flight network latency.
+//! with 0600 permissions on Unix (override the directory with
+//! `ANIMUS_MCP_OAUTH_CACHE_DIR` to persist tokens on a durable volume across an
+//! ephemeral host's redeploys). A 60s skew margin guards against clock drift
+//! and in-flight network latency. When a dead refresh grant cannot be revived
+//! (cached rotation chain AND env-var seed both rejected with `invalid_grant`),
+//! the terminal error carries an explicit "re-authentication required" signal.
 //!
 //! Three flows are supported:
 //! - `client_credentials`: POSTs `grant_type=client_credentials` +
@@ -440,11 +444,11 @@ pub fn resolve_token_with_options(
                         );
                         let _ = fs::remove_file(&cache_path);
                         let mut token = fetch_refresh_token(server_name, oauth, env, client, None)
-                            .map_err(|err| wrap_resolution_error(server_name, err))?;
+                            .map_err(|err| finalize_refresh_error(server_name, err))?;
                         token.refresh_seed_sha256 = current_seed.clone();
                         token
                     }
-                    Err(err) => return Err(wrap_resolution_error(server_name, err)),
+                    Err(err) => return Err(finalize_refresh_error(server_name, err)),
                 }
             };
             token.config_fingerprint = Some(fingerprint);
@@ -593,6 +597,24 @@ fn wrap_resolution_error(server_name: &str, err: anyhow::Error) -> anyhow::Error
         err
     } else {
         anyhow!("OAuth resolution failed for `{}`: {}", server_name, message)
+    }
+}
+
+/// Terminal-error finalizer for the refresh_token flow. Wraps with the standard
+/// resolution-failure prefix and, when the failure is an explicit RFC 6749
+/// `invalid_grant` rejection — the refresh grant is revoked/expired and neither
+/// the cached rotation chain nor the env-var seed could revive it — appends an
+/// actionable re-authentication hint. This turns a dead refresh chain into a
+/// stable, greppable signal ("re-authentication required") that a connection-
+/// state reader can classify as needs-reauth rather than a transient/network
+/// failure (5xx, `invalid_client`, unreachable endpoint), which stay retryable.
+fn finalize_refresh_error(server_name: &str, err: anyhow::Error) -> anyhow::Error {
+    let needs_reauth = is_grant_rejection(&err);
+    let wrapped = wrap_resolution_error(server_name, err);
+    if needs_reauth {
+        anyhow!("{wrapped}: re-authentication required (run `animus mcp auth {server_name}`)")
+    } else {
+        wrapped
     }
 }
 
@@ -755,10 +777,27 @@ fn open_writable_secure(path: &Path) -> Result<fs::File> {
         .with_context(|| format!("failed to open OAuth cache temp file {}", path.display()))
 }
 
-/// Per-scope cache directory under
-/// `~/.animus/<scope>/mcp-oauth-cache/`. Returns `None` when no home
-/// directory is discoverable.
+/// Environment variable that overrides the OAuth token cache directory.
+///
+/// When set (non-empty), the cache lives directly under this directory instead
+/// of `~/.animus/<scope>/mcp-oauth-cache/`. This is a durability knob for
+/// ephemeral hosts (e.g. a Railway container whose `$HOME` is wiped on every
+/// redeploy): point it at a mounted persistent volume (`/data/...`) and the
+/// resolved access + rotated refresh tokens survive the redeploy, so an MCP
+/// connection stays authenticated without a fresh re-auth. Per-server cache
+/// filenames still namespace + hash the server name, so multiple servers share
+/// the directory without colliding.
+pub const OAUTH_CACHE_DIR_ENV: &str = "ANIMUS_MCP_OAUTH_CACHE_DIR";
+
+/// Per-scope cache directory under `~/.animus/<scope>/mcp-oauth-cache/`, or the
+/// [`OAUTH_CACHE_DIR_ENV`] override when set. Returns `None` when neither the
+/// override nor a home directory is available.
 pub fn cache_dir_for_project(project_root: &str) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(OAUTH_CACHE_DIR_ENV) {
+        if !dir.is_empty() {
+            return Some(PathBuf::from(dir));
+        }
+    }
     let home = dirs::home_dir()?;
     Some(
         home.join(".animus").join(protocol::repository_scope_for_path(Path::new(project_root))).join("mcp-oauth-cache"),
@@ -1641,5 +1680,76 @@ mod tests {
         assert_eq!(client.call_count(), 2);
         let cache_path = temp.path().join(cache_filename_for_server("svc"));
         assert!(!cache_path.exists(), "cache file should not be written when cache=false");
+    }
+
+    #[test]
+    fn cache_dir_override_env_redirects_to_durable_path() {
+        // The durability knob: when ANIMUS_MCP_OAUTH_CACHE_DIR is set, the cache
+        // lives under that directory (e.g. a mounted persistent volume) instead
+        // of the ephemeral per-scope `~/.animus/<scope>/mcp-oauth-cache/`.
+        // `cache_dir_for_project` is only reached by this test, so the process-env
+        // mutation here does not race any other test.
+        let override_dir = "/data/animus-oauth-cache-override";
+        std::env::set_var(OAUTH_CACHE_DIR_ENV, override_dir);
+        let resolved = cache_dir_for_project("/some/project/root");
+        std::env::remove_var(OAUTH_CACHE_DIR_ENV);
+        assert_eq!(resolved, Some(PathBuf::from(override_dir)), "override env var must win over the home-derived path");
+    }
+
+    #[test]
+    fn dead_refresh_chain_signals_reauth_required() {
+        // Both the cached rotated refresh token AND the env-var seed are rejected
+        // with `invalid_grant`: the grant is dead and no automatic path can revive
+        // it, so the terminal error must carry the actionable re-auth signal a
+        // connection-state reader classifies as needs-reauth (not transient).
+        let oauth = refresh_config();
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(1),
+                refresh_token: Some("rt-rotated".to_string()),
+            }),
+            Err(TokenEndpointRejection {
+                token_url: "https://auth.example.com/token".to_string(),
+                status: 400,
+                oauth_error: Some("invalid_grant".to_string()),
+            }
+            .into()),
+            Err(TokenEndpointRejection {
+                token_url: "https://auth.example.com/token".to_string(),
+                status: 400,
+                oauth_error: Some("invalid_grant".to_string()),
+            }
+            .into()),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let _ = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        let err = resolve_token("svc", &oauth, temp.path(), &env, &client).unwrap_err().to_string();
+        assert!(err.contains("re-authentication required"), "dead refresh chain must signal re-auth: {err}");
+        assert!(err.contains("animus mcp auth svc"), "signal must name the re-auth command: {err}");
+        assert_eq!(
+            err.matches("OAuth resolution failed for").count(),
+            1,
+            "the resolution-failure prefix must still appear exactly once: {err}"
+        );
+    }
+
+    #[test]
+    fn transient_refresh_failure_does_not_signal_reauth() {
+        // A 5xx / transport failure is retryable, NOT a dead grant: the terminal
+        // error must NOT carry the re-auth signal (which would wrongly force a
+        // human re-login on a blip).
+        let oauth = refresh_config();
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![Err(anyhow!(
+            "OAuth token endpoint https://auth.example.com/token returned status 503"
+        ))]);
+        let temp = tempdir().expect("tempdir");
+
+        let err = resolve_token("svc", &oauth, temp.path(), &env, &client).unwrap_err().to_string();
+        assert!(!err.contains("re-authentication required"), "a transient failure must not signal re-auth: {err}");
+        assert!(err.contains("svc"), "error should still name the server: {err}");
     }
 }

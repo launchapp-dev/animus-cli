@@ -23,6 +23,7 @@
 //! invoked outside the daemon (e.g. `animus workflow execute` on a fresh
 //! checkout) surface an actionable "install the plugin" error instead.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -52,13 +53,69 @@ const PLUGIN_KIND_QUEUE: &str = "queue";
 const PLUGIN_CALL_TIMEOUT_SHORT: Duration = Duration::from_secs(30);
 const PLUGIN_CALL_TIMEOUT_LONG: Duration = Duration::from_hours(1);
 
-/// Discover a plugin by `plugin_kind` value from its manifest.
+#[derive(Clone, Copy)]
+enum PluginEnvironmentScope {
+    Base,
+    WorkflowDependencies,
+}
+
+/// Plugin roles the workflow runner may activate as nested dependencies. Roles
+/// owned by the daemon/web control plane (queue, trigger, notifier, transport,
+/// conversation store, etc.) are deliberately excluded.
+const WORKFLOW_DEPENDENCY_KINDS: &[&str] =
+    &["config_source", "workflow_journal", "subject_backend", "environment", "provider", "log_storage_backend"];
+
+/// Runner-owned control variables that are not child-plugin credentials.
+const WORKFLOW_RUNNER_CONTROL_ENV: &[&str] = &[
+    "ANIMUS_ACTOR_JSON",
+    "ANIMUS_DISABLE_HARNESS_HOOKS",
+    "ANIMUS_DISABLE_WORKFLOW_CACHE",
+    "ANIMUS_DISABLE_WORKFLOW_JOURNAL_PLUGIN",
+    "ANIMUS_HOST_CLI_PATH",
+    "ANIMUS_MCP_OAUTH_CACHE_DIR",
+    "ANIMUS_PHASE_SKILLS_JSON",
+    "ANIMUS_REPLAY_SESSION",
+    "ANIMUS_RUNNER_SESSION_DIR",
+    "ANIMUS_TEMPLATE_REGISTRY_URL",
+    "ANIMUS_WORKFLOW_EVENT_PIPE",
+    "ANIMUS_WORKFLOW_REATTACH_SOCKET",
+];
+
+fn is_workflow_dependency(plugin: &DiscoveredPlugin) -> bool {
+    WORKFLOW_DEPENDENCY_KINDS.iter().any(|kind| plugin.manifest.serves_kind(kind))
+}
+
+fn forwarded_environment(scope: PluginEnvironmentScope, project_root: &Path) -> Result<Vec<String>> {
+    let mut names: BTreeSet<String> = PLUGIN_BASE_ENV_ALLOWLIST.iter().map(|name| (*name).to_string()).collect();
+    if matches!(scope, PluginEnvironmentScope::WorkflowDependencies) {
+        names.extend(WORKFLOW_RUNNER_CONTROL_ENV.iter().map(|name| (*name).to_string()));
+        let discovered = PluginDiscovery::new()
+            .with_project_root(project_root.to_path_buf())
+            .discover()
+            .context("nested workflow plugin discovery failed")?;
+        for plugin in discovered.iter().filter(|plugin| is_workflow_dependency(plugin)) {
+            names.extend(plugin.manifest.env_required.iter().map(|requirement| requirement.name.clone()));
+        }
+    }
+    Ok(names.into_iter().collect())
+}
+
+/// Discover a plugin that serves `plugin_kind`.
+///
+/// Matches a plugin's primary `plugin_kind` OR any of its additional
+/// `plugin_kinds` via [`PluginManifest::serves_kind`] (v0.7 multi-kind), so a
+/// consolidated multi-role plugin (e.g. `animus-postgres`, whose queue role is
+/// one of several it advertises) is recognized as the queue backend. This is
+/// the same role-based resolution the daemon uses
+/// (`orchestrator_plugin_host::discover_by_kind`); a bare
+/// `plugin_kind == plugin_kind` comparison would miss such a plugin and wrongly
+/// report the role as unsatisfied.
 fn find_plugin_for_kind(project_root: &Path, plugin_kind: &str) -> Result<Option<DiscoveredPlugin>> {
     let discovered = PluginDiscovery::new()
         .with_project_root(project_root.to_path_buf())
         .discover()
         .context("plugin discovery failed")?;
-    Ok(discovered.into_iter().find(|p| p.manifest.plugin_kind == plugin_kind))
+    Ok(discovered.into_iter().find(|p| p.manifest.serves_kind(plugin_kind)))
 }
 
 /// Spawn a plugin process and run the v0.5 initialize handshake with the
@@ -68,11 +125,15 @@ fn find_plugin_for_kind(project_root: &Path, plugin_kind: &str) -> Result<Option
 /// follow-up RPCs and either calling [`PluginHost::shutdown`] or dropping
 /// the host (which severs stdio). For demo-quality v0.5 we spawn-per-call
 /// and shut down at the end of each helper.
-async fn spawn_with_project_binding(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<PluginHost> {
+async fn spawn_with_project_binding(
+    plugin: &DiscoveredPlugin,
+    project_root: &Path,
+    environment_scope: PluginEnvironmentScope,
+) -> Result<PluginHost> {
     let options = PluginSpawnOptions::for_manifest(
         plugin.name.clone(),
         &plugin.manifest.env_required,
-        PLUGIN_BASE_ENV_ALLOWLIST.iter().map(|s| (*s).to_string()),
+        forwarded_environment(environment_scope, project_root)?,
         None,
     )
     .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
@@ -145,7 +206,11 @@ pub async fn call_workflow_execute(
     let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_WORKFLOW_RUNNER)? else {
         return Ok(None);
     };
-    let host = spawn_with_project_binding(&plugin, project_root).await?;
+    // The stdio runner discovers and spawns nested workflow dependencies whose
+    // required variables are not declared by the runner's own manifest. Forward
+    // only those dependency manifests' declared keys plus runner controls; do
+    // not expose unrelated daemon/web plugin or service configuration.
+    let host = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
 
     let params = Some(serde_json::to_value(request).context("failed to encode WorkflowExecuteRequest")?);
     let value = host
@@ -175,7 +240,7 @@ pub async fn call_workflow_run_phase(
     let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_WORKFLOW_RUNNER)? else {
         return Ok(None);
     };
-    let host = spawn_with_project_binding(&plugin, project_root).await?;
+    let host = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
 
     let params = Some(serde_json::to_value(request).context("failed to encode WorkflowPhaseRunRequest")?);
     let value = host
@@ -206,7 +271,9 @@ async fn queue_call<T: for<'de> Deserialize<'de>>(
     let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_QUEUE)? else {
         return Ok(None);
     };
-    let host = spawn_with_project_binding(&plugin, project_root).await?;
+    // Queue plugins do not execute workflow phases or spawn the workflow's
+    // nested plugin graph, so retain the narrow generic plugin environment.
+    let host = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::Base).await?;
 
     let value = host
         .request_typed_with_timeout(method, params, PLUGIN_CALL_TIMEOUT_SHORT)
@@ -362,10 +429,14 @@ pub fn probe_active_plugin_roles(project_root: &Path) -> Result<ActivePluginRole
     let mut workflow_runner = false;
     let mut queue = false;
     for plugin in &discovered {
-        match plugin.manifest.plugin_kind.as_str() {
-            PLUGIN_KIND_WORKFLOW_RUNNER => workflow_runner = true,
-            PLUGIN_KIND_QUEUE => queue = true,
-            _ => {}
+        // Role-based (v0.7 multi-kind): a consolidated plugin advertising the
+        // role via `plugin_kinds` counts, not just plugins whose primary
+        // `plugin_kind` matches.
+        if plugin.manifest.serves_kind(PLUGIN_KIND_WORKFLOW_RUNNER) {
+            workflow_runner = true;
+        }
+        if plugin.manifest.serves_kind(PLUGIN_KIND_QUEUE) {
+            queue = true;
         }
     }
     Ok(ActivePluginRoles { workflow_runner, queue })
@@ -377,4 +448,156 @@ pub(crate) fn workflow_runner_kind() -> &'static str {
 
 pub(crate) fn queue_kind() -> &'static str {
     PLUGIN_KIND_QUEUE
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use protocol::test_utils::EnvVarGuard;
+
+    use super::*;
+
+    fn write_stub_plugin(dir: &Path, name: &str, manifest: &Value) -> std::path::PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\nprintf '{manifest}\\n'\n")).expect("write plugin");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod");
+        path
+    }
+
+    #[test]
+    fn workflow_runner_environment_is_limited_to_workflow_dependencies() {
+        const PROVIDER_SECRET: &str = "ANIMUS_TEST_SELECTED_PROVIDER_SECRET";
+        const TRIGGER_SECRET: &str = "ANIMUS_TEST_UNRELATED_TRIGGER_SECRET";
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).expect("project dir");
+        let config_home = temp.path().join("animus-home");
+        fs::create_dir_all(&config_home).expect("config home");
+        let empty_install = temp.path().join("empty-install");
+        fs::create_dir_all(&empty_install).expect("install dir");
+        let _config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_home.to_string_lossy().as_ref()));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty_install.to_string_lossy().as_ref()));
+        let _provider_secret = EnvVarGuard::set(PROVIDER_SECRET, Some("provider"));
+        let _trigger_secret = EnvVarGuard::set(TRIGGER_SECRET, Some("trigger"));
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        let provider = write_stub_plugin(
+            &bin_dir,
+            "provider",
+            &json!({
+                "name": "provider",
+                "version": "0.1.0",
+                "plugin_kind": "provider",
+                "description": "workflow dependency",
+                "protocol_version": "1.0.0",
+                "capabilities": [],
+                "env_required": [{
+                    "name": PROVIDER_SECRET,
+                    "description": "test provider credential",
+                    "sensitive": true,
+                    "required": true
+                }]
+            }),
+        );
+        let trigger = write_stub_plugin(
+            &bin_dir,
+            "trigger",
+            &json!({
+                "name": "trigger",
+                "version": "0.1.0",
+                "plugin_kind": "trigger_backend",
+                "description": "daemon-only dependency",
+                "protocol_version": "1.0.0",
+                "capabilities": [],
+                "env_required": [{
+                    "name": TRIGGER_SECRET,
+                    "description": "test trigger credential",
+                    "sensitive": true,
+                    "required": true
+                }]
+            }),
+        );
+        fs::write(
+            config_home.join("plugins.yaml"),
+            format!(
+                "plugins:\n  provider:\n    binary: {}\n  trigger:\n    binary: {}\n",
+                provider.to_string_lossy(),
+                trigger.to_string_lossy()
+            ),
+        )
+        .expect("write registry");
+
+        let workflow = forwarded_environment(PluginEnvironmentScope::WorkflowDependencies, &project_root)
+            .expect("workflow environment");
+        assert!(workflow.iter().any(|name| name == PROVIDER_SECRET));
+        assert!(!workflow.iter().any(|name| name == TRIGGER_SECRET));
+        assert!(workflow.iter().any(|name| name == "ANIMUS_DISABLE_WORKFLOW_JOURNAL_PLUGIN"));
+
+        let base = forwarded_environment(PluginEnvironmentScope::Base, &project_root).expect("base environment");
+        assert!(!base.iter().any(|name| name == PROVIDER_SECRET));
+        assert!(!base.iter().any(|name| name == TRIGGER_SECRET));
+    }
+
+    /// A consolidated multi-role plugin whose PRIMARY `plugin_kind` is
+    /// `subject_backend` but which ALSO advertises the `queue` role via
+    /// `plugin_kinds` (mirrors `animus-postgres` on the portal) must resolve as
+    /// the queue backend — proving the CLI queue-client resolves by ROLE, like
+    /// the daemon, rather than by primary kind or default name/repo (TASK-228).
+    #[test]
+    fn find_plugin_for_kind_resolves_multi_role_plugin_by_queue_role() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).expect("project dir");
+
+        // Hermetic discovery: redirect the global config home (which is where
+        // the operator-installed plugin registry lives, and the tier
+        // `find_plugin_for_kind` consults — the project-local registry is NOT
+        // walked by default). Point the install dir at an empty dir so only our
+        // stub registry contributes.
+        let config_home = temp.path().join("animus-home");
+        fs::create_dir_all(&config_home).expect("config home");
+        let empty_install = temp.path().join("empty-install");
+        fs::create_dir_all(&empty_install).expect("install dir");
+        let _config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_home.to_string_lossy().as_ref()));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty_install.to_string_lossy().as_ref()));
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        let manifest = json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "plugin_kinds": ["queue", "config_source"],
+            "description": "consolidated baas",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let bin = write_stub_plugin(&bin_dir, "animus-postgres", &manifest);
+
+        // Register the stub in the GLOBAL registry (`<ANIMUS_CONFIG_DIR>/plugins.yaml`),
+        // the operator-install tier discovery reads by default.
+        fs::write(
+            config_home.join("plugins.yaml"),
+            format!("plugins:\n  animus-postgres:\n    binary: {}\n", bin.to_string_lossy()),
+        )
+        .expect("write registry");
+
+        let resolved = find_plugin_for_kind(&project_root, PLUGIN_KIND_QUEUE).expect("plugin discovery succeeds");
+        let plugin = resolved.expect("multi-role plugin resolves the queue role");
+        assert_eq!(plugin.name, "animus-postgres");
+        assert!(plugin.manifest.serves_kind(PLUGIN_KIND_QUEUE), "advertises the queue role");
+        // Primary kind is NOT queue — proving resolution is by ROLE, not by the
+        // primary `plugin_kind` (the pre-fix bug returned None here).
+        assert_ne!(plugin.manifest.plugin_kind, PLUGIN_KIND_QUEUE);
+
+        // probe_active_plugin_roles must agree the queue role is satisfied.
+        let roles = probe_active_plugin_roles(&project_root).expect("probe roles");
+        assert!(roles.queue, "queue role reported satisfied by the multi-role plugin");
+    }
 }

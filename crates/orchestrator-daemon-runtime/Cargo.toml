@@ -24,15 +24,13 @@ orchestrator-core = { workspace = true }
 orchestrator-logging = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
-# All animus-protocol git deps pin the SAME tag (v0.1.26) so the transitively
-# pulled `animus-subject-protocol` resolves to ONE source rev. v0.1.26 additively
-# adds `actor: Option<Actor>` to the control request types relayed by the daemon.
-animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
+animus-config-protocol = { workspace = true }
+animus-control-protocol = { workspace = true }
+animus-log-storage-protocol = { workspace = true }
 animus-actor = { workspace = true }
-# Subject / SubjectChangedEvent share the same v0.1.26 surface as the
-# control-protocol (one source rev so the protocol versions stay in lockstep).
-animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
+# Subject / SubjectChangedEvent share the control protocol's source revision so
+# their embedded types stay in lockstep.
+animus-subject-protocol-wire = { workspace = true }
 protocol = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -45,20 +43,21 @@ animus-runtime-shared = { workspace = true }
 # v0.5.1 fold-in (item 7): unified Unix-socket + Windows-named-pipe client
 # for the reattach back-channel. Replaces the previous `cfg(unix)`-only
 # `tokio::net::UnixStream` path with a single cross-platform implementation.
-interprocess = "2.4"
+interprocess = { version = "2.4", features = ["tokio"] }
 
 [dev-dependencies]
+orchestrator-config = { workspace = true, features = ["test-utils"] }
 protocol = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "test-util", "time"] }
-animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26", features = ["client"] }
+animus-control-protocol = { workspace = true, features = ["client"] }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
 futures-util = "0.3"
 serde_json = "1.0"
 uuid = { version = "1", features = ["v4"] }
-animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
+animus-subject-protocol-wire = { workspace = true }
 animus-runtime-shared = { workspace = true }
 
 [lints]

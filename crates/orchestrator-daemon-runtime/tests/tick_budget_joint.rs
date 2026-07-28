@@ -26,8 +26,22 @@ use orchestrator_daemon_runtime::{ScheduleDispatch, SubjectDispatch, TickBudget,
 use serde_json::json;
 use tempfile::tempdir;
 
-fn write_combined_config(project_root: &std::path::Path) {
+fn write_combined_config(
+    project_root: &std::path::Path,
+) -> orchestrator_config::workflow_config::config_source_client::test_seam::TestBaseGuard {
     let mut config = orchestrator_core::builtin_workflow_config();
+    config.phase_catalog.insert(
+        "requirements".to_string(),
+        orchestrator_core::PhaseUiDefinition {
+            label: "requirements".to_string(),
+            description: String::new(),
+            category: "test".to_string(),
+            icon: None,
+            docs_url: None,
+            tags: Vec::new(),
+            visible: true,
+        },
+    );
     config.workflows.push(orchestrator_core::WorkflowDefinition {
         id: "scheduled-flow".to_string(),
         name: "Scheduled".to_string(),
@@ -36,6 +50,8 @@ fn write_combined_config(project_root: &std::path::Path) {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     config.workflows.push(orchestrator_core::WorkflowDefinition {
         id: "webhook-flow".to_string(),
@@ -45,6 +61,8 @@ fn write_combined_config(project_root: &std::path::Path) {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     config.schedules.push(orchestrator_core::WorkflowSchedule {
@@ -67,6 +85,7 @@ fn write_combined_config(project_root: &std::path::Path) {
     });
 
     orchestrator_core::write_workflow_config(project_root, &config).expect("write config");
+    orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(project_root)
 }
 
 fn queue_pending_webhook_event(project_root: &std::path::Path, trigger_id: &str, event_id: &str) {
@@ -144,7 +163,7 @@ fn shared_budget_cap_one_lets_schedule_win_over_trigger() {
     // exhausted budget and the event stays queued.
     let temp = tempdir().expect("tempdir");
     let project_root = temp.path();
-    write_combined_config(project_root);
+    let _config = write_combined_config(project_root);
     queue_pending_webhook_event(project_root, "on-webhook", "evt-A");
 
     let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
@@ -178,7 +197,7 @@ fn shared_budget_cap_zero_blocks_everything() {
     // Cap=0: NO schedule should record last_run, NO event should drain.
     let temp = tempdir().expect("tempdir");
     let project_root = temp.path();
-    write_combined_config(project_root);
+    let _config = write_combined_config(project_root);
     queue_pending_webhook_event(project_root, "on-webhook", "evt-A");
     queue_pending_webhook_event(project_root, "on-webhook", "evt-B");
 
@@ -212,7 +231,7 @@ fn shared_budget_cap_ten_runs_both_paths() {
     // Cap=10: 1 schedule + 1 webhook event both have headroom; both run.
     let temp = tempdir().expect("tempdir");
     let project_root = temp.path();
-    write_combined_config(project_root);
+    let _config = write_combined_config(project_root);
     queue_pending_webhook_event(project_root, "on-webhook", "evt-A");
 
     let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
@@ -246,7 +265,7 @@ fn missed_schedule_refires_on_next_tick_within_same_cron_minute() {
     // soon as capacity frees up.
     let temp = tempdir().expect("tempdir");
     let project_root = temp.path();
-    write_combined_config(project_root);
+    let _config = write_combined_config(project_root);
 
     let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
 

@@ -5,12 +5,13 @@ mod tests;
 
 pub use runner::{PluginInstaller, PluginPreflightRunner};
 
-use animus_plugin_protocol::{PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
+use animus_plugin_protocol::{PLUGIN_KIND_ENVIRONMENT, PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_CONFIG_SOURCE_PLUGINS,
-    DEFAULT_QUEUE_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    default_provider_repo_spec, default_subject_backend_repo as curated_subject_backend_repo,
+    default_subject_repo_for_kind, format_repo_spec, DEFAULT_CONFIG_SOURCE_PLUGINS, DEFAULT_QUEUE_PLUGINS,
+    DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 
 /// Plugin-kind wire value for `workflow_runner`. Kept local because the
@@ -108,6 +109,15 @@ pub fn default_provider_repo() -> String {
     default_provider_repo_spec()
 }
 
+/// Kind-agnostic default subject backend preflight auto-installs when NO
+/// subject backend is present and `at_least_one_subject_backend` is
+/// unsatisfied. This is a starter, not a privileged kind: any installed
+/// subject backend satisfies the role, so `task`/`requirement` are never
+/// forced on a deployment.
+pub fn default_subject_backend_repo() -> String {
+    curated_subject_backend_repo().expect("DEFAULT_SUBJECT_PLUGINS must have at least one curated subject backend")
+}
+
 /// Default backend repo spec for the `task` subject kind. Points at
 /// `animus-subject-default`, NOT `animus-subject-linear` (Linear is a
 /// third-party mirror that happens to claim `subject_kind:task`).
@@ -184,6 +194,15 @@ pub enum RequiredRole {
     /// the in-tree SQLite journal, exactly as before. The variant exists so the
     /// role's presence can be reported (and required by an explicit spec/test).
     WorkflowJournal,
+    /// Satisfied by ANY installed `environment` plugin (v0.7). This role is
+    /// OPTIONAL: it is NEVER added to [`PluginPreflightSpec::daemon_default`], so
+    /// its absence never blocks boot — with no environment plugin installed the
+    /// workflow runner falls back to local execution, exactly as before. The
+    /// variant exists so the role's presence can be REPORTED by
+    /// `animus daemon preflight` / `animus plugin status` (and required by an
+    /// explicit spec/test once the reference worktree/container env plugins
+    /// ship).
+    Environment,
 }
 
 impl RequiredRole {
@@ -197,6 +216,7 @@ impl RequiredRole {
             RequiredRole::Queue => "queue".to_string(),
             RequiredRole::ConfigSource => "config_source".to_string(),
             RequiredRole::WorkflowJournal => "workflow_journal".to_string(),
+            RequiredRole::Environment => "environment".to_string(),
         }
     }
 }
@@ -233,9 +253,10 @@ impl PluginPreflightSpec {
             auto_install: false,
             auto_install_defaults: vec![
                 ("at_least_one_provider".to_string(), default_provider_repo()),
-                // If NO subject backend is installed, the default is the task
-                // backend — a sensible starter, not a requirement.
-                ("at_least_one_subject_backend".to_string(), default_task_backend_repo()),
+                // If NO subject backend is installed, install a kind-agnostic
+                // starter backend — a sensible default, not a task/requirement
+                // privilege. Any installed subject backend satisfies the role.
+                ("at_least_one_subject_backend".to_string(), default_subject_backend_repo()),
                 ("workflow_runner".to_string(), default_workflow_runner_repo()),
                 ("queue".to_string(), default_queue_repo()),
                 ("config_source".to_string(), default_config_source_repo()),
@@ -336,32 +357,51 @@ pub struct AutoInstalledPlugin {
 pub struct InstalledPluginSummary {
     pub name: String,
     pub plugin_kind: String,
+    /// Additional kinds this plugin ALSO serves (v0.7 multi-kind). Empty for
+    /// single-kind plugins (back-compat).
+    pub plugin_kinds: Vec<String>,
     pub subject_kinds: Vec<String>,
 }
 
 impl InstalledPluginSummary {
+    /// Whether this plugin serves `kind` — its primary `plugin_kind` OR any of
+    /// its additional `plugin_kinds` (v0.7 multi-kind).
+    pub fn serves_kind(&self, kind: &str) -> bool {
+        self.plugin_kind == kind || self.plugin_kinds.iter().any(|k| k == kind)
+    }
+
     pub fn is_provider(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_PROVIDER
+        self.serves_kind(PLUGIN_KIND_PROVIDER)
     }
 
     pub fn is_subject_backend(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_SUBJECT_BACKEND
+        self.serves_kind(PLUGIN_KIND_SUBJECT_BACKEND)
     }
 
     pub fn is_workflow_runner(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_WORKFLOW_RUNNER
+        self.serves_kind(PLUGIN_KIND_WORKFLOW_RUNNER)
     }
 
     pub fn is_queue(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_QUEUE
+        self.serves_kind(PLUGIN_KIND_QUEUE)
     }
 
     pub fn is_config_source(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_CONFIG_SOURCE
+        self.serves_kind(PLUGIN_KIND_CONFIG_SOURCE)
     }
 
     pub fn is_workflow_journal(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_WORKFLOW_JOURNAL
+        self.serves_kind(PLUGIN_KIND_WORKFLOW_JOURNAL)
+    }
+
+    /// Whether this plugin serves the `environment` kind (v0.7). Environment
+    /// plugins prepare/exec/teardown execution contexts (worktree, container,
+    /// microVM). This role is OPTIONAL — it is reported by
+    /// `animus daemon preflight` / `animus plugin status` but is NOT part of
+    /// the required-role set, so a daemon boots fine with no environment
+    /// plugin installed (the workflow runner falls back to local execution).
+    pub fn is_environment(&self) -> bool {
+        self.serves_kind(PLUGIN_KIND_ENVIRONMENT)
     }
 
     pub fn covers_subject_kind(&self, kind: &str) -> bool {
@@ -412,6 +452,7 @@ pub fn summarize_discovered_plugins_with_lock(
             InstalledPluginSummary {
                 name: plugin.name.clone(),
                 plugin_kind: plugin.manifest.plugin_kind.clone(),
+                plugin_kinds: plugin.manifest.plugin_kinds.clone(),
                 subject_kinds,
             }
         })
