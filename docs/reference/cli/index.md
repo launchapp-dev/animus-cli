@@ -804,6 +804,12 @@ resume and replay-fallback attempts. Renamed/deleted/hidden profiles and
 conflicting `--agent` flags error before provider execution. Legacy metadata
 without `agent_id` remains neutral and is never inferred.
 
+`animus chat new --agent <AGENT_ID>` resolves the exact canonical profile in
+the current project and actor scope before writing, then includes `agent_id` in
+the conversation-store create operation. This is the empty-conversation path
+for application layers that need to open a composer before the first message;
+unknown, hidden, renamed, deleted, or cross-scope profiles fail before create.
+
 ### `animus agent interactions`
 
 The inbox for human-in-the-loop round-trips. Agents running with the injected

@@ -79,7 +79,12 @@ fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
         payload.pointer("/data/conversation_store/tenant_scope_field").and_then(Value::as_str),
         Some("tenant_id")
     );
-    assert_eq!(payload.pointer("/data/conversation_store/features").and_then(Value::as_array).map(Vec::len), Some(8));
+    let store_features = payload
+        .pointer("/data/conversation_store/features")
+        .and_then(Value::as_array)
+        .expect("capability probe should list conversation-store features");
+    assert_eq!(store_features.len(), 9);
+    assert!(store_features.iter().any(|feature| feature == "chat_new_agent_binding"));
     assert_eq!(payload.pointer("/data/send/partial_success/supported").and_then(Value::as_bool), Some(true));
     let events = payload
         .pointer("/data/send/partial_success/jsonl_events")
