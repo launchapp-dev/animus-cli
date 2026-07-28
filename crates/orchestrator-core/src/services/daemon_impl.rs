@@ -1084,6 +1084,53 @@ mod tests {
         }
     }
 
+    /// Project-scoped plugin configuration is the first discovery tier used at
+    /// daemon boot. Keep the health reconciliation on that same path so a
+    /// consolidated backend configured only for one project is not mistaken
+    /// for a missing subject backend.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_not_degraded_for_project_scoped_consolidated_backend() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        let project_root = temp.path().join("project");
+        let project_config_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+        std::fs::create_dir_all(&project_config_dir).expect("mkdir project config");
+
+        let bin = temp.path().join("animus-postgres");
+        let manifest = serde_json::json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "Project PostgreSQL subject backend",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"]
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        std::fs::write(
+            project_config_dir.join("plugins.yaml"),
+            format!("plugins:\n  animus-postgres:\n    binary: {}\n", bin.display()),
+        )
+        .expect("write project plugins.yaml");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_none(),
+            "project-scoped consolidated subject backend must be routable, got: {reason:?}"
+        );
+    }
+
     /// A project with no subject_backend plugins at all must produce a degraded
     /// reason so operators see actionable feedback rather than a silent failure.
     #[test]
