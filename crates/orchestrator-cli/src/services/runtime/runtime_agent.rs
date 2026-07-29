@@ -23,6 +23,8 @@ use profiles::{
     handle_agent_memory_get, handle_agent_message_list, handle_agent_message_send,
 };
 use run::handle_agent_run;
+pub(crate) use run::{agent_run_application, AgentRunApplicationRequest};
+pub(crate) use status::{agent_control_application, agent_status_application};
 use status::{handle_agent_control, handle_agent_status};
 
 pub(crate) async fn handle_agent(

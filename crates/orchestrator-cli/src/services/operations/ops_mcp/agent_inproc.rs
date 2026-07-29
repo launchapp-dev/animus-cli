@@ -2,9 +2,11 @@ use super::daemon_inproc::resolve_project_root;
 use super::exec_errors::build_inproc_tool_error_payload;
 use super::AoMcpServer;
 use crate::services::runtime::{
-    agent_get_application, agent_list_application, agent_memory_append_application, agent_memory_clear_application,
-    agent_memory_get_application, agent_message_list_application, agent_message_send_application,
+    agent_control_application, agent_get_application, agent_list_application, agent_memory_append_application,
+    agent_memory_clear_application, agent_memory_get_application, agent_message_list_application,
+    agent_message_send_application, agent_run_application, agent_status_application, AgentRunApplicationRequest,
 };
+use crate::{AgentControlActionArg, AgentRunArgs};
 use anyhow::Result;
 use rmcp::model::CallToolResult;
 use serde_json::{json, Value};
@@ -36,6 +38,88 @@ impl AoMcpServer {
         self.run_agent_application("animus.agent.get", input.project_root, true, |root, actor| {
             agent_get_application(root, &input.id, actor)
         })
+    }
+
+    fn agent_run_args(input: super::AgentRunInput) -> Result<(AgentRunArgs, Option<String>)> {
+        if input.timeout_secs == Some(0) {
+            return Err(crate::invalid_input_error("timeout_secs must be greater than zero"));
+        }
+        Ok((
+            AgentRunArgs {
+                run_id: input.run_id,
+                tool: input.tool,
+                model: input.model,
+                prompt: input.prompt,
+                reasoning_effort: None,
+                permission_mode: None,
+                approvals: false,
+                cwd: input.cwd,
+                timeout_secs: input.timeout_secs,
+                context_json: input.context_json,
+                runtime_contract_json: input.runtime_contract_json,
+                detach: input.detach,
+                stream: false,
+                save_jsonl: true,
+                jsonl_dir: None,
+                start_runner: true,
+                agent: None,
+                skill: None,
+                mcp_server: Vec::new(),
+                no_animus_mcp: false,
+            },
+            input.project_root,
+        ))
+    }
+
+    pub(super) async fn agent_run_inproc(&self, input: super::AgentRunInput) -> CallToolResult {
+        const TOOL: &str = "animus.agent.run";
+        self.audit_actor_tool_decision(TOOL, false, "management-only");
+        let (args, project_root) = match Self::agent_run_args(input) {
+            Ok(value) => value,
+            Err(error) => return CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        };
+        let project_root = resolve_project_root(&self.default_project_root, project_root);
+        let request = AgentRunApplicationRequest::new(args);
+        match agent_run_application(request, &project_root, |_| Ok(())).await {
+            Ok(result) => match serde_json::to_value(result) {
+                Ok(result) => CallToolResult::structured(json!({ "tool": TOOL, "result": result })),
+                Err(error) => {
+                    let error = anyhow::Error::new(error);
+                    CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error))
+                }
+            },
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        }
+    }
+
+    pub(super) fn agent_control_inproc(&self, input: super::AgentControlInput) -> CallToolResult {
+        const TOOL: &str = "animus.agent.control";
+        self.audit_actor_tool_decision(TOOL, false, "management-only");
+        let _project_root = resolve_project_root(&self.default_project_root, input.project_root);
+        let action = match input.action.trim().to_ascii_lowercase().as_str() {
+            "pause" => AgentControlActionArg::Pause,
+            "resume" => AgentControlActionArg::Resume,
+            "terminate" => AgentControlActionArg::Terminate,
+            value => {
+                let error =
+                    crate::invalid_input_error(format!("invalid action '{value}'; expected pause|resume|terminate"));
+                return CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error));
+            }
+        };
+        match agent_control_application(&input.run_id, action) {
+            Ok(result) => CallToolResult::structured(json!({ "tool": TOOL, "result": result })),
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        }
+    }
+
+    pub(super) fn agent_status_inproc(&self, input: super::AgentStatusInput) -> CallToolResult {
+        const TOOL: &str = "animus.agent.status";
+        self.audit_actor_tool_decision(TOOL, false, "management-only");
+        let project_root = resolve_project_root(&self.default_project_root, input.project_root);
+        match agent_status_application(&project_root, &input.run_id, None) {
+            Ok(result) => CallToolResult::structured(json!({ "tool": TOOL, "result": result })),
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        }
     }
 
     pub(super) fn agent_memory_get_inproc(&self, input: super::AgentMemoryGetInput) -> CallToolResult {
@@ -81,6 +165,21 @@ impl AoMcpServer {
 mod tests {
     use super::*;
 
+    fn run_input(project_root: &std::path::Path) -> super::super::AgentRunInput {
+        super::super::AgentRunInput {
+            tool: "definitely-not-a-real-provider-zz9".to_string(),
+            model: None,
+            prompt: Some("test".to_string()),
+            cwd: Some(project_root.to_string_lossy().to_string()),
+            timeout_secs: None,
+            context_json: None,
+            runtime_contract_json: None,
+            detach: true,
+            run_id: Some("typed-agent-run".to_string()),
+            project_root: None,
+        }
+    }
+
     fn configured_project(
     ) -> (tempfile::TempDir, orchestrator_config::workflow_config::config_source_client::test_seam::TestBaseGuard) {
         let root = tempfile::tempdir().expect("project root");
@@ -111,6 +210,62 @@ mod tests {
         assert_ne!(get.is_error, Some(true));
         let payload = get.structured_content.expect("get payload");
         assert_eq!(payload.pointer("/result/id").and_then(Value::as_str), Some("rafael"), "{payload}");
+    }
+
+    #[tokio::test]
+    async fn agent_run_uses_typed_validation_and_provider_errors() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+
+        let mut invalid = run_input(root.path());
+        invalid.timeout_secs = Some(0);
+        let invalid = server.agent_run_inproc(invalid).await;
+        assert_eq!(invalid.is_error, Some(true));
+        let invalid = invalid.structured_content.expect("typed invalid-input payload");
+        assert_eq!(invalid.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{invalid}");
+
+        let missing = server.agent_run_inproc(run_input(root.path())).await;
+        assert_eq!(missing.is_error, Some(true));
+        let missing = missing.structured_content.expect("typed missing-provider payload");
+        assert!(
+            missing
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("provider")),
+            "{missing}"
+        );
+    }
+
+    #[test]
+    fn agent_control_and_status_return_typed_application_errors() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+
+        let invalid = server.agent_control_inproc(super::super::AgentControlInput {
+            run_id: "run-1".to_string(),
+            action: "restart".to_string(),
+            project_root: None,
+        });
+        assert_eq!(invalid.is_error, Some(true));
+        let invalid = invalid.structured_content.expect("invalid control payload");
+        assert_eq!(invalid.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{invalid}");
+
+        let unavailable = server.agent_control_inproc(super::super::AgentControlInput {
+            run_id: "run-1".to_string(),
+            action: "pause".to_string(),
+            project_root: None,
+        });
+        assert_eq!(unavailable.is_error, Some(true));
+        let unavailable = unavailable.structured_content.expect("unavailable control payload");
+        assert_eq!(unavailable.pointer("/error/code").and_then(Value::as_str), Some("unavailable"), "{unavailable}");
+
+        let status = server.agent_status_inproc(super::super::AgentStatusInput {
+            run_id: "missing-run".to_string(),
+            project_root: None,
+        });
+        assert_eq!(status.is_error, Some(true));
+        let status = status.structured_content.expect("missing status payload");
+        assert_eq!(status.pointer("/error/code").and_then(Value::as_str), Some("not_found"), "{status}");
     }
 
     #[test]
