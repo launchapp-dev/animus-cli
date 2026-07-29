@@ -4,8 +4,9 @@ All MCP tools exposed by `animus mcp serve`. The current top-level server
 registers 97 built-in tools across daemon, cost, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
-Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
-and returning structured results.
+Context Protocol. Typed application-service tools execute in process; remaining
+compatibility tools may delegate to an `animus` CLI command. All accept JSON
+input and return structured results.
 
 That headline 97 counts the full management-mode surface. A default
 agent-injected server (`animus mcp serve` without `--management`) exposes 95:
@@ -25,12 +26,14 @@ When a trusted host starts the server with `--require-actor --actor-json`,
 Animus pins that actor for the server lifetime. Missing or malformed identity
 stops startup, child commands cannot replace the pin, and the server removes
 every route whose command/protocol cannot enforce it. The retained surface is
-workflow run/list/get, workflow config get/validate, workflow output reads, chat
-send, subject list/get/create/update/batch-create/batch-update/status,
-interaction creation/management, and tool discovery. Subject `next`, queue
-operations, config writes, resources, and other global routes are deliberately
-unavailable rather than silently downgraded. Actor-bound subject calls use the
-v2 subject protocol and never fall back to legacy v1 methods. See
+workflow run/list/get/control/execute/decisions/checkpoints/manual-phase and
+config-read operations, workflow output reads, subject
+list/get/create/update/batch-create/batch-update/next/status, interaction
+creation/management, and tool discovery. Queue operations, config writes,
+resources, and other global routes are deliberately unavailable rather than
+silently downgraded. Actor-bound workflow controls conceal unowned ids before
+performing confirmation or mutation, and actor-bound subject calls use the v2
+subject protocol without falling back to legacy v1 methods. See
 [Actor-bound application contract](../architecture/actor-bound-application-contract.md).
 
 **OAuth-protected upstream MCP servers.** Connecting *agents* to OAuth-backed
@@ -232,6 +235,12 @@ safe, since a live node is never dead; `all`+`force` also reaps healthy orphans.
 | `animus.workflow.checkpoints.list` | List saved workflow state checkpoints | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
 | `animus.workflow.phase.approve` | Approve a gated workflow phase | `workflow_id`, `phase_id` (alias: `phase`), `feedback` (alias: `note`), `project_root` |
 | `animus.workflow.phase.reject` | Reject a gated workflow phase (mirror of approve, on the decline path). Requires a pending gate phase; `reason` (the rejection note) is required | `workflow_id`, `phase_id` (alias: `phase`), `reason` (alias: `note`/`feedback`), `project_root` |
+
+On an actor-bound server, pause/cancel/resume and manual phase decisions require
+the exact persisted workflow owner `(user_id, tenant_id)`. Cross-user,
+cross-tenant, unowned, and unknown workflow ids all return `not_found`. Resume
+and post-approval continuation rehydrate that persisted actor for runner launch
+and task projection instead of falling back to global scope.
 
 ### Definition & Config Tools (10)
 

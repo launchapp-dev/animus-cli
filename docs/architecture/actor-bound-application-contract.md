@@ -42,8 +42,15 @@ The actor-bound tool router currently exposes exactly:
 - `animus.workflow.run`
 - `animus.workflow.list`
 - `animus.workflow.get`
+- `animus.workflow.pause`
+- `animus.workflow.cancel`
+- `animus.workflow.resume`
 - `animus.workflow.run-multiple`
 - `animus.workflow.execute`
+- `animus.workflow.phase.approve`
+- `animus.workflow.phase.reject`
+- `animus.workflow.decisions`
+- `animus.workflow.checkpoints.list`
 - `animus.workflow.config.get`
 - `animus.workflow.config.validate`
 - `animus.output.run`
@@ -54,6 +61,7 @@ The actor-bound tool router currently exposes exactly:
 - `animus.subject.update`
 - `animus.subject.batch-create`
 - `animus.subject.batch-update`
+- `animus.subject.next`
 - `animus.subject.status`
 - `animus.agent.ask`
 - `animus.agent.request_approval`
@@ -117,6 +125,14 @@ A run-id read first resolves the owning workflow through its phase-session
 checkpoint. Unowned, unknown, cross-user, and cross-tenant records are all
 reported as not found.
 
+Actor-bound pause, cancel, resume, approve, and reject calls apply the same
+persisted `(user_id, tenant_id)` check before confirmation, phase validation,
+environment teardown, or workflow mutation. Resume and manual-approval
+continuation derive their runner actor and task-projection partition from the
+persisted workflow owner, never from an untrusted payload and never from a
+global fallback. A local operator can still control an actor-owned workflow,
+but its lifecycle continues inside the original actor partition.
+
 Actor-bound subject calls use the distinct `subject/v2/*` /
 `<kind>/v2/*` protocol. Its required `SubjectRequestContext` carries the typed
 actor and optional request, correlation, and idempotency identifiers. The
@@ -166,8 +182,6 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
 - Config writes: `animus_config_protocol::ConfigWriteRequest` needs an
   `actor: Option<Actor>` field and config-source write implementations must
   resolve and write the same actor partition used by reads.
-- Subject `next`: the v2 actor-scoped protocol intentionally has no `next`
-  operation yet, so `animus.subject.next` remains absent from actor-bound MCP.
 - Queue list/control/mutation: queue requests need actor filters and
   authorization context, and the queue/subject dispatch bridge must preserve
   the current `Actor`.

@@ -45,13 +45,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<WorkflowDestructiveInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["workflow".to_string(), "pause".to_string(), "--id".to_string(), input.id];
-        push_opt(&mut args, "--confirm", input.confirm);
-        if input.dry_run {
-            args.push("--dry-run".to_string());
-        }
-        self.run_tool("animus.workflow.pause", args, input.project_root).await
+        self.workflow_pause_inproc(params.0).await
     }
 
     #[tool(
@@ -63,13 +57,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<WorkflowDestructiveInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["workflow".to_string(), "cancel".to_string(), "--id".to_string(), input.id];
-        push_opt(&mut args, "--confirm", input.confirm);
-        if input.dry_run {
-            args.push("--dry-run".to_string());
-        }
-        self.run_tool("animus.workflow.cancel", args, input.project_root).await
+        self.workflow_cancel_inproc(params.0).await
     }
 
     #[tool(
@@ -78,9 +66,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<IdInput>()
     )]
     async fn ao_workflow_resume(&self, params: Parameters<IdInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec!["workflow".to_string(), "resume".to_string(), "--id".to_string(), input.id];
-        self.run_tool("animus.workflow.resume", args, input.project_root).await
+        self.workflow_resume_inproc(params.0).await
     }
 
     #[tool(
@@ -158,9 +144,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<WorkflowPhaseApproveInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_workflow_phase_approve_args(&input);
-        self.run_tool("animus.workflow.phase.approve", args, input.project_root).await
+        self.workflow_phase_approve_inproc(params.0).await
     }
 
     #[tool(
@@ -172,101 +156,12 @@ impl AoMcpServer {
         &self,
         params: Parameters<WorkflowPhaseRejectInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_workflow_phase_reject_args(&input);
-        self.run_tool("animus.workflow.phase.reject", args, input.project_root).await
+        self.workflow_phase_reject_inproc(params.0).await
     }
 }
 
 fn push_workflow_run_pipeline_arg(args: &mut Vec<String>, workflow_ref: Option<String>) {
     if let Some(workflow_ref) = workflow_ref {
         args.push(workflow_ref);
-    }
-}
-
-fn build_workflow_phase_approve_args(input: &WorkflowPhaseApproveInput) -> Vec<String> {
-    let mut args = vec![
-        "workflow".to_string(),
-        "phase".to_string(),
-        "approve".to_string(),
-        "--id".to_string(),
-        input.workflow_id.clone(),
-    ];
-    args.push("--phase".to_string());
-    args.push(input.phase_id.clone());
-    push_opt(&mut args, "--note", input.feedback.clone());
-    args
-}
-
-fn build_workflow_phase_reject_args(input: &WorkflowPhaseRejectInput) -> Vec<String> {
-    vec![
-        "workflow".to_string(),
-        "phase".to_string(),
-        "reject".to_string(),
-        "--id".to_string(),
-        input.workflow_id.clone(),
-        "--phase".to_string(),
-        input.phase_id.clone(),
-        "--note".to_string(),
-        input.reason.clone(),
-    ]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_workflow_phase_approve_args_uses_cli_flags() {
-        let input = WorkflowPhaseApproveInput {
-            workflow_id: "wf-123".to_string(),
-            phase_id: "review".to_string(),
-            feedback: Some("Approved".to_string()),
-            project_root: None,
-        };
-
-        let args = build_workflow_phase_approve_args(&input);
-
-        assert_eq!(
-            args,
-            vec![
-                "workflow".to_string(),
-                "phase".to_string(),
-                "approve".to_string(),
-                "--id".to_string(),
-                "wf-123".to_string(),
-                "--phase".to_string(),
-                "review".to_string(),
-                "--note".to_string(),
-                "Approved".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn build_workflow_phase_reject_args_uses_cli_flags() {
-        let input = WorkflowPhaseRejectInput {
-            workflow_id: "wf-123".to_string(),
-            phase_id: "review".to_string(),
-            reason: "Spec mismatch".to_string(),
-            project_root: None,
-        };
-
-        let args = build_workflow_phase_reject_args(&input);
-
-        assert_eq!(
-            args,
-            vec![
-                "workflow".to_string(),
-                "phase".to_string(),
-                "reject".to_string(),
-                "--id".to_string(),
-                "wf-123".to_string(),
-                "--phase".to_string(),
-                "review".to_string(),
-                "--note".to_string(),
-                "Spec mismatch".to_string(),
-            ]
-        );
     }
 }
