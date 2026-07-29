@@ -411,7 +411,11 @@ fn resolve_auto_backend(cfg: &protocol::SecretsConfig, scoped_root: &Path) -> &'
                 return "device";
             }
             let device = DeviceEncryptedSecretStore::new(scoped_root.to_path_buf(), key_source_config(cfg));
-            if device.path().exists() { "device" } else { "keyring" }
+            if device.path().exists() {
+                "device"
+            } else {
+                "keyring"
+            }
         }
     }
 }
@@ -472,8 +476,8 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secret_keysource::{KeySourceConfig, KeySourceKind};
     use crate::secret_keysource::tests::env_lock;
+    use crate::secret_keysource::{KeySourceConfig, KeySourceKind};
 
     // A user-key store backed by a per-test key FILE, so tests need no shared
     // process env and never race each other.
@@ -561,11 +565,8 @@ mod tests {
             key_source: Some("device-id".to_string()),
             key_file: Some("/global/key".to_string()),
         };
-        let project = Some(protocol::SecretsConfig {
-            backend: None,
-            key_source: Some("user-key".to_string()),
-            key_file: None,
-        });
+        let project =
+            Some(protocol::SecretsConfig { backend: None, key_source: Some("user-key".to_string()), key_file: None });
         let merged = merge_secrets_config(global, project);
         // project key_source wins; global backend/key_file kept where project has None
         assert_eq!(merged.key_source.as_deref(), Some("user-key"));
@@ -608,23 +609,28 @@ mod tests {
         let cfg2 = protocol::SecretsConfig { key_source: Some("passphrase".to_string()), ..Default::default() };
         assert!(has_server_key_configured(&cfg2));
         let cfg3 = protocol::SecretsConfig { key_source: Some("device-id".to_string()), ..Default::default() };
-        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
         use crate::secret_keysource::tests::env_lock;
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
         let _guard = env_lock().lock().unwrap();
         let prev_key = std::env::var(ENV_USER_KEY).ok();
         let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
         std::env::remove_var(ENV_USER_KEY);
         std::env::remove_var(ENV_PASSPHRASE);
         let result = has_server_key_configured(&cfg3);
-        if let Some(v) = prev_key { std::env::set_var(ENV_USER_KEY, v) }
-        if let Some(v) = prev_pass { std::env::set_var(ENV_PASSPHRASE, v) }
+        if let Some(v) = prev_key {
+            std::env::set_var(ENV_USER_KEY, v)
+        }
+        if let Some(v) = prev_pass {
+            std::env::set_var(ENV_PASSPHRASE, v)
+        }
         assert!(!result, "device-id key source must not count as a server key");
     }
 
     #[test]
     fn has_server_key_configured_with_key_file() {
         use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
-        let cfg = protocol::SecretsConfig { key_file: Some("/srv/animus/secret.key".to_string()), ..Default::default() };
+        let cfg =
+            protocol::SecretsConfig { key_file: Some("/srv/animus/secret.key".to_string()), ..Default::default() };
         // Remove env vars so only key_file drives the result.
         let _guard = env_lock().lock().unwrap();
         let prev_key = std::env::var(ENV_USER_KEY).ok();
@@ -632,8 +638,12 @@ mod tests {
         std::env::remove_var(ENV_USER_KEY);
         std::env::remove_var(ENV_PASSPHRASE);
         let result = has_server_key_configured(&cfg);
-        if let Some(v) = prev_key { std::env::set_var(ENV_USER_KEY, v) }
-        if let Some(v) = prev_pass { std::env::set_var(ENV_PASSPHRASE, v) }
+        if let Some(v) = prev_key {
+            std::env::set_var(ENV_USER_KEY, v)
+        }
+        if let Some(v) = prev_pass {
+            std::env::set_var(ENV_PASSPHRASE, v)
+        }
         assert!(result, "key_file in secrets config must count as a server key source");
     }
 
@@ -660,18 +670,16 @@ mod tests {
         std::env::remove_var(ENV_USER_KEY);
         let store = build_secret_store_for_project(scope, scoped_root, &project_dir);
         let set_result = store.set("FOO", "bar");
-        if let Some(v) = prev { std::env::set_var(ENV_USER_KEY, v) }
+        if let Some(v) = prev {
+            std::env::set_var(ENV_USER_KEY, v)
+        }
         set_result.expect("project-config-sourced store must accept writes");
         assert_eq!(store.get("FOO").unwrap().as_deref(), Some("bar"));
     }
 
     #[test]
     fn resolve_auto_backend_uses_device_when_server_key_in_cfg() {
-        let cfg = protocol::SecretsConfig {
-            backend: None,
-            key_source: Some("user-key".to_string()),
-            key_file: None,
-        };
+        let cfg = protocol::SecretsConfig { backend: None, key_source: Some("user-key".to_string()), key_file: None };
         let dir = tempfile::tempdir().unwrap();
         // No pre-existing device store — but server key is configured.
         assert_eq!(resolve_auto_backend(&cfg, dir.path()), "device");
@@ -679,8 +687,8 @@ mod tests {
 
     #[test]
     fn resolve_auto_backend_falls_back_to_keyring_without_server_key() {
-        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
         use crate::secret_keysource::tests::env_lock;
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
         let _guard = env_lock().lock().unwrap();
         let prev_key = std::env::var(ENV_USER_KEY).ok();
         let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
@@ -689,8 +697,12 @@ mod tests {
         let cfg = protocol::SecretsConfig::default();
         let dir = tempfile::tempdir().unwrap();
         let result = resolve_auto_backend(&cfg, dir.path());
-        if let Some(v) = prev_key { std::env::set_var(ENV_USER_KEY, v) }
-        if let Some(v) = prev_pass { std::env::set_var(ENV_PASSPHRASE, v) }
+        if let Some(v) = prev_key {
+            std::env::set_var(ENV_USER_KEY, v)
+        }
+        if let Some(v) = prev_pass {
+            std::env::set_var(ENV_PASSPHRASE, v)
+        }
         assert_eq!(result, "keyring", "auto without a server key and no existing store must fall back to keyring");
     }
 
@@ -715,7 +727,9 @@ mod tests {
         std::env::remove_var(ENV_USER_KEY);
         let store = build_backend_for_project(scope, scoped_root, "device", &project_dir);
         let set_result = store.set("MIGRATE_KEY", "value");
-        if let Some(v) = prev { std::env::set_var(ENV_USER_KEY, v) }
+        if let Some(v) = prev {
+            std::env::set_var(ENV_USER_KEY, v)
+        }
         set_result.expect("build_backend_for_project must honor project key_file for the device backend");
         assert_eq!(store.get("MIGRATE_KEY").unwrap().as_deref(), Some("value"));
     }

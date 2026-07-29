@@ -225,8 +225,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn oauth_secret_store_honors_project_key_file_without_env_key() {
+    fn assert_oauth_store_uses_project_key_file(key_source: &str) {
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path().join("project");
         let animus_dir = project_root.join(".animus");
@@ -236,7 +235,7 @@ mod tests {
         std::fs::write(&key_file, "a5".repeat(32)).unwrap();
         let config = serde_json::json!({
             "secrets": {
-                "key_source": "user-key",
+                "key_source": key_source,
                 "key_file": key_file
             }
         });
@@ -244,14 +243,22 @@ mod tests {
 
         let _key_guard = EnvVarGuard::remove("ANIMUS_SECRET_KEY");
         let store = build_secret_store_at(&project_root, tmp.path().join("state"));
-        let result = store.set("oauth:test", "token");
-        let stored = result.and_then(|()| store.get("oauth:test"));
+        let result = store.set("oauth_test", "token");
+        let stored = result.and_then(|()| store.get("oauth_test"));
 
         assert_eq!(
-            stored
-                .expect("OAuth secret operations must use the project-configured key file")
-                .as_deref(),
+            stored.expect("OAuth secret operations must use the project-configured key file").as_deref(),
             Some("token")
         );
+    }
+
+    #[test]
+    fn oauth_secret_store_honors_project_user_key_without_env_key() {
+        assert_oauth_store_uses_project_key_file("user-key");
+    }
+
+    #[test]
+    fn oauth_secret_store_auto_uses_project_key_file_without_env_key() {
+        assert_oauth_store_uses_project_key_file("auto");
     }
 }

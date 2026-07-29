@@ -63,8 +63,10 @@ fn handle_migrate(
         "keyring" => ("device", "keyring"),
         other => return Err(anyhow!("unknown migrate target '{other}' (expected: device or keyring)")),
     };
-    let source = orchestrator_core::build_backend_for_project(&scope, scoped_root.to_path_buf(), source_name, project_root);
-    let target = orchestrator_core::build_backend_for_project(&scope, scoped_root.to_path_buf(), target_name, project_root);
+    let source =
+        orchestrator_core::build_backend_for_project(&scope, scoped_root.to_path_buf(), source_name, project_root);
+    let target =
+        orchestrator_core::build_backend_for_project(&scope, scoped_root.to_path_buf(), target_name, project_root);
 
     let MigrationOutcome { migrated, remove_failures } =
         migrate_secrets(source.as_ref(), target.as_ref(), args.remove_source)?;

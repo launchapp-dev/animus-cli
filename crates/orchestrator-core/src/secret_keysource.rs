@@ -440,8 +440,14 @@ pub(crate) mod tests {
         std::env::set_var(ENV_PASSPHRASE, "headless-passphrase");
         let salt = [0xAAu8; 16];
         let result = resolve_auto(&KeySourceConfig::default(), &salt);
-        match &prev_key { Some(v) => std::env::set_var(ENV_USER_KEY, v), None => std::env::remove_var(ENV_USER_KEY) }
-        match &prev_pass { Some(v) => std::env::set_var(ENV_PASSPHRASE, v), None => std::env::remove_var(ENV_PASSPHRASE) }
+        match &prev_key {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match &prev_pass {
+            Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
         let src = result.expect("resolve_auto with ANIMUS_SECRET_PASSPHRASE set should succeed");
         assert_eq!(src.id(), "passphrase", "auto must resolve to passphrase when ANIMUS_SECRET_PASSPHRASE is set");
     }
@@ -458,8 +464,14 @@ pub(crate) mod tests {
         std::env::set_var(ENV_PASSPHRASE, "also-set");
         let salt = [0u8; 16];
         let result = resolve_auto(&KeySourceConfig::default(), &salt);
-        match &prev_key { Some(v) => std::env::set_var(ENV_USER_KEY, v), None => std::env::remove_var(ENV_USER_KEY) }
-        match &prev_pass { Some(v) => std::env::set_var(ENV_PASSPHRASE, v), None => std::env::remove_var(ENV_PASSPHRASE) }
+        match &prev_key {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match &prev_pass {
+            Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
         let src = result.expect("resolve_auto with both env vars set should succeed");
         assert_eq!(src.id(), "user-key", "user-key env must take priority over passphrase env");
     }
