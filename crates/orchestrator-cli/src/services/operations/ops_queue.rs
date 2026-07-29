@@ -4,7 +4,7 @@ pub(crate) use control_routing::build_queue_routing;
 
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub};
 use protocol::{SubjectDispatch, SubjectDispatchExt};
 
@@ -53,7 +53,7 @@ async fn resolve_enqueue_dispatch(
             input,
             "manual-queue-enqueue",
         )),
-        None => Err(anyhow!(
+        None => Err(invalid_input_error(
             "no subject specified. Use --subject-id SUBJECT_ID for existing subjects (any kind; qualified task:TASK-001 or bare TASK-001), --title \"name\" for custom dispatches, or --adhoc --workflow-ref REF for a subjectless run."
         )),
     }
@@ -132,19 +132,112 @@ fn queue_plugin_required(operation: &str) -> anyhow::Error {
     )
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct QueueEnqueueRequest {
+    pub(crate) title: Option<String>,
+    pub(crate) subject_id: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) workflow_ref: Option<String>,
+    pub(crate) input: Option<serde_json::Value>,
+    pub(crate) run_at: Option<String>,
+    pub(crate) expire_after_secs: Option<u64>,
+    pub(crate) adhoc: bool,
+}
+
+pub(crate) async fn queue_list_application(project_root: &str) -> Result<animus_queue_protocol::QueueListResponse> {
+    crate::services::plugin_clients::call_queue_list(
+        std::path::Path::new(project_root),
+        &animus_queue_protocol::QueueListRequest::default(),
+    )
+    .await?
+    .ok_or_else(|| queue_plugin_required("list"))
+}
+
+pub(crate) async fn queue_stats_application(project_root: &str) -> Result<animus_queue_protocol::QueueStats> {
+    crate::services::plugin_clients::call_queue_stats(std::path::Path::new(project_root))
+        .await?
+        .ok_or_else(|| queue_plugin_required("stats"))
+}
+
+pub(crate) async fn queue_enqueue_application(
+    mut request: QueueEnqueueRequest,
+    project_root: &str,
+) -> Result<serde_json::Value> {
+    inject_conversation_id_from_env(&mut request.input);
+    let dispatch = if let Some(subject_id) = request.subject_id.as_deref() {
+        resolve_enqueue_dispatch_for_subject_id(project_root, subject_id, request.workflow_ref.clone(), request.input)
+            .await?
+    } else {
+        resolve_enqueue_dispatch(
+            project_root,
+            request.title,
+            request.description,
+            request.workflow_ref,
+            request.input,
+            request.adhoc,
+        )
+        .await?
+    };
+    let run_at = request.run_at.as_deref().map(resolve_run_at).transpose()?;
+    if request.expire_after_secs.is_some() && run_at.is_none() {
+        return Err(invalid_input_error("--expire-after requires --at"));
+    }
+    if dispatch.subject().is_none() {
+        return Err(invalid_input_error(
+            "subjectless (--adhoc) enqueue is not yet supported through the installed queue plugin: its queue RPC protocol still requires a subject. Dispatch the workflow directly instead.",
+        ));
+    }
+    let dispatch_value = serde_json::to_value(&dispatch).context("encoding subject_dispatch for queue plugin")?;
+    let plugin_dispatch = serde_json::from_value(dispatch_value)
+        .context("subject_dispatch shape drift vs animus_subject_protocol v0.5")?;
+    let plugin_request = animus_queue_protocol::QueueEnqueueRequest {
+        subject_dispatch: plugin_dispatch,
+        run_at: run_at.clone(),
+        expire_after_secs: request.expire_after_secs,
+    };
+    let plugin_response =
+        crate::services::plugin_clients::call_queue_enqueue(std::path::Path::new(project_root), &plugin_request)
+            .await?
+            .ok_or_else(|| queue_plugin_required("enqueue"))?;
+    if plugin_response.enqueued {
+        orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(std::path::Path::new(project_root))
+            .await;
+    }
+    Ok(serde_json::json!({
+        "enqueued": plugin_response.enqueued,
+        "entry_id": plugin_response.entry_id,
+        "subject_id": plugin_response.subject_id,
+        "run_at": run_at,
+        "expire_after_secs": request.expire_after_secs,
+        "warning": plugin_response.warning,
+        "via": "plugin_host",
+    }))
+}
+
+pub(crate) async fn queue_reorder_application(
+    subject_ids: Vec<String>,
+    project_root: &str,
+) -> Result<serde_json::Value> {
+    let reordered_count = try_queue_reorder_via_plugin(project_root, &subject_ids)
+        .await?
+        .ok_or_else(|| queue_plugin_required("reorder"))?;
+    Ok(serde_json::json!({
+        "reordered": reordered_count > 0,
+        "reordered_count": reordered_count,
+        "subject_ids": subject_ids,
+        "via": "plugin_host",
+    }))
+}
+
 pub(crate) async fn handle_queue(
     command: QueueCommand,
     _hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    let project_root_path = std::path::Path::new(project_root);
     match command {
         QueueCommand::List => {
-            let plugin_list_req = animus_queue_protocol::QueueListRequest::default();
-            let response = crate::services::plugin_clients::call_queue_list(project_root_path, &plugin_list_req)
-                .await?
-                .ok_or_else(|| queue_plugin_required("list"))?;
+            let response = queue_list_application(project_root).await?;
             if json {
                 return print_value(response, true);
             }
@@ -152,9 +245,7 @@ pub(crate) async fn handle_queue(
             Ok(())
         }
         QueueCommand::Stats => {
-            let stats = crate::services::plugin_clients::call_queue_stats(project_root_path)
-                .await?
-                .ok_or_else(|| queue_plugin_required("stats"))?;
+            let stats = queue_stats_application(project_root).await?;
             if json {
                 return print_value(stats, true);
             }
@@ -162,71 +253,23 @@ pub(crate) async fn handle_queue(
             Ok(())
         }
         QueueCommand::Enqueue(args) => {
-            let mut input = args.input_json.clone().map(|value| serde_json::from_str(&value)).transpose()?;
-            inject_conversation_id_from_env(&mut input);
-            let dispatch = if let Some(subject_id) = args.subject_id.clone() {
-                // Generic BaaS path: resolve the subject's real kind (qualified
-                // prefix or router probe) so a non-task/requirement subject
-                // dispatches under its own kind instead of being coerced to task.
-                resolve_enqueue_dispatch_for_subject_id(project_root, &subject_id, args.workflow_ref.clone(), input)
-                    .await?
-            } else {
-                resolve_enqueue_dispatch(
-                    project_root,
-                    args.title.clone(),
-                    args.description.clone(),
-                    args.workflow_ref.clone(),
-                    input,
-                    args.adhoc,
-                )
-                .await?
-            };
-
-            let run_at = args.run_at.as_deref().map(resolve_run_at).transpose()?;
-
-            // The kernel dispatch type (rc protocol) can now be subjectless, but
-            // the queue plugin RPC is still pinned to the v0.5 line for deployed
-            // queue-plugin wire compatibility, and that SubjectDispatch requires
-            // a subject. A subjectless run therefore cannot travel through the
-            // installed queue plugin yet: dispatch it directly (workflow run)
-            // until the queue protocol takes up the optional-subject 0.7 line.
-            if dispatch.subject().is_none() {
-                return Err(invalid_input_error(
-                    "subjectless (--adhoc) enqueue is not yet supported through the installed queue plugin: its queue RPC protocol still requires a subject. Dispatch the workflow directly instead.",
-                ));
-            }
-            let dispatch_value =
-                serde_json::to_value(&dispatch).context("encoding subject_dispatch for queue plugin")?;
-            let plugin_dispatch = serde_json::from_value(dispatch_value)
-                .context("subject_dispatch shape drift vs animus_subject_protocol v0.5")?;
-            let plugin_request = animus_queue_protocol::QueueEnqueueRequest {
-                subject_dispatch: plugin_dispatch,
-                run_at: run_at.clone(),
-                expire_after_secs: args.expire_after_secs,
-            };
-            let plugin_response =
-                crate::services::plugin_clients::call_queue_enqueue(project_root_path, &plugin_request)
-                    .await?
-                    .ok_or_else(|| queue_plugin_required("enqueue"))?;
-            // Wake a running daemon so the freshly enqueued entry drains
-            // now instead of on the next heartbeat. Fire-and-forget. Deferred
-            // entries still nudge — the scheduler re-evaluates and simply
-            // leaves a not-yet-due entry queued.
-            if plugin_response.enqueued {
-                orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(project_root_path).await;
-            }
-            let translated = serde_json::json!({
-                "enqueued": plugin_response.enqueued,
-                "entry_id": plugin_response.entry_id,
-                "subject_id": plugin_response.subject_id,
-                "run_at": run_at,
-                "expire_after_secs": args.expire_after_secs,
-                "warning": plugin_response.warning,
-                "via": "plugin_host",
-            });
+            let translated = queue_enqueue_application(
+                QueueEnqueueRequest {
+                    title: args.title,
+                    subject_id: args.subject_id,
+                    description: args.description,
+                    workflow_ref: args.workflow_ref,
+                    input: args.input_json.map(|value| serde_json::from_str(&value)).transpose()?,
+                    run_at: args.run_at,
+                    expire_after_secs: args.expire_after_secs,
+                    adhoc: args.adhoc,
+                },
+                project_root,
+            )
+            .await?;
             if !json {
-                let base = if plugin_response.enqueued {
-                    match run_at.as_deref() {
+                let base = if translated["enqueued"].as_bool() == Some(true) {
+                    match translated["run_at"].as_str() {
                         Some(when) => format!("subject dispatch scheduled for {when} (via queue plugin)"),
                         None => "subject dispatch enqueued (via queue plugin)".to_string(),
                     }
@@ -234,38 +277,27 @@ pub(crate) async fn handle_queue(
                     "subject dispatch already queued (via queue plugin)".to_string()
                 };
                 print_ok(&base, false);
-                if let Some(warning) = plugin_response.warning.as_deref() {
+                if let Some(warning) = translated["warning"].as_str() {
                     println!("warning: {warning}");
                 }
                 return Ok(());
             }
             print_value(translated, true)
         }
-        QueueCommand::Hold(args) => handle_queue_bulk(BulkVerb::Hold, args, project_root, json).await,
-        QueueCommand::Release(args) => handle_queue_bulk(BulkVerb::Release, args, project_root, json).await,
-        QueueCommand::Drop(args) => handle_queue_bulk(BulkVerb::Drop, args, project_root, json).await,
+        QueueCommand::Hold(args) => handle_queue_bulk(QueueBulkVerb::Hold, args, project_root, json).await,
+        QueueCommand::Release(args) => handle_queue_bulk(QueueBulkVerb::Release, args, project_root, json).await,
+        QueueCommand::Drop(args) => handle_queue_bulk(QueueBulkVerb::Drop, args, project_root, json).await,
         QueueCommand::Reorder(args) => {
-            let reordered_count = try_queue_reorder_via_plugin(project_root, &args.subject_ids)
-                .await?
-                .ok_or_else(|| queue_plugin_required("reorder"))?;
-            let reordered = reordered_count > 0;
+            let response = queue_reorder_application(args.subject_ids, project_root).await?;
             if !json {
-                if reordered {
+                if response["reordered"].as_bool() == Some(true) {
                     print_ok("queue reordered (via queue plugin)", false);
                     return Ok(());
                 }
                 print_ok("queue order unchanged", false);
                 return Ok(());
             }
-            print_value(
-                serde_json::json!({
-                    "reordered": reordered,
-                    "reordered_count": reordered_count,
-                    "subject_ids": args.subject_ids,
-                    "via": "plugin_host",
-                }),
-                true,
-            )
+            print_value(response, true)
         }
     }
 }
@@ -343,13 +375,13 @@ fn queue_short_timestamp(ts: &str) -> String {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum BulkVerb {
+pub(crate) enum QueueBulkVerb {
     Hold,
     Release,
     Drop,
 }
 
-impl BulkVerb {
+impl QueueBulkVerb {
     const fn name(self) -> &'static str {
         match self {
             Self::Hold => "hold",
@@ -390,13 +422,36 @@ impl BulkVerb {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct BulkItemResult {
-    subject_id: String,
-    ok: bool,
+pub(crate) struct BulkItemResult {
+    pub(crate) subject_id: String,
+    pub(crate) ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    dropped_entries: Option<usize>,
+    pub(crate) dropped_entries: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct QueueBulkResponse {
+    pub(crate) verb: QueueBulkVerb,
+    pub(crate) all: bool,
+    pub(crate) items: Vec<BulkItemResult>,
+}
+
+impl QueueBulkResponse {
+    pub(crate) fn payload(&self) -> Result<serde_json::Value> {
+        bulk_payload(self.verb, self.all, &self.items)
+    }
+
+    pub(crate) fn failure_error(&self) -> Result<Option<anyhow::Error>> {
+        let failed = self.items.iter().filter(|item| !item.ok).count();
+        if failed == 0 {
+            return Ok(None);
+        }
+        let kind = bulk_failure_kind(&self.items);
+        let message = format!("queue {}: {} of {} subject(s) failed", self.verb.name(), failed, self.items.len());
+        Ok(Some(CliError::new(kind, message).with_details(self.payload()?).into()))
+    }
 }
 
 fn merge_subject_ids(flag: Option<String>, positional: Vec<String>) -> Vec<String> {
@@ -419,7 +474,7 @@ fn bulk_failure_kind(items: &[BulkItemResult]) -> CliErrorKind {
     }
 }
 
-fn bulk_payload(verb: BulkVerb, all: bool, items: &[BulkItemResult]) -> Result<serde_json::Value> {
+fn bulk_payload(verb: QueueBulkVerb, all: bool, items: &[BulkItemResult]) -> Result<serde_json::Value> {
     let succeeded = items.iter().filter(|item| item.ok).count();
     Ok(serde_json::json!({
         "op": verb.name(),
@@ -432,7 +487,7 @@ fn bulk_payload(verb: BulkVerb, all: bool, items: &[BulkItemResult]) -> Result<s
     }))
 }
 
-fn confirm_bulk_all(verb: BulkVerb, count: usize) -> Result<bool> {
+fn confirm_bulk_all(verb: QueueBulkVerb, count: usize) -> Result<bool> {
     use std::io::{BufRead, IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
         return Err(invalid_input_error(format!(
@@ -448,7 +503,7 @@ fn confirm_bulk_all(verb: BulkVerb, count: usize) -> Result<bool> {
     Ok(answer == "y" || answer == "yes")
 }
 
-async fn resolve_all_subject_ids(verb: BulkVerb, project_root: &str) -> Result<Vec<String>> {
+async fn resolve_all_subject_ids(verb: QueueBulkVerb, project_root: &str) -> Result<Vec<String>> {
     let req = animus_queue_protocol::QueueListRequest {
         status: verb.statuses().iter().map(|s| (*s).to_string()).collect(),
         limit: None,
@@ -460,12 +515,12 @@ async fn resolve_all_subject_ids(verb: BulkVerb, project_root: &str) -> Result<V
     Ok(distinct_in_order(response.entries.into_iter().map(|entry| entry.subject_id)))
 }
 
-async fn apply_bulk_verb(verb: BulkVerb, project_root: &str, subject_id: &str) -> Result<BulkItemResult> {
+async fn apply_bulk_verb(verb: QueueBulkVerb, project_root: &str, subject_id: &str) -> Result<BulkItemResult> {
     let mut item = BulkItemResult { subject_id: subject_id.to_string(), ok: false, dropped_entries: None, error: None };
     match verb {
-        BulkVerb::Hold | BulkVerb::Release => {
+        QueueBulkVerb::Hold | QueueBulkVerb::Release => {
             let result = match verb {
-                BulkVerb::Hold => try_queue_hold_via_plugin(project_root, subject_id).await,
+                QueueBulkVerb::Hold => try_queue_hold_via_plugin(project_root, subject_id).await,
                 _ => try_queue_release_via_plugin(project_root, subject_id).await,
             };
             match result {
@@ -475,7 +530,7 @@ async fn apply_bulk_verb(verb: BulkVerb, project_root: &str, subject_id: &str) -
                 Err(err) => item.error = Some(format!("{err:#}")),
             }
         }
-        BulkVerb::Drop => match try_queue_drop_via_plugin(project_root, subject_id).await {
+        QueueBulkVerb::Drop => match try_queue_drop_via_plugin(project_root, subject_id).await {
             Ok(Some(removed)) if removed > 0 => {
                 item.ok = true;
                 item.dropped_entries = Some(removed);
@@ -488,7 +543,25 @@ async fn apply_bulk_verb(verb: BulkVerb, project_root: &str, subject_id: &str) -
     Ok(item)
 }
 
-async fn handle_queue_bulk(verb: BulkVerb, args: QueueSubjectArgs, project_root: &str, json: bool) -> Result<()> {
+pub(crate) async fn queue_bulk_application(
+    verb: QueueBulkVerb,
+    subject_ids: Vec<String>,
+    all: bool,
+    project_root: &str,
+) -> Result<QueueBulkResponse> {
+    let subject_ids = distinct_in_order(subject_ids);
+    let mut items = Vec::with_capacity(subject_ids.len());
+    for subject_id in &subject_ids {
+        items.push(apply_bulk_verb(verb, project_root, subject_id).await?);
+    }
+    if matches!(verb, QueueBulkVerb::Release) && items.iter().any(|item| item.ok) {
+        orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(std::path::Path::new(project_root))
+            .await;
+    }
+    Ok(QueueBulkResponse { verb, all, items })
+}
+
+async fn handle_queue_bulk(verb: QueueBulkVerb, args: QueueSubjectArgs, project_root: &str, json: bool) -> Result<()> {
     if args.yes && !args.all {
         return Err(invalid_input_error("--yes is only valid together with --all"));
     }
@@ -510,22 +583,9 @@ async fn handle_queue_bulk(verb: BulkVerb, args: QueueSubjectArgs, project_root:
         merge_subject_ids(args.subject_id, args.subject_ids)
     };
 
-    let mut items = Vec::with_capacity(subject_ids.len());
-    for subject_id in &subject_ids {
-        items.push(apply_bulk_verb(verb, project_root, subject_id).await?);
-    }
-
-    // Released entries are immediately dispatchable — wake a running
-    // daemon so they drain now instead of on the next heartbeat. One
-    // nudge per bulk command, only when something actually changed.
-    if matches!(verb, BulkVerb::Release) && items.iter().any(|item| item.ok) {
-        orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(std::path::Path::new(project_root))
-            .await;
-    }
-
-    let failed: Vec<&BulkItemResult> = items.iter().filter(|item| !item.ok).collect();
+    let response = queue_bulk_application(verb, subject_ids, args.all, project_root).await?;
     if !json {
-        for item in &items {
+        for item in &response.items {
             match &item.error {
                 None => match item.dropped_entries {
                     Some(removed) => {
@@ -537,18 +597,16 @@ async fn handle_queue_bulk(verb: BulkVerb, args: QueueSubjectArgs, project_root:
             }
         }
     }
-    if failed.is_empty() {
-        if json {
-            return print_value(bulk_payload(verb, args.all, &items)?, true);
-        }
-        if items.len() > 1 {
-            print_ok(&format!("{} {} queue subject(s) (via queue plugin)", verb.past_tense(), items.len()), false);
-        }
-        return Ok(());
+    if let Some(error) = response.failure_error()? {
+        return Err(error);
     }
-    let kind = bulk_failure_kind(&items);
-    let message = format!("queue {}: {} of {} subject(s) failed", verb.name(), failed.len(), items.len());
-    Err(CliError::new(kind, message).with_details(bulk_payload(verb, args.all, &items)?).into())
+    if json {
+        return print_value(response.payload()?, true);
+    }
+    if response.items.len() > 1 {
+        print_ok(&format!("{} {} queue subject(s) (via queue plugin)", verb.past_tense(), response.items.len()), false);
+    }
+    Ok(())
 }
 
 async fn lookup_plugin_entries_by_subject(
@@ -806,7 +864,7 @@ mod tests {
     async fn handle_queue_bulk_rejects_yes_without_all() {
         let args =
             QueueSubjectArgs { subject_ids: vec!["TASK-1".to_string()], subject_id: None, all: false, yes: true };
-        let err = handle_queue_bulk(BulkVerb::Hold, args, "/nonexistent", false)
+        let err = handle_queue_bulk(QueueBulkVerb::Hold, args, "/nonexistent", false)
             .await
             .expect_err("--yes without --all should be rejected");
         assert!(err.to_string().contains("--all"), "error should mention --all: {err}");
@@ -947,7 +1005,7 @@ mod tests {
                 error: Some("queue subject not found".to_string()),
             },
         ];
-        let payload = bulk_payload(BulkVerb::Drop, true, &items).expect("payload should serialize");
+        let payload = bulk_payload(QueueBulkVerb::Drop, true, &items).expect("payload should serialize");
         assert_eq!(payload["op"], "drop");
         assert_eq!(payload["all"], true);
         assert_eq!(payload["requested"], 2);
@@ -965,10 +1023,10 @@ mod tests {
 
     #[test]
     fn bulk_verb_status_sets_mirror_single_item_paths() {
-        assert_eq!(BulkVerb::Hold.statuses(), &[animus_queue_protocol::status::PENDING]);
-        assert_eq!(BulkVerb::Release.statuses(), &[animus_queue_protocol::status::HELD]);
+        assert_eq!(QueueBulkVerb::Hold.statuses(), &[animus_queue_protocol::status::PENDING]);
+        assert_eq!(QueueBulkVerb::Release.statuses(), &[animus_queue_protocol::status::HELD]);
         assert_eq!(
-            BulkVerb::Drop.statuses(),
+            QueueBulkVerb::Drop.statuses(),
             &[
                 animus_queue_protocol::status::PENDING,
                 animus_queue_protocol::status::HELD,

@@ -16,6 +16,10 @@ pub(super) struct QueueEnqueueInput {
     pub(super) workflow_ref: Option<String>,
     #[serde(default)]
     pub(super) input_json: Option<String>,
+    /// Structured workflow input. Prefer this over `input_json`; the latter is
+    /// retained for compatibility with older MCP clients.
+    #[serde(default)]
+    pub(super) input: Option<serde_json::Value>,
     /// Defer dispatch until this time: an RFC 3339 timestamp or a relative
     /// offset (`90s`, `30m`, `2h`, `3d`). The entry stays queued but is not
     /// leased until then. Omit to dispatch as soon as capacity allows.

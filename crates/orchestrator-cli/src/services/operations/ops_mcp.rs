@@ -83,8 +83,8 @@ mod output_tools;
 mod plugin_marketplace_tools;
 #[path = "ops_mcp/plugin_tools.rs"]
 mod plugin_tools;
-#[path = "ops_mcp/queue_command_args.rs"]
-mod queue_command_args;
+#[path = "ops_mcp/queue_inproc.rs"]
+mod queue_inproc;
 #[path = "ops_mcp/queue_inputs.rs"]
 mod queue_inputs;
 #[path = "ops_mcp/queue_tools.rs"]
@@ -134,7 +134,6 @@ use list_guard::{list_limit, list_max_tokens};
 use list_types::*;
 use output::build_output_tail_result;
 use output_inputs::*;
-use queue_command_args::{build_queue_enqueue_args, build_queue_reorder_args, build_queue_subject_args};
 use queue_inputs::*;
 use subject_command_args::{validate_subject_batch_create_input, validate_subject_batch_update_input};
 use subject_inputs::*;
