@@ -1,15 +1,4 @@
-use super::{push_opt, BulkWorkflowRunItem, MAX_BATCH_SIZE};
-
-pub(super) fn build_bulk_workflow_run_item_args(item: &BulkWorkflowRunItem) -> Vec<String> {
-    let mut args = vec!["workflow".to_string(), "run".to_string()];
-    if let Some(workflow_ref) = item.workflow_ref.clone() {
-        args.push(workflow_ref);
-    }
-    args.push("--subject-id".to_string());
-    args.push(item.subject_id.clone());
-    push_opt(&mut args, "--input-json", item.input_json.clone());
-    args
-}
+use super::{BulkWorkflowRunItem, MAX_BATCH_SIZE};
 
 pub(super) fn validate_workflow_run_multiple_input(
     tool_name: &str,

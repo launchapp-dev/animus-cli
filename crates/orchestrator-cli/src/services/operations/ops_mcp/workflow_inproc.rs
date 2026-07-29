@@ -6,10 +6,12 @@ use crate::services::operations::{
     workflow_config_agent_set_application, workflow_config_get_application, workflow_config_set_application,
     workflow_config_source_application, workflow_config_validate_application,
     workflow_config_workflow_remove_application, workflow_config_workflow_set_application,
-    workflow_decisions_application, workflow_definitions_list_application, workflow_get_application,
-    workflow_list_application, workflow_pause_application, workflow_phase_approve_application,
-    workflow_phase_get_application, workflow_phase_reject_application, workflow_phases_list_application,
-    workflow_resume_application, WorkflowControlApplicationRequest, WorkflowListApplicationRequest,
+    workflow_decisions_application, workflow_definitions_list_application, workflow_dispatch_application,
+    workflow_execute_application, workflow_get_application, workflow_launch_application, workflow_list_application,
+    workflow_pause_application, workflow_phase_approve_application, workflow_phase_get_application,
+    workflow_phase_reject_application, workflow_phases_list_application, workflow_resume_application,
+    WorkflowControlApplicationRequest, WorkflowDispatchApplicationRequest, WorkflowExecuteArgs,
+    WorkflowLaunchApplicationRequest, WorkflowListApplicationRequest,
 };
 use anyhow::Result;
 use orchestrator_core::{services::ServiceHub, FileServiceHub};
@@ -17,6 +19,17 @@ use rmcp::model::CallToolResult;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+fn workflow_input(input: Option<Value>, input_json: Option<String>) -> Result<Option<Value>> {
+    match (input, input_json) {
+        (Some(_), Some(_)) => Err(crate::invalid_input_error("input and input_json are mutually exclusive")),
+        (Some(value), None) => Ok(Some(value)),
+        (None, Some(raw)) => serde_json::from_str(&raw)
+            .map(Some)
+            .map_err(|error| crate::invalid_input_error(format!("input_json: {error}"))),
+        (None, None) => Ok(None),
+    }
+}
 
 fn workflow_hub(project_root: &str) -> Result<Arc<dyn ServiceHub>> {
     Ok(Arc::new(FileServiceHub::new(project_root)?))
@@ -84,6 +97,192 @@ impl AoMcpServer {
                 build_guarded_list_result("animus.workflow.list", Value::Array(items), guard)
             })
             .await)
+    }
+
+    pub(super) async fn workflow_run_inproc(
+        &self,
+        input: super::WorkflowRunInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.run", project_root, async |root, actor| {
+                let dispatch = workflow_dispatch_application(
+                    &root,
+                    WorkflowDispatchApplicationRequest {
+                        title: input.title,
+                        subject_id: input.subject_id,
+                        description: input.description,
+                        workflow_ref: input.workflow_ref,
+                        input: workflow_input(input.input, input.input_json)?,
+                        vars: input.vars,
+                    },
+                    actor,
+                )
+                .await?;
+                workflow_launch_application(
+                    workflow_hub(&root)?,
+                    &root,
+                    WorkflowLaunchApplicationRequest {
+                        dispatch,
+                        model: input.model,
+                        tool: input.tool,
+                        phase_timeout_secs: input.phase_timeout_secs,
+                        idempotency_key: input.idempotency_key,
+                    },
+                    actor,
+                )
+                .await
+            })
+            .await)
+    }
+
+    pub(super) async fn workflow_execute_inproc(
+        &self,
+        input: super::WorkflowExecuteInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.execute", project_root, async |root, actor| {
+                let workflow_input = workflow_input(input.input, input.input_json)?;
+                let workflow_ref = input.workflow_ref;
+                let dispatch = workflow_dispatch_application(
+                    &root,
+                    WorkflowDispatchApplicationRequest {
+                        title: None,
+                        subject_id: Some(input.subject_id),
+                        description: None,
+                        workflow_ref: workflow_ref.clone(),
+                        input: workflow_input.clone(),
+                        vars: input.vars.clone(),
+                    },
+                    actor,
+                )
+                .await?;
+                workflow_execute_application(
+                    WorkflowExecuteArgs {
+                        workflow_id: None,
+                        title: None,
+                        subject_dispatch: Some(dispatch),
+                        description: None,
+                        workflow_ref,
+                        phase: input.phase,
+                        model: input.model,
+                        tool: input.tool,
+                        phase_timeout_secs: input.phase_timeout_secs,
+                        input: workflow_input,
+                        vars: input.vars,
+                        actor: actor.cloned(),
+                    },
+                    workflow_hub(&root)?,
+                    &root,
+                )
+                .await
+            })
+            .await)
+    }
+
+    pub(super) async fn workflow_run_multiple_inproc(
+        &self,
+        input: super::WorkflowRunMultipleInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let tool_name = "animus.workflow.run-multiple";
+        if let Err(message) = super::validate_workflow_run_multiple_input(tool_name, &input.runs) {
+            let error = crate::invalid_input_error(message);
+            return Ok(CallToolResult::structured_error(build_inproc_tool_error_payload(tool_name, &error)));
+        }
+        self.audit_actor_tool_decision(tool_name, true, "forward");
+        let project_root = resolve_project_root(&self.default_project_root, input.project_root);
+        let requested = input.runs.len();
+        let mut results = Vec::with_capacity(requested);
+        let mut stopped = false;
+        for (index, item) in input.runs.into_iter().enumerate() {
+            if stopped {
+                results.push(json!({
+                    "index": index,
+                    "status": "skipped",
+                    "target_id": item.subject_id,
+                    "command": "workflow.run",
+                    "result": null,
+                    "error": null,
+                    "exit_code": null,
+                    "reason": "stopped after earlier failure",
+                }));
+                continue;
+            }
+            let target_id = item.subject_id.clone();
+            let outcome = async {
+                let dispatch = workflow_dispatch_application(
+                    &project_root,
+                    WorkflowDispatchApplicationRequest {
+                        title: None,
+                        subject_id: Some(item.subject_id),
+                        description: None,
+                        workflow_ref: item.workflow_ref,
+                        input: workflow_input(item.input, item.input_json)?,
+                        vars: item.vars,
+                    },
+                    self.pinned_actor(),
+                )
+                .await?;
+                workflow_launch_application(
+                    workflow_hub(&project_root)?,
+                    &project_root,
+                    WorkflowLaunchApplicationRequest {
+                        dispatch,
+                        model: item.model,
+                        tool: item.tool,
+                        phase_timeout_secs: item.phase_timeout_secs,
+                        idempotency_key: item.idempotency_key,
+                    },
+                    self.pinned_actor(),
+                )
+                .await
+            }
+            .await;
+            match outcome {
+                Ok(result) => results.push(json!({
+                    "index": index,
+                    "status": "success",
+                    "target_id": target_id,
+                    "command": "workflow.run",
+                    "result": result,
+                    "exit_code": 0,
+                })),
+                Err(error) => {
+                    let mut payload = build_inproc_tool_error_payload(tool_name, &error);
+                    payload.as_object_mut().map(|map| map.remove("tool"));
+                    let exit_code = payload.get("exit_code").cloned().unwrap_or(Value::Null);
+                    results.push(json!({
+                        "index": index,
+                        "status": "failed",
+                        "target_id": target_id,
+                        "command": "workflow.run",
+                        "result": null,
+                        "error": payload,
+                        "exit_code": exit_code,
+                    }));
+                    stopped = input.on_error == super::OnError::Stop;
+                }
+            }
+        }
+        let executed = results.iter().filter(|item| item["status"] != "skipped").count();
+        let succeeded = results.iter().filter(|item| item["status"] == "success").count();
+        let failed = results.iter().filter(|item| item["status"] == "failed").count();
+        let skipped = results.iter().filter(|item| item["status"] == "skipped").count();
+        Ok(CallToolResult::structured(json!({
+            "schema": super::BATCH_RESULT_SCHEMA,
+            "tool": tool_name,
+            "on_error": input.on_error.as_str(),
+            "summary": {
+                "requested": requested,
+                "executed": executed,
+                "succeeded": succeeded,
+                "failed": failed,
+                "skipped": skipped,
+                "completed": failed == 0,
+            },
+            "results": results,
+        })))
     }
 
     pub(super) async fn workflow_get_inproc(&self, input: super::IdInput) -> Result<CallToolResult, rmcp::ErrorData> {
@@ -498,6 +697,130 @@ mod tests {
         assert_eq!(result.is_error, Some(true));
         let payload = result.structured_content.expect("typed error payload");
         assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("not_found"), "{payload}");
+    }
+
+    fn workflow_run_input() -> super::super::WorkflowRunInput {
+        super::super::WorkflowRunInput {
+            title: Some("Typed launch".to_string()),
+            subject_id: None,
+            description: None,
+            workflow_ref: None,
+            input_json: None,
+            input: None,
+            vars: Default::default(),
+            model: None,
+            tool: None,
+            phase_timeout_secs: None,
+            idempotency_key: None,
+            project_root: None,
+        }
+    }
+
+    fn bulk_workflow_run(subject_id: &str) -> super::super::BulkWorkflowRunItem {
+        super::super::BulkWorkflowRunItem { subject_id: subject_id.to_string(), ..Default::default() }
+    }
+
+    #[test]
+    fn workflow_input_preserves_nested_values_and_supports_legacy_json() {
+        let nested = json!({"request": {"items": [1, true, {"name": "alpha"}]}});
+        assert_eq!(workflow_input(Some(nested.clone()), None).expect("typed input"), Some(nested.clone()));
+        assert_eq!(workflow_input(None, Some(nested.to_string())).expect("legacy JSON input"), Some(nested));
+    }
+
+    #[test]
+    fn workflow_input_rejects_conflicting_and_malformed_encodings() {
+        let conflict = workflow_input(Some(json!({"typed": true})), Some("{}".to_string())).unwrap_err();
+        assert_eq!(crate::classify_cli_error_kind(&conflict).code(), "invalid_input");
+        let malformed = workflow_input(None, Some("{".to_string())).unwrap_err();
+        assert_eq!(crate::classify_cli_error_kind(&malformed).code(), "invalid_input");
+    }
+
+    #[tokio::test]
+    async fn workflow_run_input_conflict_is_a_typed_in_process_error() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let mut input = workflow_run_input();
+        input.input = Some(json!({"typed": true}));
+        input.input_json = Some("{}".to_string());
+        let result = server.workflow_run_inproc(input).await.expect("tool transport succeeds");
+
+        assert_eq!(result.is_error, Some(true));
+        let payload = result.structured_content.expect("typed error payload");
+        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{payload}");
+    }
+
+    #[tokio::test]
+    async fn workflow_execute_input_conflict_is_a_typed_in_process_error() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let result = server
+            .workflow_execute_inproc(super::super::WorkflowExecuteInput {
+                subject_id: "TASK-1".to_string(),
+                workflow_ref: None,
+                phase: None,
+                model: None,
+                tool: None,
+                phase_timeout_secs: None,
+                input_json: Some("{}".to_string()),
+                input: Some(json!({"typed": true})),
+                vars: Default::default(),
+                project_root: None,
+            })
+            .await
+            .expect("tool transport succeeds");
+
+        assert_eq!(result.is_error, Some(true));
+        let payload = result.structured_content.expect("typed error payload");
+        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{payload}");
+    }
+
+    #[tokio::test]
+    async fn workflow_run_multiple_stop_skips_after_a_typed_item_failure() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let mut first = bulk_workflow_run("TASK-1");
+        first.input = Some(json!({"typed": true}));
+        first.input_json = Some("{}".to_string());
+        let result = server
+            .workflow_run_multiple_inproc(super::super::WorkflowRunMultipleInput {
+                runs: vec![first, bulk_workflow_run("TASK-2")],
+                on_error: super::super::OnError::Stop,
+                project_root: None,
+            })
+            .await
+            .expect("tool transport succeeds");
+
+        let payload = result.structured_content.expect("structured batch payload");
+        assert_eq!(payload.pointer("/summary/failed").and_then(Value::as_u64), Some(1), "{payload}");
+        assert_eq!(payload.pointer("/summary/skipped").and_then(Value::as_u64), Some(1), "{payload}");
+        assert_eq!(payload.pointer("/results/0/error/error/code").and_then(Value::as_str), Some("invalid_input"));
+        assert_eq!(payload.pointer("/results/1/status").and_then(Value::as_str), Some("skipped"));
+    }
+
+    #[tokio::test]
+    async fn workflow_run_multiple_continue_isolates_typed_item_failures() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let mut first = bulk_workflow_run("TASK-1");
+        first.input = Some(json!({"typed": true}));
+        first.input_json = Some("{}".to_string());
+        let mut second = bulk_workflow_run("TASK-2");
+        second.input_json = Some("{".to_string());
+        let result = server
+            .workflow_run_multiple_inproc(super::super::WorkflowRunMultipleInput {
+                runs: vec![first, second],
+                on_error: super::super::OnError::Continue,
+                project_root: None,
+            })
+            .await
+            .expect("tool transport succeeds");
+
+        let payload = result.structured_content.expect("structured batch payload");
+        assert_eq!(payload.pointer("/summary/executed").and_then(Value::as_u64), Some(2), "{payload}");
+        assert_eq!(payload.pointer("/summary/failed").and_then(Value::as_u64), Some(2), "{payload}");
+        assert_eq!(payload.pointer("/summary/skipped").and_then(Value::as_u64), Some(0), "{payload}");
+        assert_eq!(payload.pointer("/results/0/error/error/code").and_then(Value::as_str), Some("invalid_input"));
+        assert_eq!(payload.pointer("/results/1/error/error/code").and_then(Value::as_str), Some("invalid_input"));
     }
 
     #[tokio::test]

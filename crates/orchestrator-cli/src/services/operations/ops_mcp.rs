@@ -143,7 +143,7 @@ use output_inputs::*;
 use queue_inputs::*;
 use subject_command_args::{validate_subject_batch_create_input, validate_subject_batch_update_input};
 use subject_inputs::*;
-use workflow_command_args::{build_bulk_workflow_run_item_args, validate_workflow_run_multiple_input};
+use workflow_command_args::validate_workflow_run_multiple_input;
 use workflow_inputs::*;
 
 const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
@@ -206,20 +206,6 @@ impl AoMcpServer {
     fn scoped_state_root(&self) -> std::path::PathBuf {
         protocol::scoped_state_root(std::path::Path::new(&self.default_project_root))
             .unwrap_or_else(|| std::path::PathBuf::from(&self.default_project_root).join(".animus"))
-    }
-}
-
-fn push_opt(args: &mut Vec<String>, flag: &str, value: Option<String>) {
-    if let Some(value) = value {
-        args.push(flag.to_string());
-        args.push(value);
-    }
-}
-
-fn push_opt_num(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
-    if let Some(v) = value {
-        args.push(flag.to_string());
-        args.push(v.to_string());
     }
 }
 

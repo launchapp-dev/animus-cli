@@ -3,6 +3,7 @@ use std::sync::Arc;
 use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
+use serde_json::Value;
 
 use crate::print_value;
 use crate::services::plugin_clients;
@@ -26,8 +27,8 @@ pub(crate) struct WorkflowExecuteArgs {
     pub(crate) model: Option<String>,
     pub(crate) tool: Option<String>,
     pub(crate) phase_timeout_secs: Option<u64>,
-    pub(crate) input_json: Option<String>,
-    pub(crate) vars: Vec<String>,
+    pub(crate) input: Option<Value>,
+    pub(crate) vars: std::collections::HashMap<String, String>,
     /// Transport-asserted caller identity, relayed verbatim into the runner
     /// `WorkflowExecuteRequest` so the runner can scope subject/journal/config
     /// plugins to the user.
@@ -45,12 +46,24 @@ pub(crate) async fn handle_workflow_execute(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
+    let result = workflow_execute_application(args, hub, project_root).await?;
+    if json {
+        return print_value(result, true);
+    }
+    Ok(())
+}
+
+pub(crate) async fn workflow_execute_application(
+    args: WorkflowExecuteArgs,
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> Result<Value> {
     if args.workflow_id.is_some() && !args.vars.is_empty() {
         anyhow::bail!(
             "--var cannot be used with --workflow-id; persisted workflow vars are authoritative for existing workflows"
         );
     }
-    let vars = super::parse_workflow_vars(&args.vars)?;
+    let vars = args.vars.clone();
 
     // Re-attach invocations (`--workflow-id`, including the detached
     // children spawned by the async `workflow run` path) must not mutate
@@ -92,8 +105,7 @@ pub(crate) async fn handle_workflow_execute(
     // execute ...` on a fresh checkout) and no plugin is installed,
     // we surface an actionable error rather than falling through to
     // a runtime that the rest of v0.5.1 no longer exercises.
-    let plugin_input_json: Option<serde_json::Value> =
-        args.input_json.as_deref().map(serde_json::from_str).transpose()?;
+    let plugin_input = args.input.clone();
     let plugin_request = if let Some(existing) = existing_workflow.as_ref() {
         let mut request = super::phases::workflow_execute_request_for_existing(existing);
         if let Some(execution) = execution_fence_from_environment(Some(&existing.id))? {
@@ -108,8 +120,8 @@ pub(crate) async fn handle_workflow_execute(
         if args.workflow_ref.is_some() {
             request.workflow_ref = args.workflow_ref.clone();
         }
-        if plugin_input_json.is_some() {
-            request.input = plugin_input_json;
+        if plugin_input.is_some() {
+            request.input = plugin_input;
         }
         request.model = args.model.clone();
         request.tool = args.tool.clone();
@@ -134,7 +146,7 @@ pub(crate) async fn handle_workflow_execute(
             title: args.title.clone(),
             description: args.description.clone(),
             workflow_ref: args.workflow_ref.clone(),
-            input: plugin_input_json,
+            input: plugin_input,
             vars,
             model: args.model.clone(),
             tool: args.tool.clone(),
@@ -189,24 +201,18 @@ pub(crate) async fn handle_workflow_execute(
             }
         }
     }
-    if json {
-        return print_value(
-            serde_json::json!({
-                "workflow_id": plugin_result.workflow_id,
-                "workflow_ref": plugin_result.workflow_ref,
-                "workflow_status": plugin_result.workflow_status,
-                "subject_id": plugin_result.subject_id,
-                "execution_cwd": plugin_result.execution_cwd,
-                "phases_requested": plugin_result.phases_requested,
-                "total_duration_secs": plugin_result.total_duration_secs,
-                "results": plugin_result.phase_results,
-                "post_success": plugin_result.post_success,
-                "via": "plugin_host",
-            }),
-            true,
-        );
-    }
-    Ok(())
+    Ok(serde_json::json!({
+        "workflow_id": plugin_result.workflow_id,
+        "workflow_ref": plugin_result.workflow_ref,
+        "workflow_status": plugin_result.workflow_status,
+        "subject_id": plugin_result.subject_id,
+        "execution_cwd": plugin_result.execution_cwd,
+        "phases_requested": plugin_result.phases_requested,
+        "total_duration_secs": plugin_result.total_duration_secs,
+        "results": plugin_result.phase_results,
+        "post_success": plugin_result.post_success,
+        "via": "plugin_host",
+    }))
 }
 
 fn execution_fence_from_environment(

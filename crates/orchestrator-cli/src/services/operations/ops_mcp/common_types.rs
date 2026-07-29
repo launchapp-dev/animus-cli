@@ -37,12 +37,6 @@ impl OnError {
     }
 }
 
-pub(super) struct BatchItemExec {
-    pub(super) target_id: String,
-    pub(super) command: String,
-    pub(super) args: Vec<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct IdInput {
     pub(super) id: String,

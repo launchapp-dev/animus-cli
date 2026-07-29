@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::CliExecutionResult;
 use serde_json::{json, Value};
 
@@ -101,19 +103,6 @@ pub(super) fn build_inproc_tool_error_payload(tool_name: &str, err: &anyhow::Err
 
 pub(super) fn build_tool_error_payload(tool_name: &str, result: &CliExecutionResult) -> Value {
     let mut payload = json!({ "tool": tool_name, "exit_code": result.exit_code });
-    if let Some(error) = pick_envelope_error(result) {
-        payload["error"] = error;
-    }
-    let stderr = result.stderr.trim().to_string();
-    if !stderr.is_empty() {
-        payload["stderr"] = json!(stderr);
-    }
-    attach_remediation(&mut payload);
-    payload
-}
-
-pub(super) fn batch_item_error_from_result(result: &CliExecutionResult) -> Value {
-    let mut payload = json!({ "exit_code": result.exit_code });
     if let Some(error) = pick_envelope_error(result) {
         payload["error"] = error;
     }
@@ -328,39 +317,5 @@ mod tests {
         );
         let payload = build_tool_error_payload("animus.subject.get", &result);
         assert!(payload.get("remediation").is_none(), "no daemon guess for generic unavailable: {payload}");
-    }
-
-    /// Batch items share the remediation contract with single-tool payloads.
-    #[test]
-    fn batch_item_error_from_result_carries_remediation() {
-        let result = failure_with_envelopes(
-            None,
-            Some(json!({
-                "schema": CLI_SCHEMA_ID,
-                "ok": false,
-                "error": { "code": "invalid_input", "message": "--title must not be empty", "exit_code": 2 }
-            })),
-            "bad item",
-        );
-        let payload = batch_item_error_from_result(&result);
-        assert_eq!(payload.pointer("/remediation/kind").and_then(Value::as_str), Some("invalid_input"));
-        assert_eq!(payload.pointer("/remediation/help").and_then(Value::as_str), Some("--title must not be empty"));
-    }
-
-    /// Batch helper shares the same envelope-picking contract — make sure a
-    /// stderr envelope from one of the per-item runs survives the round-trip
-    /// into the batch outcome payload (no `tool` field for batch items, but
-    /// the `error` and `exit_code` still need to come through).
-    #[test]
-    fn batch_item_error_from_result_prefers_stderr_envelope() {
-        let result = failure_with_envelopes(
-            None,
-            Some(json!({"schema": CLI_SCHEMA_ID, "ok": false, "error": {"code": "not_found"}})),
-            "missing",
-        );
-        let payload = batch_item_error_from_result(&result);
-        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("not_found"));
-        assert_eq!(payload.get("stderr").and_then(Value::as_str), Some("missing"));
-        assert_eq!(payload.get("exit_code").and_then(Value::as_i64), Some(5));
     }
 }
