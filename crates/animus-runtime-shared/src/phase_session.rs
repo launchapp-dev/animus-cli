@@ -164,8 +164,15 @@ pub fn update_session_environment(
     scoped_root: &Path,
     workflow_id: &str,
     phase_id: &str,
-    binding: EnvironmentBinding,
+    mut binding: EnvironmentBinding,
 ) -> io::Result<()> {
+    // This writer records a newly prepared/re-adopted lease. Never trust a
+    // caller-carried cleanup marker here: callers commonly derive replacement
+    // bindings from an existing checkpoint, and retaining `torn_down = true`
+    // would make the new handle invisible to restart reconciliation. The only
+    // operation allowed to set this bit is a successful teardown via one of
+    // the `mark_*_torn_down` helpers below.
+    binding.torn_down = false;
     mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
         checkpoint.environment = Some(binding);
     })
@@ -831,12 +838,20 @@ mod tests {
         let mut replacement = sample_binding();
         replacement.handle.id = "node-2".to_string();
         replacement.bound_at = "2025-01-02T00:00:00Z".to_string();
+        // Model a caller deriving the replacement from the old checkpoint.
+        // The binding writer owns the live-lease invariant and must clear this
+        // stale cleanup marker rather than hiding the replacement from restart
+        // reconciliation.
+        replacement.torn_down = true;
         update_session_environment(scoped_root, "wf-env-4", "phase-a", replacement.clone())
             .expect("persist replacement");
 
         let cp = read_checkpoint(scoped_root, "wf-env-4", "phase-a").expect("read").expect("present");
-        assert_eq!(cp.environment.as_ref(), Some(&replacement));
-        assert!(!cp.environment.expect("replacement binding").torn_down);
+        let persisted = cp.environment.expect("replacement binding");
+        assert_eq!(persisted.handle, replacement.handle);
+        assert_eq!(persisted.environment_id, replacement.environment_id);
+        assert_eq!(persisted.bound_at, replacement.bound_at);
+        assert!(!persisted.torn_down);
     }
 
     // Backward-compat: a checkpoint JSON written by an OLDER runner that does
