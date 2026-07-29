@@ -249,6 +249,12 @@ Use output tools for run artifacts and structured execution streams. Use
 `animus.logs.tail` for recent daemon-level logs. This MCP tool is a bounded
 pull, not a live follow stream.
 
+Output reads execute through typed in-process services rather than a child CLI.
+Actor-bound application hosts expose run and phase-output reads only; both
+conceal output owned by another user or tenant. JSONL, monitor, and artifact
+reads remain on the management surface because those stores are not yet
+universally attributable to an actor-owned workflow.
+
 ```json
 { "run_id": "run-abc123" }                  // animus.output.run
 { "run_id": "run-abc123", "entries": true } // animus.output.jsonl

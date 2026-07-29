@@ -8,9 +8,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<RunIdInput>()
     )]
     async fn ao_output_run(&self, params: Parameters<RunIdInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec!["output".to_string(), "read".to_string(), "--run-id".to_string(), input.run_id];
-        self.run_tool("animus.output.run", args, input.project_root).await
+        Ok(self.output_run_inproc(params.0))
     }
 
     #[tool(
@@ -22,24 +20,16 @@ impl AoMcpServer {
         &self,
         params: Parameters<OutputPhaseOutputsInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args =
-            vec!["output".to_string(), "phase-outputs".to_string(), "--workflow-id".to_string(), input.workflow_id];
-        push_opt(&mut args, "--phase-id", input.phase_id);
-        self.run_tool("animus.output.phase-outputs", args, input.project_root).await
+        Ok(self.output_phase_outputs_inproc(params.0))
     }
 
     #[tool(
         name = "animus.output.monitor",
-        description = "Monitor output for a run, optionally scoped to a task or phase. Purpose: Stream real-time output from running agents. Prerequisites: Run must exist. Example: {\"run_id\": \"abc123\"} or {\"run_id\": \"abc123\", \"task_id\": \"TASK-001\", \"phase_id\": \"implementation\"}. Sequencing: Use after animus.agent.run or animus.workflow.run to monitor progress.",
+        description = "Monitor output for a run, optionally scoped to a task or phase. Purpose: Inspect the currently persisted output from running agents as a bounded snapshot. Prerequisites: Run must exist. Example: {\"run_id\": \"abc123\"} or {\"run_id\": \"abc123\", \"task_id\": \"TASK-001\", \"phase_id\": \"implementation\"}. Sequencing: Use after animus.agent.run or animus.workflow.run to monitor progress.",
         input_schema = ao_schema_for_type::<OutputMonitorInput>()
     )]
     async fn ao_output_monitor(&self, params: Parameters<OutputMonitorInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["output".to_string(), "monitor".to_string(), "--run-id".to_string(), input.run_id];
-        push_opt(&mut args, "--task-id", input.task_id);
-        push_opt(&mut args, "--phase-id", input.phase_id);
-        self.run_tool("animus.output.monitor", args, input.project_root).await
+        Ok(self.output_monitor_inproc(params.0))
     }
 
     #[tool(
@@ -66,12 +56,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<OutputJsonlInput>()
     )]
     async fn ao_output_jsonl(&self, params: Parameters<OutputJsonlInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["output".to_string(), "jsonl".to_string(), "--run-id".to_string(), input.run_id];
-        if input.entries {
-            args.push("--entries".to_string());
-        }
-        self.run_tool("animus.output.jsonl", args, input.project_root).await
+        Ok(self.output_jsonl_inproc(params.0))
     }
 
     #[tool(
@@ -80,9 +65,6 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ExecutionIdInput>()
     )]
     async fn ao_output_artifacts(&self, params: Parameters<ExecutionIdInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args =
-            vec!["output".to_string(), "artifacts".to_string(), "--execution-id".to_string(), input.execution_id];
-        self.run_tool("animus.output.artifacts", args, input.project_root).await
+        Ok(self.output_artifacts_inproc(params.0))
     }
 }

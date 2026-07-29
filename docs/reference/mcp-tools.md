@@ -305,10 +305,18 @@ never auto-dispatches `Ready` tasks from the subject backend.
 |---|---|---|
 | `animus.output.run` | Get stdout/stderr from an agent execution | `run_id`, `project_root` |
 | `animus.output.tail` | Get most recent output/error/thinking events | `run_id`, `task_id`, `event_types[]`, `limit`, `project_root` |
-| `animus.output.monitor` | Stream real-time output from a run, optionally scoped by task or phase | `run_id`, `task_id`, `phase_id`, `project_root` |
+| `animus.output.monitor` | Inspect aggregated output from a run, optionally scoped by task or phase | `run_id`, `task_id`, `phase_id`, `project_root` |
 | `animus.output.jsonl` | Get structured JSONL event log | `run_id`, `entries`, `project_root` |
 | `animus.output.artifacts` | Get files generated during execution | `execution_id`, `project_root` |
 | `animus.output.phase-outputs` | Get persisted workflow phase outputs | `workflow_id`, `phase_id`, `project_root` |
+
+All six output tools execute in process through typed application services
+(`output.tail` already used its bounded local service). On an actor-bound
+server, `output.run` and `output.phase-outputs` authorize the pinned actor
+against the persisted workflow owner before reading any transcript or phase
+payload; unknown and cross-partition ids are both returned as `not_found`.
+Monitor, JSONL, and artifact reads remain management-only until their inputs
+can be resolved to an actor-owned workflow without ambiguity.
 
 ---
 
