@@ -39,6 +39,8 @@ mod ao_exec;
 mod common_types;
 #[path = "ops_mcp/compaction.rs"]
 mod compaction;
+#[path = "ops_mcp/cost_inproc.rs"]
+mod cost_inproc;
 #[path = "ops_mcp/cost_tools.rs"]
 mod cost_tools;
 #[path = "ops_mcp/daemon.rs"]
@@ -123,8 +125,7 @@ use common_types::*;
 use compaction::compact_json_str;
 use compaction::compact_json_text;
 use daemon::{
-    build_daemon_config_set_args, build_daemon_events_poll_result, build_daemon_logs_result, build_daemon_observe_args,
-    build_daemon_start_args,
+    build_daemon_events_poll_result, build_daemon_logs_result, build_daemon_observe_args, build_daemon_start_args,
 };
 #[cfg(test)]
 use daemon::{daemon_events_poll_limit, resolve_daemon_events_project_root};

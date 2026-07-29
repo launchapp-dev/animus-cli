@@ -365,11 +365,40 @@ fn completed_subjects_in_window(
 }
 
 #[derive(Debug, Serialize)]
-struct DecisionsView {
+pub(crate) struct DecisionsView {
     schema: &'static str,
     since: Option<String>,
     count: usize,
     records: Vec<crate::services::cost::BudgetExceededRecord>,
+}
+
+pub(crate) fn cost_decisions_application(project_root: &str, since: Option<&str>) -> Result<DecisionsView> {
+    let records = read_decision_records(Path::new(project_root))?;
+    decisions_view(records, since)
+}
+
+pub(crate) fn budget_get_application(project_root: &str) -> crate::services::cost::BudgetReport {
+    crate::services::cost::build_budget_report(Path::new(project_root))
+}
+
+pub(crate) fn budget_set_application(
+    project_root: &str,
+    max_daily_usd: Option<f64>,
+    clear: bool,
+) -> Result<serde_json::Value> {
+    let cap = match (max_daily_usd, clear) {
+        (Some(_), true) => return Err(crate::invalid_input_error("pass either max_daily_usd or clear, not both")),
+        (Some(value), false) if value.is_finite() => value,
+        (Some(_), false) => return Err(crate::invalid_input_error("max_daily_usd must be finite")),
+        (None, true) => 0.0,
+        (None, false) => {
+            return Err(crate::invalid_input_error("provide max_daily_usd (USD cap) or clear=true"));
+        }
+    };
+    crate::services::runtime::daemon_config_application(
+        project_root,
+        crate::services::runtime::DaemonConfigApplicationRequest { max_daily_usd: Some(cap), ..Default::default() },
+    )
 }
 
 fn decisions_view(
@@ -377,7 +406,8 @@ fn decisions_view(
     since: Option<&str>,
 ) -> Result<DecisionsView> {
     if let Some(window) = since {
-        let cutoff = Utc::now() - parse_duration(window)?;
+        let duration = parse_duration(window).map_err(|error| crate::invalid_input_error(error.to_string()))?;
+        let cutoff = Utc::now() - duration;
         records.retain(|record| record.observed_at >= cutoff);
     }
     Ok(DecisionsView { schema: DECISIONS_SCHEMA, since: since.map(str::to_string), count: records.len(), records })
@@ -387,8 +417,7 @@ fn decisions_view(
 /// — the fleet-level record stream, distinct from the per-run
 /// `runs/<run_id>/decisions.jsonl` that `animus output decisions` renders.
 fn handle_decisions(project_path: &Path, args: CostDecisionsArgs, json: bool) -> Result<()> {
-    let records = read_decision_records(project_path)?;
-    let view = decisions_view(records, args.since.as_deref())?;
+    let view = cost_decisions_application(project_path.to_string_lossy().as_ref(), args.since.as_deref())?;
     if json {
         return print_value(&view, json);
     }

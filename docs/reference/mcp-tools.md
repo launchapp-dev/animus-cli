@@ -157,8 +157,8 @@ approval gate stays human-only.
 | `animus.daemon.events` | List recent daemon events for debugging and monitoring | `limit`, `project_root` |
 | `animus.daemon.agents` | List currently running agent tasks and their status | `project_root` |
 | `animus.daemon.logs` | Read recent daemon log entries | `limit`, `search`, `project_root` |
-| `animus.daemon.config` | Read current daemon automation settings | `project_root` |
-| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `max_daily_usd`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
+| `animus.daemon.config` | Read current daemon automation settings through the typed in-process configuration service | `project_root` |
+| `animus.daemon.config-set` | Update daemon runtime settings and notification config through the same typed in-process service. Prefer structured `notification_config`; the JSON-string and file fields are mutually exclusive compatibility inputs | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `max_daily_usd`, `silent_threshold_mins`, `notification_config`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
 | `animus.daemon.observe` | Routing front-door over the existing observability surfaces: returns the merged, chronological window of daemon events + logs (or routes to a single `source`). Non-streaming — always returns and never follows live. Works offline (reads scoped event/log history; the daemon need not be running) | `since`, `source` (`logs`/`events`/`stream`/`workflow`), `workflow_id`, `limit`, `project_root` |
 
 ---
@@ -167,9 +167,14 @@ approval gate stays human-only.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.cost.decisions` | List recorded budget-cap breaches from the scoped breach log. Works offline (reads the scoped breach log; the daemon need not be running) | `since`, `project_root` |
-| `animus.budget.get` | Read the fleet budget posture: fleet daily spend cap, today's rolling-24h spend, remaining headroom, whether the cap is exceeded, whether dispatch is paused on the cap, and every configured per-workflow / per-phase budget cap. Works offline | `project_root` |
-| `animus.budget.set` | Set or clear the fleet daily spend cap (admin). Wraps `daemon config --max-daily-usd`; hot-reloaded by the running daemon | `max_daily_usd`, `clear`, `project_root` |
+| `animus.cost.decisions` | List recorded budget-cap breaches from the scoped breach log through a typed in-process service. Works offline (reads the scoped breach log; the daemon need not be running) | `since`, `project_root` |
+| `animus.budget.get` | Read the fleet budget posture through a typed in-process service: fleet daily spend cap, today's rolling-24h spend, remaining headroom, whether the cap is exceeded, whether dispatch is paused on the cap, and every configured per-workflow / per-phase budget cap. Works offline | `project_root` |
+| `animus.budget.set` | Set or clear the fleet daily spend cap (admin) through the shared typed daemon-configuration service; hot-reloaded by the running daemon | `max_daily_usd`, `clear`, `project_root` |
+
+The cost, budget, and daemon configuration tools above no longer spawn a child
+CLI or reconstruct command-line arguments. They remain management-only because
+the fleet cost state and daemon configuration are global stores without an
+actor-partitioned authorization protocol.
 
 ---
 

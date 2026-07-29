@@ -83,6 +83,12 @@ pub(super) struct DaemonConfigSetInput {
     #[serde(default)]
     pub(super) max_daily_usd: Option<f64>,
     #[serde(default)]
+    pub(super) silent_threshold_mins: Option<u64>,
+    /// Structured notification configuration. Prefer this over the legacy
+    /// JSON string/file compatibility inputs.
+    #[serde(default)]
+    pub(super) notification_config: Option<serde_json::Value>,
+    #[serde(default)]
     pub(super) notification_config_json: Option<String>,
     #[serde(default)]
     pub(super) notification_config_file: Option<String>,

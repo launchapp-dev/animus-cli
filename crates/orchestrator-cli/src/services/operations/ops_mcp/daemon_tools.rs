@@ -137,19 +137,16 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<DaemonConfigInput>()
     )]
     async fn ao_daemon_config(&self, params: Parameters<DaemonConfigInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.config", vec!["daemon".to_string(), "config".to_string()], params.0.project_root)
-            .await
+        Ok(self.daemon_config_inproc(params.0.project_root))
     }
 
     #[tool(
         name = "animus.daemon.config-set",
-        description = "Update daemon configuration. Purpose: Persist daemon automation settings and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, stale_threshold_hours, phase_timeout_secs, max_daily_usd, notification_config_json, notification_config_file, clear_notification_config). Runtime settings are hot-reloaded by the running daemon without restart. For the fleet daily spend cap prefer animus.budget.set. Prerequisites: None. Example: {\"pool_size\": 4, \"interval_secs\": 10}. Sequencing: Use animus.daemon.config to read current values first.",
+        description = "Update daemon configuration through the typed in-process application service. Purpose: Persist daemon automation settings and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, stale_threshold_hours, phase_timeout_secs, max_daily_usd, silent_threshold_mins, notification_config, clear_notification_config). Prefer the structured notification_config object; notification_config_json and notification_config_file remain one-time compatibility inputs and cannot be combined with it. Runtime settings are hot-reloaded by the running daemon without restart. For the fleet daily spend cap prefer animus.budget.set. Prerequisites: None. Example: {\"pool_size\": 4, \"interval_secs\": 10}. Sequencing: Use animus.daemon.config to read current values first.",
         input_schema = ao_schema_for_type::<DaemonConfigSetInput>()
     )]
     async fn ao_daemon_config_set(&self, params: Parameters<DaemonConfigSetInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_daemon_config_set_args(&input);
-        self.run_tool("animus.daemon.config-set", args, input.project_root).await
+        Ok(self.daemon_config_set_inproc(params.0))
     }
 
     #[tool(
