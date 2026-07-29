@@ -203,6 +203,28 @@ fn finalize(
 mod tests {
     use super::*;
 
+    struct EnvVarGuard {
+        name: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn remove(name: &'static str) -> Self {
+            let previous = std::env::var(name).ok();
+            std::env::remove_var(name);
+            Self { name, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+
     #[test]
     fn oauth_secret_store_honors_project_key_file_without_env_key() {
         let tmp = tempfile::tempdir().unwrap();
@@ -220,15 +242,10 @@ mod tests {
         });
         std::fs::write(animus_dir.join("config.json"), serde_json::to_vec(&config).unwrap()).unwrap();
 
-        let previous_key = std::env::var("ANIMUS_SECRET_KEY").ok();
-        std::env::remove_var("ANIMUS_SECRET_KEY");
+        let _key_guard = EnvVarGuard::remove("ANIMUS_SECRET_KEY");
         let store = build_secret_store_at(&project_root, tmp.path().join("state"));
         let result = store.set("oauth:test", "token");
         let stored = result.and_then(|()| store.get("oauth:test"));
-        match previous_key {
-            Some(value) => std::env::set_var("ANIMUS_SECRET_KEY", value),
-            None => std::env::remove_var("ANIMUS_SECRET_KEY"),
-        }
 
         assert_eq!(
             stored
