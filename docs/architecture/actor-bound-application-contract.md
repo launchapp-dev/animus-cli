@@ -209,6 +209,15 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
   fleet daily budget. The underlying cost state and daemon configuration are
   still global stores with no actor field or authorization context, so these
   tools remain management-only.
+- Environment node management: list/get/teardown/reap use shared typed
+  in-process application services, then call the installed environment plugin
+  through its typed protocol. That protocol has no actor field and the plugin's
+  nodes are not yet guaranteed to be user/tenant partitioned, so the tools
+  remain management-only.
+- Log tail: the CLI and MCP share one typed service for daemon-wire and local
+  fallback reads, but project log records are not uniformly actor-attributable
+  and the log-storage protocol has no actor authorization context. The tool
+  remains management-only.
 - MCP resources: list/read resource requests need the same typed actor/request
   context and backend enforcement.
 

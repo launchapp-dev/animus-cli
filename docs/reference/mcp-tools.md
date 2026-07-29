@@ -200,9 +200,10 @@ plugin (e.g. `linear`, `jira`, `github-issue`).
 
 ## Log Operations (1 tool)
 
-Surfaces the CLI's `animus logs tail` to MCP callers. Routes through the daemon
+Surfaces the CLI's `animus logs tail` to MCP callers through the same typed
+in-process application service used by the CLI. It routes through the daemon
 control wire when the daemon is running, otherwise reads the in-tree
-`events.jsonl` fallback directly.
+`events.jsonl` fallback directly; it no longer spawns a child CLI.
 
 Unlike the CLI, the MCP surface does not expose `--follow`; this tool is a
 bounded fetch for recent entries, not a live stream.
@@ -211,16 +212,22 @@ bounded fetch for recent entries, not a live stream.
 |---|---|---|
 | `animus.logs.tail` | Tail recent log entries from the active `log_storage_backend` | `plugin`, `level`, `since`, `limit`, `project_root` |
 
+Log tail remains management-only because project log entries are not uniformly
+attributable to an authenticated actor and the storage protocol has no actor
+authorization context.
+
 ---
 
 ## Environment Operations (4 tools)
 
 Surface the CLI's `animus environment {list,get,teardown,reap}` node-management
-verbs to MCP callers. They drive the installed `environment` plugin's node-
-management surface (`environment/list` · `/get` · `/teardown_node` · `/reap`) so
-agents + the portal can inspect and reap ephemeral run nodes without a dashboard
-delete. `reap` defaults to deleting only DEAD (FAILED/CRASHED) nodes — always
-safe, since a live node is never dead; `all`+`force` also reaps healthy orphans.
+verbs to MCP callers through the same typed in-process application services used
+by the CLI. Those services drive the installed `environment` plugin's typed
+node-management protocol (`environment/list` · `/get` · `/teardown_node` ·
+`/reap`), so the plugin remains the intentional out-of-process state owner while
+the redundant child-CLI/argv hop is removed. `reap` defaults to deleting only
+DEAD (FAILED/CRASHED) nodes — always safe, since a live node is never dead;
+`all`+`force` also reaps healthy orphans.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -228,6 +235,9 @@ safe, since a live node is never dead; `all`+`force` also reaps healthy orphans.
 | `animus.environment.get` | Describe one managed node by substrate id or name | `id`, `environment`, `project_root` |
 | `animus.environment.teardown` | Destroy one managed node by substrate id or name (idempotent) | `id`, `environment`, `project_root` |
 | `animus.environment.reap` | Reap orphaned/dead nodes (default: only dead) | `all`, `force`, `dry_run`, `older_than_secs`, `environment`, `project_root` |
+
+Environment tools remain management-only because the node-management protocol
+does not carry an authenticated actor or partition nodes by user and tenant.
 
 ---
 
