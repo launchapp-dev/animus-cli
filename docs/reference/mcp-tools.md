@@ -251,11 +251,17 @@ and task projection instead of falling back to global scope.
 | `animus.workflow.definitions.list` | List workflow definitions | `project_root` |
 | `animus.workflow.config.get` | Read effective workflow configuration | `project_root` |
 | `animus.workflow.config.validate` | Validate workflow config for shape errors and broken references | `project_root` |
-| `animus.workflow.config.set` | Replace the full config via the writable config_source plugin (validates first; rejected on read-only sources) | `file`, `project_root` |
-| `animus.workflow.config.agent-set` | Create or replace one agent definition (read-modify-write the full config) | `id`, `input_json`, `project_root` |
+| `animus.workflow.config.set` | Replace the full raw config via the writable config_source plugin (validates first; rejected on read-only sources) | `config` (structured, preferred) or compatibility `file`, `project_root` |
+| `animus.workflow.config.agent-set` | Create or replace one agent definition (read-modify-write the full config) | `id`, `profile` (structured, preferred) or compatibility `input_json`, `project_root` |
 | `animus.workflow.config.agent-remove` | Remove one agent definition | `id`, `project_root` |
-| `animus.workflow.config.workflow-set` | Create or replace one workflow definition (read-modify-write) | `input_json`, `project_root` |
+| `animus.workflow.config.workflow-set` | Create or replace one workflow definition (read-modify-write) | `workflow` (structured, preferred) or compatibility `input_json`, `project_root` |
 | `animus.workflow.config.workflow-remove` | Remove one workflow definition | `id`, `project_root` |
+
+The five config write tools execute through typed in-process application
+services; structured values are deserialized once into the kernel model and do
+not cross a child-CLI/argv boundary. Compatibility fields are mutually
+exclusive with their structured equivalents. These remain management-only
+because the config write protocol does not yet carry an authenticated actor.
 
 ---
 

@@ -539,20 +539,30 @@ fn write_back_payload(project_root: &str, config: &orchestrator_core::WorkflowCo
     }))
 }
 
-/// `animus workflow config set` — replace the entire config from a JSON file or
-/// stdin. The kernel validates before writing and rejects a read-only source.
-pub(crate) fn set_workflow_config_payload(project_root: &str, file: Option<&str>) -> Result<Value> {
+/// CLI compatibility adapter for reading a full raw config from a JSON file or
+/// stdin. Application callers should pass the structured model directly.
+pub(crate) fn read_workflow_config_source(file: Option<&str>) -> Result<orchestrator_core::WorkflowConfig> {
     let raw = read_json_source(file)?;
-    let config: orchestrator_core::WorkflowConfig = serde_json::from_str(&raw)
-        .context("invalid WorkflowConfig JSON for workflow config set; expected a full config model")?;
+    serde_json::from_str(&raw)
+        .context("invalid WorkflowConfig JSON for workflow config set; expected a full config model")
+}
+
+/// Replace the entire raw workflow config from a typed application model. The
+/// kernel validates before writing and rejects a read-only source.
+pub(crate) fn set_workflow_config_payload(
+    project_root: &str,
+    config: orchestrator_core::WorkflowConfig,
+) -> Result<Value> {
     orchestrator_core::write_full_workflow_config(Path::new(project_root), &config)?;
     write_back_payload(project_root, &config)
 }
 
 /// `animus workflow config agent-set` — upsert one agent definition.
-pub(crate) fn set_config_agent_payload(project_root: &str, id: &str, input_json: &str) -> Result<Value> {
-    let profile: orchestrator_config::AgentProfileOverlay =
-        serde_json::from_str(input_json).context("invalid agent profile JSON for workflow config agent-set")?;
+pub(crate) fn set_config_agent_payload(
+    project_root: &str,
+    id: &str,
+    profile: orchestrator_config::AgentProfileOverlay,
+) -> Result<Value> {
     let config = orchestrator_core::upsert_agent_profile(Path::new(project_root), id, profile)?;
     write_back_payload(project_root, &config)
 }
@@ -561,9 +571,11 @@ pub(crate) fn set_config_agent_payload(project_root: &str, id: &str, input_json:
 /// config_source base (`WorkflowConfig.phase_definitions`), NOT the agent-runtime
 /// overlay that `workflow phases upsert` writes. A workflow set afterwards that
 /// references this phase then resolves during post-pack-merge validation.
-pub(crate) fn set_config_phase_payload(project_root: &str, id: &str, input_json: &str) -> Result<Value> {
-    let definition: orchestrator_config::PhaseExecutionDefinition = serde_json::from_str(input_json)
-        .context("invalid phase execution definition JSON for workflow config phase-set")?;
+pub(crate) fn set_config_phase_payload(
+    project_root: &str,
+    id: &str,
+    definition: orchestrator_config::PhaseExecutionDefinition,
+) -> Result<Value> {
     let config = orchestrator_core::set_phase_definition(Path::new(project_root), id, definition)?;
     write_back_payload(project_root, &config)
 }
@@ -575,9 +587,10 @@ pub(crate) fn remove_config_agent_payload(project_root: &str, id: &str) -> Resul
 }
 
 /// `animus workflow config workflow-set` — upsert one workflow definition.
-pub(crate) fn set_config_workflow_payload(project_root: &str, input_json: &str) -> Result<Value> {
-    let definition: orchestrator_core::WorkflowDefinition = serde_json::from_str(input_json)
-        .context("invalid workflow definition JSON for workflow config workflow-set; must include an 'id' field")?;
+pub(crate) fn set_config_workflow_payload(
+    project_root: &str,
+    definition: orchestrator_core::WorkflowDefinition,
+) -> Result<Value> {
     let config = orchestrator_core::upsert_workflow_definition(Path::new(project_root), definition)?;
     write_back_payload(project_root, &config)
 }

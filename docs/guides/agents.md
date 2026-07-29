@@ -202,13 +202,17 @@ and are the **definition**-management surface — distinct from the runtime
 (after pack overlays are merged), so writing it back would bake pack-provided
 entities into your source and shadow later pack updates. Use `config.set` only
 with an externally-authored raw model; for edits, use the entity verbs.
+Pass structured `config`, `profile`, and `workflow` values so they stay typed
+through the in-process application service. The legacy `file` and `input_json`
+fields remain compatibility alternatives and cannot be combined with their
+structured equivalents.
 
 ```json
-{ "file": "/tmp/config.json" }                           // animus.workflow.config.set (full model)
-{ "id": "reviewer", "input_json": "{...}" }              // animus.workflow.config.agent-set
-{ "id": "reviewer" }                                      // animus.workflow.config.agent-remove
-{ "input_json": "{\"id\":\"ship\",\"name\":\"Ship\",\"phases\":[\"impl\"]}" } // animus.workflow.config.workflow-set
-{ "id": "ship" }                                          // animus.workflow.config.workflow-remove
+{ "config": { "workflows": [], "phase_definitions": {}, "agent_profiles": {} } } // config.set
+{ "id": "reviewer", "profile": { "description": "Review", "system_prompt": "Review changes" } } // agent-set
+{ "id": "reviewer" } // agent-remove
+{ "workflow": { "id": "ship", "name": "Ship", "phases": ["impl"] } } // workflow-set
+{ "id": "ship" } // workflow-remove
 ```
 
 ## Daemon and Queue Operations

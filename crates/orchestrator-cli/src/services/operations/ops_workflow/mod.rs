@@ -573,6 +573,44 @@ pub(crate) fn workflow_config_validate_application(project_root: &str, actor: Op
     Ok(config::validate_workflow_config_payload(project_root, actor))
 }
 
+pub(crate) fn workflow_config_source_application(file: Option<&str>) -> Result<orchestrator_core::WorkflowConfig> {
+    config::read_workflow_config_source(file)
+}
+
+pub(crate) fn workflow_config_set_application(
+    project_root: &str,
+    config: orchestrator_core::WorkflowConfig,
+) -> Result<Value> {
+    config::set_workflow_config_payload(project_root, config)
+}
+
+pub(crate) fn workflow_config_agent_set_application(
+    project_root: &str,
+    id: &str,
+    profile: orchestrator_config::AgentProfileOverlay,
+) -> Result<Value> {
+    config::set_config_agent_payload(project_root, id, profile)
+}
+
+pub(crate) fn workflow_config_agent_remove_application(project_root: &str, id: &str) -> Result<Value> {
+    config::remove_config_agent_payload(project_root, id)
+}
+
+pub(crate) fn workflow_config_workflow_set_application(
+    project_root: &str,
+    workflow: orchestrator_core::WorkflowDefinition,
+) -> Result<Value> {
+    config::set_config_workflow_payload(project_root, workflow)
+}
+
+pub(crate) fn workflow_config_workflow_remove_application(project_root: &str, id: &str) -> Result<Value> {
+    config::remove_config_workflow_payload(project_root, id)
+}
+
+fn workflow_config_phase_from_json(input_json: &str) -> Result<orchestrator_config::PhaseExecutionDefinition> {
+    serde_json::from_str(input_json).context("invalid phase execution definition JSON for workflow config phase-set")
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct WorkflowControlApplicationRequest {
     pub(crate) id: String,
@@ -1120,22 +1158,29 @@ pub(crate) async fn handle_workflow(
             WorkflowConfigCommand::Compile => print_value(config::compile_yaml_workflows_payload(project_root)?, json),
             WorkflowConfigCommand::Reload => print_value(config::reload_workflow_config_payload(project_root), json),
             WorkflowConfigCommand::Set(args) => {
-                print_value(config::set_workflow_config_payload(project_root, args.file.as_deref())?, json)
+                let config = workflow_config_source_application(args.file.as_deref())?;
+                print_value(workflow_config_set_application(project_root, config)?, json)
             }
             WorkflowConfigCommand::AgentSet(args) => {
-                print_value(config::set_config_agent_payload(project_root, &args.id, &args.input_json)?, json)
+                let profile: orchestrator_config::AgentProfileOverlay = serde_json::from_str(&args.input_json)
+                    .context("invalid agent profile JSON for workflow config agent-set")?;
+                print_value(workflow_config_agent_set_application(project_root, &args.id, profile)?, json)
             }
             WorkflowConfigCommand::AgentRemove(args) => {
-                print_value(config::remove_config_agent_payload(project_root, &args.id)?, json)
+                print_value(workflow_config_agent_remove_application(project_root, &args.id)?, json)
             }
             WorkflowConfigCommand::PhaseSet(args) => {
-                print_value(config::set_config_phase_payload(project_root, &args.id, &args.input_json)?, json)
+                let definition = workflow_config_phase_from_json(&args.input_json)?;
+                print_value(config::set_config_phase_payload(project_root, &args.id, definition)?, json)
             }
             WorkflowConfigCommand::WorkflowSet(args) => {
-                print_value(config::set_config_workflow_payload(project_root, &args.input_json)?, json)
+                let workflow: orchestrator_core::WorkflowDefinition = serde_json::from_str(&args.input_json).context(
+                    "invalid workflow definition JSON for workflow config workflow-set; must include an 'id' field",
+                )?;
+                print_value(workflow_config_workflow_set_application(project_root, workflow)?, json)
             }
             WorkflowConfigCommand::WorkflowRemove(args) => {
-                print_value(config::remove_config_workflow_payload(project_root, &args.id)?, json)
+                print_value(workflow_config_workflow_remove_application(project_root, &args.id)?, json)
             }
         },
         WorkflowCommand::StateMachine { command } => match command {
@@ -1507,8 +1552,7 @@ mod tests {
 
     #[test]
     fn set_config_phase_payload_reports_actionable_json_error() {
-        let error =
-            set_config_phase_payload("/tmp/unused", "my-phase", "{invalid").expect_err("invalid payload should fail");
+        let error = workflow_config_phase_from_json("{invalid").expect_err("invalid payload should fail");
         let message = format!("{error:#}");
         assert!(
             message.contains("invalid phase execution definition JSON for workflow config phase-set"),
