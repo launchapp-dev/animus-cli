@@ -77,6 +77,28 @@ fn attach_remediation(payload: &mut Value) {
     }
 }
 
+/// Shape an in-process application error exactly like a failed CLI child
+/// command, without requiring a stderr JSON round-trip.
+pub(super) fn build_inproc_tool_error_payload(tool_name: &str, err: &anyhow::Error) -> Value {
+    let kind = crate::classify_cli_error_kind(err);
+    let exit_code = kind.exit_code();
+    let mut error = json!({
+        "code": kind.code(),
+        "message": format!("{err:#}"),
+        "exit_code": exit_code,
+    });
+    if let Some(details) = crate::extract_cli_error_details(err) {
+        error["details"] = details;
+    }
+    let mut payload = json!({
+        "tool": tool_name,
+        "exit_code": exit_code,
+        "error": error,
+    });
+    attach_remediation(&mut payload);
+    payload
+}
+
 pub(super) fn build_tool_error_payload(tool_name: &str, result: &CliExecutionResult) -> Value {
     let mut payload = json!({ "tool": tool_name, "exit_code": result.exit_code });
     if let Some(error) = pick_envelope_error(result) {
@@ -257,6 +279,24 @@ mod tests {
         assert_eq!(
             payload.pointer("/remediation/help").and_then(Value::as_str),
             Some("subject update requires at least one of --status / --priority / --labels")
+        );
+    }
+
+    #[test]
+    fn build_inproc_tool_error_payload_preserves_typed_code_details_and_remediation() {
+        let err = crate::error_with_remediation(
+            crate::CliErrorKind::Unavailable,
+            "subject backend missing",
+            crate::missing_plugin_remediation("animus plugin install-defaults", "Install the backend, then retry."),
+        );
+
+        let payload = build_inproc_tool_error_payload("animus.subject.list", &err);
+        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("unavailable"));
+        assert_eq!(payload.pointer("/error/exit_code").and_then(Value::as_i64), Some(5));
+        assert_eq!(payload.pointer("/remediation/kind").and_then(Value::as_str), Some("missing_plugin"));
+        assert_eq!(
+            payload.pointer("/error/details/remediation/next_step").and_then(Value::as_str),
+            Some("Install the backend, then retry.")
         );
     }
 
