@@ -8,14 +8,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<WorkflowListInput>()
     )]
     async fn ao_workflow_list(&self, params: Parameters<WorkflowListInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        self.run_list_tool(
-            "animus.workflow.list",
-            build_workflow_list_args(&input),
-            input.project_root,
-            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
-        )
-        .await
+        self.workflow_list_inproc(params.0).await
     }
 
     #[tool(
@@ -40,9 +33,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<IdInput>()
     )]
     async fn ao_workflow_get(&self, params: Parameters<IdInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec!["workflow".to_string(), "get".to_string(), "--id".to_string(), input.id];
-        self.run_tool("animus.workflow.get", args, input.project_root).await
+        self.workflow_get_inproc(params.0).await
     }
 
     #[tool(
@@ -98,15 +89,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<IdListInput>()
     )]
     async fn ao_workflow_decisions(&self, params: Parameters<IdListInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec!["workflow".to_string(), "decisions".to_string(), "--id".to_string(), input.id];
-        self.run_list_tool(
-            "animus.workflow.decisions",
-            args,
-            input.project_root,
-            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
-        )
-        .await
+        self.workflow_decisions_inproc(params.0).await
     }
 
     #[tool(
@@ -115,16 +98,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<IdListInput>()
     )]
     async fn ao_workflow_checkpoints_list(&self, params: Parameters<IdListInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args =
-            vec!["workflow".to_string(), "checkpoints".to_string(), "list".to_string(), "--id".to_string(), input.id];
-        self.run_list_tool(
-            "animus.workflow.checkpoints.list",
-            args,
-            input.project_root,
-            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
-        )
-        .await
+        self.workflow_checkpoints_list_inproc(params.0).await
     }
 
     #[tool(

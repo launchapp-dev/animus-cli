@@ -785,41 +785,6 @@ fn build_guarded_list_result_supports_workflow_decisions() {
 }
 
 #[test]
-fn build_workflow_list_args_includes_filters_and_sort() {
-    let args = build_workflow_list_args(&WorkflowListInput {
-        status: Some("running".to_string()),
-        workflow_ref: Some("default".to_string()),
-        subject_id: Some("TASK-123".to_string()),
-        phase_id: Some("implementation".to_string()),
-        search: Some("retry".to_string()),
-        sort: Some("started_at".to_string()),
-        limit: Some(10),
-        offset: Some(2),
-        max_tokens: Some(4000),
-        project_root: None,
-    });
-    assert_eq!(
-        args,
-        vec![
-            "workflow".to_string(),
-            "list".to_string(),
-            "--status".to_string(),
-            "running".to_string(),
-            "--workflow-ref".to_string(),
-            "default".to_string(),
-            "--subject-id".to_string(),
-            "TASK-123".to_string(),
-            "--phase-id".to_string(),
-            "implementation".to_string(),
-            "--search".to_string(),
-            "retry".to_string(),
-            "--sort".to_string(),
-            "started_at".to_string(),
-        ]
-    );
-}
-
-#[test]
 fn build_guarded_list_result_rejects_non_array_payloads() {
     let err = build_guarded_list_result(
         "animus.workflow.list",
@@ -1513,35 +1478,6 @@ fn build_cli_error_payload_preserves_json_like_error_text() {
 // control server tests; MCP→CLI→ControlClient is verified by
 // composition.
 // =====================================================================
-
-#[test]
-fn mcp_workflow_list_routes_via_control_when_socket_present() {
-    // The MCP workflow.list tool builds args that resolve to
-    // `animus workflow list ...`. The CLI handler for workflow list
-    // (see ops_workflow/mod.rs) calls
-    // `try_workflow_list_via_control` first, falling back to local
-    // when the socket is missing — so this arg shape is what gets
-    // routed through the wire when the daemon is up.
-    let input = WorkflowListInput {
-        status: Some("running".to_string()),
-        workflow_ref: None,
-        subject_id: Some("TASK-1".to_string()),
-        phase_id: None,
-        search: None,
-        sort: None,
-        limit: None,
-        offset: None,
-        max_tokens: None,
-        project_root: None,
-    };
-    let args = build_workflow_list_args(&input);
-    assert_eq!(args[0], "workflow");
-    assert_eq!(args[1], "list");
-    assert!(args.contains(&"--status".to_string()));
-    assert!(args.contains(&"running".to_string()));
-    assert!(args.contains(&"--subject-id".to_string()));
-    assert!(args.contains(&"TASK-1".to_string()));
-}
 
 #[test]
 fn mcp_queue_list_falls_back_to_local_when_socket_missing() {

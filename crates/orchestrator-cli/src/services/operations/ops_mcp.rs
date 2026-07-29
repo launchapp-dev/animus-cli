@@ -105,6 +105,8 @@ mod tool_discovery_tools;
 mod workflow_command_args;
 #[path = "ops_mcp/workflow_definition_tools.rs"]
 mod workflow_definition_tools;
+#[path = "ops_mcp/workflow_inproc.rs"]
+mod workflow_inproc;
 #[path = "ops_mcp/workflow_inputs.rs"]
 mod workflow_inputs;
 #[path = "ops_mcp/workflow_runtime_tools.rs"]
@@ -137,9 +139,7 @@ use output_inputs::*;
 use queue_inputs::*;
 use subject_command_args::{validate_subject_batch_create_input, validate_subject_batch_update_input};
 use subject_inputs::*;
-use workflow_command_args::{
-    build_bulk_workflow_run_item_args, build_workflow_list_args, validate_workflow_run_multiple_input,
-};
+use workflow_command_args::{build_bulk_workflow_run_item_args, validate_workflow_run_multiple_input};
 use workflow_inputs::*;
 
 const DEFAULT_DAEMON_EVENTS_LIMIT: usize = 100;
@@ -325,6 +325,8 @@ const ACTOR_BOUND_MCP_TOOLS: &[&str] = &[
     "animus.workflow.get",
     "animus.workflow.run-multiple",
     "animus.workflow.execute",
+    "animus.workflow.decisions",
+    "animus.workflow.checkpoints.list",
     "animus.workflow.config.get",
     "animus.workflow.config.validate",
     "animus.output.run",
