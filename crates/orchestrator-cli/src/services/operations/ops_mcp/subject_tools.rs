@@ -8,10 +8,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<SubjectListInput>()
     )]
     async fn ao_subject_list(&self, params: Parameters<SubjectListInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_subject_list_args(&input);
-        self.run_tool("animus.subject.list", args, project_root).await
+        self.subject_list_inproc(params.0).await
     }
 
     #[tool(
@@ -20,10 +17,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<SubjectGetInput>()
     )]
     async fn ao_subject_get(&self, params: Parameters<SubjectGetInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_subject_get_args(&input);
-        self.run_tool("animus.subject.get", args, project_root).await
+        self.subject_get_inproc(params.0).await
     }
 
     #[tool(
@@ -32,10 +26,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<SubjectCreateInput>()
     )]
     async fn ao_subject_create(&self, params: Parameters<SubjectCreateInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_subject_create_args(&input);
-        self.run_tool("animus.subject.create", args, project_root).await
+        self.subject_create_inproc(params.0).await
     }
 
     #[tool(
@@ -44,10 +35,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<SubjectUpdateInput>()
     )]
     async fn ao_subject_update(&self, params: Parameters<SubjectUpdateInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_subject_update_args(&input);
-        self.run_tool("animus.subject.update", args, project_root).await
+        self.subject_update_inproc(params.0).await
     }
 
     #[tool(
@@ -67,16 +55,7 @@ impl AoMcpServer {
                 "error": msg,
             })));
         }
-        let items: Vec<BatchItemExec> = input
-            .items
-            .iter()
-            .map(|item| {
-                let args = build_subject_batch_create_item_args(&input.kind, item);
-                let command = args.join(" ");
-                BatchItemExec { target_id: item.title.clone(), command, args }
-            })
-            .collect();
-        self.run_batch_tool("animus.subject.batch-create", items, &input.on_error, input.project_root).await
+        self.subject_batch_create_inproc(input).await
     }
 
     #[tool(
@@ -96,16 +75,7 @@ impl AoMcpServer {
                 "error": msg,
             })));
         }
-        let items: Vec<BatchItemExec> = input
-            .items
-            .iter()
-            .map(|item| {
-                let args = build_subject_batch_update_item_args(&input.kind, item);
-                let command = args.join(" ");
-                BatchItemExec { target_id: item.id.clone(), command, args }
-            })
-            .collect();
-        self.run_batch_tool("animus.subject.batch-update", items, &input.on_error, input.project_root).await
+        self.subject_batch_update_inproc(input).await
     }
 
     #[tool(
@@ -114,10 +84,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<SubjectNextInput>()
     )]
     async fn ao_subject_next(&self, params: Parameters<SubjectNextInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_subject_next_args(&input);
-        self.run_tool("animus.subject.next", args, project_root).await
+        self.subject_next_inproc(params.0).await
     }
 
     #[tool(
@@ -126,9 +93,6 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<SubjectStatusInput>()
     )]
     async fn ao_subject_status(&self, params: Parameters<SubjectStatusInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_subject_status_args(&input);
-        self.run_tool("animus.subject.status", args, project_root).await
+        self.subject_status_inproc(params.0).await
     }
 }

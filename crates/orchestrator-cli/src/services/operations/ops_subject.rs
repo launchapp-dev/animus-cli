@@ -37,6 +37,13 @@ fn parse_data_object(raw: &str) -> Result<serde_json::Map<String, Value>> {
     }
 }
 
+fn require_data_object(value: Value, label: &str) -> Result<serde_json::Map<String, Value>> {
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(invalid_input_error(format!("{label} must be a JSON object"))),
+    }
+}
+
 /// Validate an already-parsed batch item `data` value is a JSON object and
 /// return it as a map. Batch items carry `data` as a `Value` decoded from the
 /// items file (not a string flag), so this validates the shape without
@@ -48,13 +55,68 @@ fn batch_data_object(value: &Value, label: &str) -> Result<serde_json::Map<Strin
     }
 }
 
-#[derive(Debug, Serialize)]
-struct SubjectCallResponse {
-    kind: String,
-    verb: &'static str,
-    method: String,
-    plugin_count: usize,
-    result: Value,
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SubjectCallResponse {
+    pub(crate) kind: String,
+    pub(crate) verb: &'static str,
+    pub(crate) method: String,
+    pub(crate) plugin_count: usize,
+    pub(crate) result: Value,
+}
+
+/// Typed application requests shared by the CLI and its MCP transport.
+///
+/// Keeping these below clap/rmcp means neither transport has to serialize a
+/// structured subject operation into argv and launch another copy of Animus.
+/// `Value` is retained only at the plugin protocol's declared JSON boundary.
+#[derive(Debug, Clone)]
+pub(crate) struct SubjectListRequest {
+    pub(crate) kind: String,
+    pub(crate) status: Option<String>,
+    pub(crate) limit: Option<u32>,
+    pub(crate) cursor: Option<String>,
+    pub(crate) query: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubjectGetRequest {
+    pub(crate) kind: String,
+    pub(crate) id: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubjectCreateRequest {
+    pub(crate) kind: String,
+    pub(crate) title: String,
+    pub(crate) status: Option<String>,
+    pub(crate) priority: Option<String>,
+    pub(crate) labels: Vec<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) data: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubjectUpdateRequest {
+    pub(crate) kind: String,
+    pub(crate) id: String,
+    pub(crate) title: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) priority: Option<String>,
+    pub(crate) labels: Vec<String>,
+    pub(crate) body: Option<String>,
+    pub(crate) data: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubjectNextRequest {
+    pub(crate) kind: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SubjectStatusRequest {
+    pub(crate) kind: String,
+    pub(crate) id: String,
+    pub(crate) status: String,
 }
 
 pub(crate) async fn handle_subject(command: SubjectCommand, project_root: &str, json: bool) -> Result<()> {
@@ -79,17 +141,36 @@ const DEFAULT_SUBJECT_LIST_LIMIT: u32 = 50;
 async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bool) -> Result<()> {
     let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    let query = args.query.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let response = subject_list_application(
+        SubjectListRequest { kind, status: args.status, limit: args.limit, cursor: args.cursor, query: args.query },
+        project_root,
+        actor.as_ref(),
+    )
+    .await?;
+    if json {
+        return print_value(response, true);
+    }
+    render_subject_human("list", &response.kind, &response.result);
+    Ok(())
+}
+
+pub(crate) async fn subject_list_application(
+    request: SubjectListRequest,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(&request.kind)?.to_string();
+    let query = request.query.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let mut filter = serde_json::Map::new();
     filter.insert("kind".to_string(), json!([kind]));
-    if let Some(status) = args.status.as_deref() {
+    if let Some(status) = request.status.as_deref() {
         filter.insert("status".to_string(), json!([status]));
     }
     // Default to a bounded page so MCP/agent callers (and a bare `subject list`)
     // don't pull the entire set; `--limit 0` opts out and returns ALL. Backends
     // that honor `limit` also return `total` + `next_cursor` for paging; backends
     // that ignore it simply return everything (no behavior change for them).
-    let limit = args.limit.unwrap_or(DEFAULT_SUBJECT_LIST_LIMIT);
+    let limit = request.limit.unwrap_or(DEFAULT_SUBJECT_LIST_LIMIT);
     // A --query lookup must see the WHOLE set (the backend has no title filter,
     // and the daemon drops unknown filter fields), so fetch unbounded and apply
     // both the title filter and the page limit client-side below.
@@ -97,14 +178,14 @@ async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bo
     if fetch_limit > 0 {
         filter.insert("limit".to_string(), json!(fetch_limit));
     }
-    if let Some(cursor) = args.cursor.as_deref() {
+    if let Some(cursor) = request.cursor.as_deref() {
         filter.insert("cursor".to_string(), json!(cursor));
     }
     let params = Some(Value::Object(filter));
     if let Some(q) = query {
-        return dispatch_list_filtered(&kind, params, &q, limit, project_root, json, actor.as_ref()).await;
+        return dispatch_list_filtered(&kind, params, &q, limit, project_root, actor).await;
     }
-    dispatch(&kind, "list", params, project_root, json, actor.as_ref()).await
+    subject_call_application(&kind, "list", params, project_root, actor).await
 }
 
 /// `subject list --query`: fetch the full set, filter by a case-insensitive
@@ -119,9 +200,8 @@ async fn dispatch_list_filtered(
     query: &str,
     limit: u32,
     project_root: &str,
-    json: bool,
     actor: Option<&animus_actor::Actor>,
-) -> Result<()> {
+) -> Result<SubjectCallResponse> {
     let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
     let method = format!("{kind}/list");
     let raw = route_or_not_found_for_actor(&resolution.selected, &method, params, actor).await?;
@@ -136,90 +216,142 @@ async fn dispatch_list_filtered(
         matches.truncate(limit as usize);
     }
     let result = json!({ "subjects": matches, "next_cursor": Value::Null, "total": total });
-    if json {
-        return print_value(
-            SubjectCallResponse {
-                kind: kind.to_string(),
-                verb: "list",
-                method,
-                plugin_count: resolution.selected.plugin_count(),
-                result,
-            },
-            true,
-        );
-    }
-    render_subject_human("list", kind, &result);
-    Ok(())
+    Ok(SubjectCallResponse {
+        kind: kind.to_string(),
+        verb: "list",
+        method,
+        plugin_count: resolution.selected.plugin_count(),
+        result,
+    })
 }
 
 async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool) -> Result<()> {
     let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
-    if args.id.trim().is_empty() {
-        return Err(invalid_input_error("--id must not be empty"));
-    }
-    let id = crate::qualify_subject_id(&args.id, &kind);
-    let params = Some(json!({ "id": id }));
-    dispatch(&kind, "get", params, project_root, json, actor.as_ref()).await
+    let response =
+        subject_get_application(SubjectGetRequest { kind, id: args.id }, project_root, actor.as_ref()).await?;
+    render_subject_response(response, json)
 }
 
 async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json: bool) -> Result<()> {
     let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    let title = args.title.trim();
+    let data = args.data.as_deref().map(parse_data_object).transpose()?.map(Value::Object);
+    let response = subject_create_application(
+        SubjectCreateRequest {
+            kind,
+            title: args.title,
+            status: args.status,
+            priority: args.priority,
+            labels: args.labels,
+            body: args.body,
+            data,
+        },
+        project_root,
+        actor.as_ref(),
+    )
+    .await?;
+    render_subject_response(response, json)
+}
+
+pub(crate) async fn subject_get_application(
+    request: SubjectGetRequest,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(&request.kind)?.to_string();
+    if request.id.trim().is_empty() {
+        return Err(invalid_input_error("--id must not be empty"));
+    }
+    let id = crate::qualify_subject_id(&request.id, &kind);
+    subject_call_application(&kind, "get", Some(json!({ "id": id })), project_root, actor).await
+}
+
+pub(crate) async fn subject_create_application(
+    request: SubjectCreateRequest,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(&request.kind)?.to_string();
+    let title = request.title.trim();
     if title.is_empty() {
         return Err(invalid_input_error("--title must not be empty"));
     }
     let mut payload = serde_json::Map::new();
     payload.insert("title".to_string(), json!(title));
-    if let Some(status) = args.status.as_deref() {
+    if let Some(status) = request.status.as_deref() {
         payload.insert("status".to_string(), json!(status));
     }
-    if let Some(priority) = args.priority.as_deref() {
+    if let Some(priority) = request.priority.as_deref() {
         payload.insert("priority".to_string(), json!(priority));
     }
-    if !args.labels.is_empty() {
-        payload.insert("labels".to_string(), json!(args.labels));
+    if !request.labels.is_empty() {
+        payload.insert("labels".to_string(), json!(request.labels));
     }
-    if let Some(body) = args.body.as_deref() {
+    if let Some(body) = request.body.as_deref() {
         payload.insert("body".to_string(), json!(body));
     }
-    if let Some(data) = args.data.as_deref() {
-        payload.insert("data".to_string(), Value::Object(parse_data_object(data)?));
+    if let Some(data) = request.data {
+        payload.insert("data".to_string(), Value::Object(require_data_object(data, "data")?));
     }
     let params = Some(Value::Object(payload));
-    dispatch(&kind, "create", params, project_root, json, actor.as_ref()).await
+    subject_call_application(&kind, "create", params, project_root, actor).await
 }
 
 async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json: bool) -> Result<()> {
     let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
-    if args.id.trim().is_empty() {
+    let data = args.data.as_deref().map(parse_data_object).transpose()?.map(Value::Object);
+    let response = subject_update_application(
+        SubjectUpdateRequest {
+            kind,
+            id: args.id,
+            title: args.title,
+            status: args.status,
+            priority: args.priority,
+            labels: args.labels,
+            body: args.body,
+            data,
+        },
+        project_root,
+        actor.as_ref(),
+    )
+    .await?;
+    render_subject_response(response, json)
+}
+
+pub(crate) async fn subject_update_application(
+    request: SubjectUpdateRequest,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(&request.kind)?.to_string();
+    if request.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
-    let id = crate::qualify_subject_id(&args.id, &kind);
+    let id = crate::qualify_subject_id(&request.id, &kind);
     let mut patch = serde_json::Map::new();
-    if let Some(title) = args.title.as_deref() {
+    if let Some(title) = request.title.as_deref() {
         let title = title.trim();
         if title.is_empty() {
             return Err(invalid_input_error("--title must not be empty"));
         }
         patch.insert("title".to_string(), json!(title));
     }
-    if let Some(status) = args.status.as_deref() {
+    if let Some(status) = request.status.as_deref() {
         patch.insert("status".to_string(), json!(status));
     }
-    if let Some(priority) = args.priority.as_deref() {
+    if let Some(priority) = request.priority.as_deref() {
         patch.insert("priority".to_string(), json!(priority));
     }
-    if !args.labels.is_empty() {
-        patch.insert("labels".to_string(), json!(args.labels));
+    if !request.labels.is_empty() {
+        patch.insert("labels".to_string(), json!(request.labels));
     }
-    if let Some(body) = args.body.as_deref() {
+    if let Some(body) = request.body.as_deref() {
         patch.insert("body".to_string(), json!(body));
     }
-    if let Some(data) = args.data.as_deref() {
-        patch.insert("custom".to_string(), Value::Object(parse_data_object(data)?));
+    if let Some(data) = request.data {
+        patch.insert("custom".to_string(), Value::Object(require_data_object(data, "data")?));
     }
     if patch.is_empty() {
         return Err(invalid_input_error(
@@ -227,7 +359,7 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
         ));
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));
-    dispatch(&kind, "update", params, project_root, json, actor.as_ref()).await
+    subject_call_application(&kind, "update", params, project_root, actor).await
 }
 
 /// One item of a `subject batch-create` request. Mirrors the MCP
@@ -518,7 +650,8 @@ async fn handle_subject_batch_update(args: SubjectBatchUpdateArgs, project_root:
 
 async fn handle_subject_next(args: SubjectNextArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    dispatch(&kind, "next", None, project_root, json, None).await
+    let response = subject_next_application(SubjectNextRequest { kind }, project_root, None).await?;
+    render_subject_response(response, json)
 }
 
 async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json: bool) -> Result<()> {
@@ -528,7 +661,6 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
         return Err(invalid_input_error("--id must not be empty"));
     }
     let id = crate::qualify_subject_id(&args.id, &kind);
-    let id = id.as_str();
     let status = args.status.trim();
     if status.is_empty() {
         return Err(invalid_input_error("--status must not be empty"));
@@ -544,40 +676,51 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
         route_or_not_found_for_actor(
             &resolution.selected,
             &format!("{kind}/get"),
-            Some(json!({ "id": id })),
+            Some(json!({ "id": id.as_str() })),
             actor.as_ref(),
         )
         .await
         .ok()
     };
-    let method = format!("{kind}/status");
-    let result = route_or_not_found_for_actor(
-        &resolution.selected,
-        &method,
-        Some(json!({ "id": id, "status": status })),
+    drop(resolution);
+    let response = subject_status_application(
+        SubjectStatusRequest { kind: kind.clone(), id: id.to_string(), status: status.to_string() },
+        project_root,
         actor.as_ref(),
     )
     .await?;
-    orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
     if let Some(before) = before.as_ref() {
-        if let Some(line) = describe_cleared_block_flags(before, &result) {
+        if let Some(line) = describe_cleared_block_flags(before, &response.result) {
             eprintln!("{line}");
         }
     }
-    if json {
-        return print_value(
-            SubjectCallResponse {
-                kind: kind.to_string(),
-                verb: "status",
-                method,
-                plugin_count: resolution.selected.plugin_count(),
-                result,
-            },
-            true,
-        );
+    render_subject_response(response, json)
+}
+
+pub(crate) async fn subject_next_application(
+    request: SubjectNextRequest,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(&request.kind)?.to_string();
+    subject_call_application(&kind, "next", None, project_root, actor).await
+}
+
+pub(crate) async fn subject_status_application(
+    request: SubjectStatusRequest,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(&request.kind)?.to_string();
+    if request.id.trim().is_empty() {
+        return Err(invalid_input_error("--id must not be empty"));
     }
-    render_subject_human("status", &kind, &result);
-    Ok(())
+    let id = crate::qualify_subject_id(&request.id, &kind);
+    let status = request.status.trim();
+    if status.is_empty() {
+        return Err(invalid_input_error("--status must not be empty"));
+    }
+    subject_call_application(&kind, "status", Some(json!({ "id": id, "status": status })), project_root, actor).await
 }
 
 /// Compare a subject's pre/post-transition JSON and describe which
@@ -755,31 +898,38 @@ async fn dispatch(
     json: bool,
     actor: Option<&animus_actor::Actor>,
 ) -> Result<()> {
+    let response = subject_call_application(kind, verb, params, project_root, actor).await?;
+    render_subject_response(response, json)
+}
+
+/// Execute one typed subject operation in-process. This is the application
+/// boundary shared by the CLI renderer and MCP transport.
+pub(crate) async fn subject_call_application(
+    kind: &str,
+    verb: &'static str,
+    params: Option<Value>,
+    project_root: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<SubjectCallResponse> {
+    let kind = validate_kind(kind)?.to_string();
     let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
     let method = format!("{kind}/{verb}");
     let result = route_or_not_found_for_actor(&resolution.selected, &method, params, actor).await?;
     // Write verbs may have made new work dispatchable (e.g. a task flipped
     // to Ready) — wake a running daemon so it picks the change up now
     // instead of on the next heartbeat. Fire-and-forget: silently no-ops
-    // when the daemon is down or predates `daemon/nudge`. MCP subject
-    // tools execute these CLI handlers in a subprocess, so this single
-    // choke point covers both surfaces.
+    // when the daemon is down or predates `daemon/nudge`.
     if matches!(verb, "create" | "update" | "status") {
         orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
     }
+    Ok(SubjectCallResponse { kind, verb, method, plugin_count: resolution.selected.plugin_count(), result })
+}
+
+fn render_subject_response(response: SubjectCallResponse, json: bool) -> Result<()> {
     if json {
-        return print_value(
-            SubjectCallResponse {
-                kind: kind.to_string(),
-                verb,
-                method,
-                plugin_count: resolution.selected.plugin_count(),
-                result,
-            },
-            true,
-        );
+        return print_value(response, true);
     }
-    render_subject_human(verb, kind, &result);
+    render_subject_human(response.verb, &response.kind, &response.result);
     Ok(())
 }
 
