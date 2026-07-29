@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::{persist_agent_event, persist_json_output, print_agent_event, print_value, run_dir, AgentRunArgs};
 
 use super::provider_client::{session_request_from_args, start_session, to_agent_event};
-use animus_runtime_shared::phase_session::list_running_checkpoints;
+use animus_runtime_shared::phase_session::find_active_checkpoint_by_run_id;
 
 pub(super) async fn handle_agent_run(
     args: AgentRunArgs,
@@ -91,10 +91,7 @@ fn environment_checkpoint_target(
     let Some(scoped_root) = protocol::repository_scope::scoped_state_root(project_root) else {
         return Ok(None);
     };
-    let checkpoint = list_running_checkpoints(&scoped_root)?
-        .into_iter()
-        .map(|(_, checkpoint)| checkpoint)
-        .find(|checkpoint| checkpoint.run_id == run_id.0);
+    let checkpoint = find_active_checkpoint_by_run_id(&scoped_root, &run_id.0)?;
     let Some(checkpoint) = checkpoint else {
         // Ad-hoc agent runs have no phase checkpoint. Their normal pipeline
         // still tears down; workflow-linked runs must always have been

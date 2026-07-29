@@ -372,6 +372,55 @@ pub fn list_running_checkpoints(scoped_root: &Path) -> io::Result<Vec<(PathBuf, 
     Ok(out)
 }
 
+/// Find the non-terminal phase checkpoint which owns an agent run.
+///
+/// Environment preparation can race the runner's `Pending` -> `Running`
+/// checkpoint transition. Binding persistence must therefore consider both
+/// states: restricting this lookup to [`list_running_checkpoints`] creates a
+/// prepare-to-persistence hole where a workflow-linked child is mistaken for
+/// an ad-hoc run and its prepared node cannot be recovered after a restart.
+pub fn find_active_checkpoint_by_run_id(
+    scoped_root: &Path,
+    run_id: &str,
+) -> io::Result<Option<SessionCheckpoint>> {
+    let runs_dir = scoped_root.join("runs");
+    let run_entries = match fs::read_dir(runs_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    for run_entry in run_entries {
+        let phases_dir = run_entry?.path().join("phases");
+        let phase_entries = match fs::read_dir(phases_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        for phase_entry in phase_entries {
+            let path = phase_entry?.path();
+            if !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".session.json"))
+            {
+                continue;
+            }
+            let Some(checkpoint) = read_path(&path)? else {
+                continue;
+            };
+            if checkpoint.run_id == run_id
+                && matches!(
+                    checkpoint.status,
+                    SessionCheckpointStatus::Pending | SessionCheckpointStatus::Running
+                )
+            {
+                return Ok(Some(checkpoint));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Workflow ids that have at least one session checkpoint in `Blocked` state.
 ///
 /// A `Blocked` checkpoint marks a mid-phase resume that was intentionally held
@@ -611,6 +660,34 @@ mod tests {
             "opaque handle metadata survives the round-trip"
         );
         assert!(!env.torn_down);
+    }
+
+    #[test]
+    fn active_run_lookup_covers_pending_and_running_but_not_terminal_checkpoints() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-lookup", "phase-a", "claude", "run-pending", None)
+            .expect("pending");
+        write_session_pending(scoped_root, "wf-lookup", "phase-b", "claude", "run-running", None)
+            .expect("second pending");
+        update_session_running(scoped_root, "wf-lookup", "phase-b").expect("running");
+
+        let pending = find_active_checkpoint_by_run_id(scoped_root, "run-pending")
+            .expect("lookup pending")
+            .expect("pending checkpoint");
+        assert_eq!(pending.phase_id, "phase-a");
+        let running = find_active_checkpoint_by_run_id(scoped_root, "run-running")
+            .expect("lookup running")
+            .expect("running checkpoint");
+        assert_eq!(running.phase_id, "phase-b");
+
+        update_session_failed(scoped_root, "wf-lookup", "phase-a", "finished").expect("terminalize");
+        assert!(
+            find_active_checkpoint_by_run_id(scoped_root, "run-pending")
+                .expect("lookup terminal")
+                .is_none(),
+            "a stale terminal checkpoint must never claim a reused run id"
+        );
     }
 
     // TASK-811/933: mark_environment_torn_down flips the flag and is
