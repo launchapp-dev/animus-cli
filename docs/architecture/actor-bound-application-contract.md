@@ -63,6 +63,8 @@ The actor-bound tool router currently exposes exactly:
 - `animus.subject.batch-update`
 - `animus.subject.next`
 - `animus.subject.status`
+- `animus.agent.list`
+- `animus.agent.get`
 - `animus.agent.ask`
 - `animus.agent.request_approval`
 - `animus.interactions.list`
@@ -73,6 +75,9 @@ The actor-bound tool router currently exposes exactly:
 MCP resources are unavailable on an actor-bound server because the resource
 protocol has no actor carrier. Each MCP invocation emits an
 `mcp_tool_invocation` audit record attributed to the pinned user and tenant.
+Agent roster list/get derive their effective profiles from the pinned actor's
+config-source partition; there is no fallback to the global roster when an
+actor-specific base exists.
 
 ## Direct application reads
 
@@ -187,6 +192,11 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
 - Queue list/control/mutation: queue requests need actor filters and
   authorization context, and the queue/subject dispatch bridge must preserve
   the current `Actor`.
+- Agent memory/message operations: their project stores are currently keyed by
+  agent/project rather than actor, so they remain management-only even though
+  their MCP implementations are typed in-process services. Agent
+  run/control/status also remain outside the actor-bound surface until the
+  execution protocol enforces the pinned principal end to end.
 - MCP resources: list/read resource requests need the same typed actor/request
   context and backend enforcement.
 

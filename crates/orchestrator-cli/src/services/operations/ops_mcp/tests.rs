@@ -185,6 +185,10 @@ fn actor_bound_server_exposes_only_actor_enforced_tools() {
     assert!(names.contains("animus.workflow.resume"));
     assert!(names.contains("animus.workflow.phase.approve"));
     assert!(names.contains("animus.workflow.phase.reject"));
+    assert!(names.contains("animus.agent.list"));
+    assert!(names.contains("animus.agent.get"));
+    assert!(!names.contains("animus.agent.memory.get"));
+    assert!(!names.contains("animus.agent.message.send"));
     assert!(!names.contains("animus.queue.list"));
     assert!(!names.contains("animus.workflow.config.set"));
     assert!(!names.contains("animus.memory.get"));

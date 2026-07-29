@@ -1,7 +1,9 @@
 # Working with Animus via MCP Tools
 
 This guide explains the current MCP surface exposed by `animus mcp serve`.
-Each built-in tool maps to an `animus` CLI command and accepts JSON input.
+Each built-in tool accepts JSON input. Typed application-service tools execute
+in process; remaining compatibility tools may still delegate to an `animus`
+CLI command.
 
 For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.md).
 
@@ -47,14 +49,16 @@ startup rather than falling back to global scope. The actor-bound router exposes
 only paths that enforce the pin: workflow run/list/get/control/execute,
 decisions/checkpoints/manual-phase and config reads, workflow output reads,
 subject list/get/create/update/batch-create/batch-update/next/status,
-interaction creation/management, and tool discovery. A child command cannot
-override the server actor. Workflow controls authorize the persisted owner
-before mutation and lifecycle continuations retain that owner when launching a
-runner.
+interaction creation/management, actor roster list/get, and tool discovery. A
+child command cannot override the server actor. Agent roster reads load the
+pinned user's config-source partition. Workflow controls authorize the
+persisted owner before mutation and lifecycle continuations retain that owner
+when launching a runner.
 
-Queue operations, config writes, and other global tools are absent from an
-actor-bound server. Their pinned protocols cannot yet enforce the same
-authenticated actor, so exposing them would create an identity downgrade.
+Queue operations, config writes, agent memory/messaging/execution, and other
+global tools are absent from an actor-bound server. Their pinned protocols or
+stores cannot yet enforce the same authenticated actor, so exposing them would
+create an identity downgrade.
 Actor-bound subject calls use the v2 subject protocol and never fall back to
 legacy v1 methods.
 See [Actor-bound application contract](../architecture/actor-bound-application-contract.md).

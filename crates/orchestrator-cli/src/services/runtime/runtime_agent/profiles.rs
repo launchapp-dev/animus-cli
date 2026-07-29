@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use orchestrator_core::agent_runtime_config::AgentProfile;
 use orchestrator_daemon_runtime::DaemonEventLog;
 use serde_json::{json, Value};
@@ -11,14 +11,19 @@ use crate::{
 };
 
 fn ensure_agent_exists(project_root: &str, agent_id: &str) -> Result<()> {
-    load_agent_profile(project_root, agent_id).map(|_| ())
+    load_agent_profile(project_root, agent_id, None).map(|_| ())
 }
 
-fn load_agent_profile(project_root: &str, agent_id: &str) -> Result<AgentProfile> {
-    let config =
-        orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))?
-            .config;
-    config.agent_profile(agent_id).cloned().ok_or_else(|| anyhow!("unknown agent profile '{}'", agent_id))
+fn load_agent_profile(project_root: &str, agent_id: &str, actor: Option<&animus_actor::Actor>) -> Result<AgentProfile> {
+    let config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata_for_actor(
+        Path::new(project_root),
+        actor,
+    )?
+    .config;
+    config
+        .agent_profile(agent_id)
+        .cloned()
+        .ok_or_else(|| crate::not_found_error(format!("unknown agent profile '{agent_id}'")))
 }
 
 // Best-effort observability tee into the daemon event log, mirroring
@@ -37,9 +42,11 @@ pub(crate) fn emit_agent_coordination_event(event_type: &str, project_root: &str
     let _ = DaemonEventLog::append(&event);
 }
 
-pub(super) fn handle_agent_list(project_root: &str, json_output: bool) -> Result<()> {
-    let loaded =
-        orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))?;
+pub(crate) fn agent_list_application(project_root: &str, actor: Option<&animus_actor::Actor>) -> Result<Value> {
+    let loaded = orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata_for_actor(
+        Path::new(project_root),
+        actor,
+    )?;
     let agents = loaded
         .config
         .agents
@@ -59,161 +66,139 @@ pub(super) fn handle_agent_list(project_root: &str, json_output: bool) -> Result
         })
         .collect::<Vec<_>>();
 
-    if !json_output {
-        if agents.is_empty() {
-            println!("No agent profiles configured.");
-            return Ok(());
-        }
-        let rows: Vec<Vec<String>> = loaded
-            .config
-            .agents
-            .iter()
-            .map(|(id, profile)| {
-                vec![
-                    id.clone(),
-                    profile.name.clone().unwrap_or_else(|| "--".to_string()),
-                    profile.model.clone().unwrap_or_else(|| "--".to_string()),
-                    profile.tool.clone().unwrap_or_else(|| "--".to_string()),
-                    profile.role.clone().unwrap_or_else(|| "--".to_string()),
-                ]
-            })
-            .collect();
-        render_table(&["ID", "NAME", "MODEL", "TOOL", "ROLE"], &rows);
-        return Ok(());
-    }
-
-    print_value(
-        json!({
-            "source": loaded.metadata.source,
-            "path": loaded.path.display().to_string(),
-            "agents": agents,
-        }),
-        json_output,
-    )
+    Ok(json!({
+        "source": loaded.metadata.source,
+        "path": loaded.path.display().to_string(),
+        "agents": agents,
+    }))
 }
 
-pub(super) fn handle_agent_get(args: AgentGetArgs, project_root: &str, json_output: bool) -> Result<()> {
-    let loaded =
-        orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))?;
-    let Some(profile) = loaded.config.agent_profile(&args.id) else {
-        return Err(anyhow!("unknown agent profile '{}'", args.id));
-    };
-    print_value(json!({ "id": args.id, "profile": profile }), json_output)
-}
-
-pub(super) fn handle_agent_memory_get(args: AgentMemoryGetArgs, project_root: &str, json_output: bool) -> Result<()> {
-    ensure_agent_exists(project_root, &args.agent)?;
-    let memory = animus_runtime_shared::load_agent_memory(project_root, &args.agent)?;
-    print_value(memory, json_output)
-}
-
-pub(super) fn handle_agent_memory_append(
-    args: AgentMemoryAppendArgs,
+pub(crate) fn agent_get_application(
     project_root: &str,
-    json_output: bool,
-) -> Result<()> {
-    let profile = load_agent_profile(project_root, &args.agent)?;
+    agent_id: &str,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<Value> {
+    let profile = load_agent_profile(project_root, agent_id, actor)?;
+    Ok(json!({ "id": agent_id, "profile": profile }))
+}
+
+pub(crate) fn agent_memory_get_application(project_root: &str, agent_id: &str) -> Result<Value> {
+    ensure_agent_exists(project_root, agent_id)?;
+    Ok(serde_json::to_value(animus_runtime_shared::load_agent_memory(project_root, agent_id)?)?)
+}
+
+pub(crate) fn agent_memory_append_application(
+    project_root: &str,
+    agent_id: &str,
+    text: &str,
+    source: Option<&str>,
+) -> Result<Value> {
+    let profile = load_agent_profile(project_root, agent_id, None)?;
     let memory = animus_runtime_shared::append_agent_memory_capped(
         project_root,
-        &args.agent,
-        &args.text,
-        args.source.as_deref(),
+        agent_id,
+        text,
+        source,
         profile.memory.max_entries,
     )?;
     emit_agent_coordination_event(
         "agent-memory-updated",
         project_root,
         json!({
-            "agent_id": args.agent,
+            "agent_id": agent_id,
             "operation": "append",
             "entry_count": memory.entries.len(),
         }),
     );
-    print_value(memory, json_output)
+    Ok(serde_json::to_value(memory)?)
 }
 
-pub(super) fn handle_agent_memory_clear(
-    args: AgentMemoryClearArgs,
-    project_root: &str,
-    json_output: bool,
-) -> Result<()> {
-    ensure_agent_exists(project_root, &args.agent)?;
-    let memory = animus_runtime_shared::clear_agent_memory(project_root, &args.agent)?;
+pub(crate) fn agent_memory_clear_application(project_root: &str, agent_id: &str) -> Result<Value> {
+    ensure_agent_exists(project_root, agent_id)?;
+    let memory = animus_runtime_shared::clear_agent_memory(project_root, agent_id)?;
     emit_agent_coordination_event(
         "agent-memory-updated",
         project_root,
         json!({
-            "agent_id": args.agent,
+            "agent_id": agent_id,
             "operation": "clear",
             "entry_count": memory.entries.len(),
         }),
     );
-    print_value(memory, json_output)
+    Ok(serde_json::to_value(memory)?)
 }
 
-pub(super) fn handle_agent_message_list(
-    args: AgentMessageListArgs,
+pub(crate) fn agent_message_list_application(
     project_root: &str,
-    json_output: bool,
-) -> Result<()> {
-    if let Some(agent) = args.agent.as_deref() {
-        ensure_agent_exists(project_root, agent)?;
+    channel: Option<&str>,
+    agent_id: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Value> {
+    if let Some(agent_id) = agent_id {
+        ensure_agent_exists(project_root, agent_id)?;
     }
-    let messages = animus_runtime_shared::list_agent_messages(
-        project_root,
-        args.channel.as_deref(),
-        args.agent.as_deref(),
-        args.limit,
-    )?;
-    print_value(json!({ "messages": messages }), json_output)
+    let messages = animus_runtime_shared::list_agent_messages(project_root, channel, agent_id, limit)?;
+    Ok(json!({ "messages": messages }))
 }
 
-pub(super) fn handle_agent_message_send(
-    args: AgentMessageSendArgs,
+pub(crate) fn agent_message_send_application(
     project_root: &str,
-    json_output: bool,
-) -> Result<()> {
+    channel_id: &str,
+    from_agent: &str,
+    to_agent: Option<&str>,
+    text: &str,
+    workflow_id: Option<&str>,
+    phase_id: Option<&str>,
+) -> Result<Value> {
     let runtime =
         orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))?
             .config;
     let workflow = orchestrator_core::load_workflow_config_or_default(Path::new(project_root)).config;
-    let Some(sender) = runtime.agent_profile(&args.from) else {
-        return Err(anyhow!("unknown sender agent profile '{}'", args.from));
+    let Some(sender) = runtime.agent_profile(from_agent) else {
+        return Err(crate::not_found_error(format!("unknown sender agent profile '{from_agent}'")));
     };
-    let Some(channel) = workflow.agent_channels.get(&args.channel) else {
-        return Err(anyhow!("unknown agent channel '{}'", args.channel));
+    let Some(channel) = workflow.agent_channels.get(channel_id) else {
+        return Err(crate::not_found_error(format!("unknown agent channel '{channel_id}'")));
     };
     if !sender.communication.enabled {
-        return Err(anyhow!("agent '{}' communication is not enabled", args.from));
+        return Err(crate::invalid_input_error(format!("agent '{from_agent}' communication is not enabled")));
     }
-    if !sender.communication.channels.iter().any(|channel| channel.eq_ignore_ascii_case(&args.channel)) {
-        return Err(anyhow!("agent '{}' is not configured for channel '{}'", args.from, args.channel));
+    if !sender.communication.channels.iter().any(|channel| channel.eq_ignore_ascii_case(channel_id)) {
+        return Err(crate::invalid_input_error(format!(
+            "agent '{from_agent}' is not configured for channel '{channel_id}'"
+        )));
     }
-    if !channel.participants.iter().any(|agent| agent.eq_ignore_ascii_case(&args.from)) {
-        return Err(anyhow!("agent '{}' is not a participant in channel '{}'", args.from, args.channel));
+    if !channel.participants.iter().any(|agent| agent.eq_ignore_ascii_case(from_agent)) {
+        return Err(crate::invalid_input_error(format!(
+            "agent '{from_agent}' is not a participant in channel '{channel_id}'"
+        )));
     }
-    if let Some(target) = args.to.as_deref() {
+    if let Some(target) = to_agent {
         if runtime.agent_profile(target).is_none() {
-            return Err(anyhow!("unknown recipient agent profile '{}'", target));
+            return Err(crate::not_found_error(format!("unknown recipient agent profile '{target}'")));
         }
         if !channel.participants.iter().any(|agent| agent.eq_ignore_ascii_case(target)) {
-            return Err(anyhow!("agent '{}' is not a participant in channel '{}'", target, args.channel));
+            return Err(crate::invalid_input_error(format!(
+                "agent '{target}' is not a participant in channel '{channel_id}'"
+            )));
         }
         if !sender.communication.can_message.is_empty()
             && !sender.communication.can_message.iter().any(|agent| agent.eq_ignore_ascii_case(target))
         {
-            return Err(anyhow!("agent '{}' is not allowed to message '{}'", args.from, target));
+            return Err(crate::invalid_input_error(format!(
+                "agent '{from_agent}' is not allowed to message '{target}'"
+            )));
         }
     }
 
     let message = animus_runtime_shared::send_agent_message(
         project_root,
-        &args.channel,
-        &args.from,
-        args.to.as_deref(),
-        &args.text,
-        args.workflow_id.as_deref(),
-        args.phase_id.as_deref(),
+        channel_id,
+        from_agent,
+        to_agent,
+        text,
+        workflow_id,
+        phase_id,
     )?;
     emit_agent_coordination_event(
         "agent-message-sent",
@@ -227,5 +212,90 @@ pub(super) fn handle_agent_message_send(
             "phase_id": message.phase_id,
         }),
     );
-    print_value(message, json_output)
+    Ok(serde_json::to_value(message)?)
+}
+
+pub(super) fn handle_agent_list(project_root: &str, json_output: bool) -> Result<()> {
+    let payload = agent_list_application(project_root, None)?;
+    let agents = payload.get("agents").and_then(Value::as_array).cloned().unwrap_or_default();
+
+    if !json_output {
+        if agents.is_empty() {
+            println!("No agent profiles configured.");
+            return Ok(());
+        }
+        let rows: Vec<Vec<String>> = agents
+            .iter()
+            .map(|agent| {
+                vec![
+                    agent.get("id").and_then(Value::as_str).unwrap_or("--").to_string(),
+                    agent.get("name").and_then(Value::as_str).unwrap_or("--").to_string(),
+                    agent.get("model").and_then(Value::as_str).unwrap_or("--").to_string(),
+                    agent.get("tool").and_then(Value::as_str).unwrap_or("--").to_string(),
+                    agent.get("role").and_then(Value::as_str).unwrap_or("--").to_string(),
+                ]
+            })
+            .collect();
+        render_table(&["ID", "NAME", "MODEL", "TOOL", "ROLE"], &rows);
+        return Ok(());
+    }
+
+    print_value(payload, json_output)
+}
+
+pub(super) fn handle_agent_get(args: AgentGetArgs, project_root: &str, json_output: bool) -> Result<()> {
+    print_value(agent_get_application(project_root, &args.id, None)?, json_output)
+}
+
+pub(super) fn handle_agent_memory_get(args: AgentMemoryGetArgs, project_root: &str, json_output: bool) -> Result<()> {
+    print_value(agent_memory_get_application(project_root, &args.agent)?, json_output)
+}
+
+pub(super) fn handle_agent_memory_append(
+    args: AgentMemoryAppendArgs,
+    project_root: &str,
+    json_output: bool,
+) -> Result<()> {
+    print_value(
+        agent_memory_append_application(project_root, &args.agent, &args.text, args.source.as_deref())?,
+        json_output,
+    )
+}
+
+pub(super) fn handle_agent_memory_clear(
+    args: AgentMemoryClearArgs,
+    project_root: &str,
+    json_output: bool,
+) -> Result<()> {
+    print_value(agent_memory_clear_application(project_root, &args.agent)?, json_output)
+}
+
+pub(super) fn handle_agent_message_list(
+    args: AgentMessageListArgs,
+    project_root: &str,
+    json_output: bool,
+) -> Result<()> {
+    print_value(
+        agent_message_list_application(project_root, args.channel.as_deref(), args.agent.as_deref(), args.limit)?,
+        json_output,
+    )
+}
+
+pub(super) fn handle_agent_message_send(
+    args: AgentMessageSendArgs,
+    project_root: &str,
+    json_output: bool,
+) -> Result<()> {
+    print_value(
+        agent_message_send_application(
+            project_root,
+            &args.channel,
+            &args.from,
+            args.to.as_deref(),
+            &args.text,
+            args.workflow_id.as_deref(),
+            args.phase_id.as_deref(),
+        )?,
+        json_output,
+    )
 }

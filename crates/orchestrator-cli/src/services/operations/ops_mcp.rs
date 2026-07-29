@@ -27,6 +27,8 @@ use std::time::UNIX_EPOCH;
 
 #[path = "ops_mcp/agent_command_args.rs"]
 mod agent_command_args;
+#[path = "ops_mcp/agent_inproc.rs"]
+mod agent_inproc;
 #[path = "ops_mcp/agent_inputs.rs"]
 mod agent_inputs;
 #[path = "ops_mcp/agent_tools.rs"]
@@ -344,6 +346,8 @@ const ACTOR_BOUND_MCP_TOOLS: &[&str] = &[
     "animus.subject.batch-update",
     "animus.subject.next",
     "animus.subject.status",
+    "animus.agent.list",
+    "animus.agent.get",
     "animus.agent.ask",
     "animus.agent.request_approval",
     "animus.interactions.list",

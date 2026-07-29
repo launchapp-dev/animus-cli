@@ -29,9 +29,11 @@ every route whose command/protocol cannot enforce it. The retained surface is
 workflow run/list/get/control/execute/decisions/checkpoints/manual-phase and
 config-read operations, workflow output reads, subject
 list/get/create/update/batch-create/batch-update/next/status, interaction
-creation/management, and tool discovery. Queue operations, config writes,
-resources, and other global routes are deliberately unavailable rather than
-silently downgraded. Actor-bound workflow controls conceal unowned ids before
+creation/management, actor roster list/get, and tool discovery. Queue
+operations, config writes, agent memory/messaging/execution, resources, and
+other global routes are deliberately unavailable rather than silently
+downgraded. Actor-bound agent roster reads derive profiles from the pinned
+user's config-source partition. Actor-bound workflow controls conceal unowned ids before
 performing confirmation or mutation, and actor-bound subject calls use the v2
 subject protocol without falling back to legacy v1 methods. See
 [Actor-bound application contract](../architecture/actor-bound-application-contract.md).
@@ -89,6 +91,13 @@ pre-v0.4 resource names can still enumerate and read the same data.
 | `animus.agent.message.list` | List project-scoped agent messages | `channel`, `agent`, `limit`, `project_root` |
 | `animus.agent.ask` | Ask a human one or more questions and wait for the answer. Two forms: (1) flat single question — `question` + optional `options[]`, returns `{ id, answer, answered_by }`; (2) structured `questions[]` (multi-question / multi-select / described options — gives codex/gemini/opencode parity with claude's native AskUserQuestion channel), each entry `{ question, header?, options:[{ label, description? }], multi_select? }`, returns `{ id, answers: { <question>: <label \| [labels] \| text> }, response?, answer }` where `answer` is a readable join for back-compat. Block mode parks until answered or timed out (structured timeout error tells the agent to proceed with its best judgment); suspend mode returns `{ status: "pending", interaction_id, instruction }` immediately and pauses the bound workflow | `agent_id`, `question`, `options[]`, `questions[]`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id`, `wait` (`block` \| `suspend`) |
 | `animus.agent.request_approval` | Request human approval for a sensitive action and wait for the decision; the agent profile's `approval_policy` can auto-allow/auto-deny without escalating (`default: allow` approves everything, `deny` rejects, `llm` auto-approves via a judge model that reads the tool call and returns allow/deny recorded with `source: "llm"`, falling back to manual escalation on any evaluator failure), and a block-mode timeout denies (fail closed). Doubles as the claude CLI's `--permission-prompt-tool`: invoked with `{ tool_name, input, tool_use_id }` it answers with the SDK permission payload in the result text — `{ behavior: "allow", updatedInput: <original or modified input>, updatedPermissions? }` or `{ behavior: "deny", message }` — with the legacy `{ tool, result: { decision, source, … } }` envelope alongside. `tool_name: "AskUserQuestion"` becomes a structured Question record (bypasses the approval policy) whose allow answer carries `updatedInput { questions, answers, response? }`. Suspend mode pauses the bound workflow: voluntary calls get the pending payload; native prompt-tool calls get `behavior: "deny"` with the end-your-turn instruction (the session resumes with the answer as feedback) | `agent_id`, `action` (derived from `tool_name` when omitted), `tool_name`, `input` \| `arguments`, `tool_use_id`, `suggestions`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id`, `wait` (`block` \| `suspend`) |
+
+Agent list/get and the memory/message wrappers execute through typed in-process
+application services. On an actor-bound server, list/get resolve the pinned
+actor's config-source partition and are the only profile/coordination tools
+retained. Memory and message stores are not actor-partitioned, while
+run/control/status still use the compatibility execution boundary, so those
+routes remain management-only.
 
 Unlike most tools on this server, the two blocking escalation tools accept no
 `project_root` override — they always operate on the server's own project
