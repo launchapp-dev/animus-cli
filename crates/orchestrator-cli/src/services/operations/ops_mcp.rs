@@ -71,6 +71,8 @@ mod logs_tools;
 mod memory_tools;
 #[path = "ops_mcp/output.rs"]
 mod output;
+#[path = "ops_mcp/output_inproc.rs"]
+mod output_inproc;
 #[path = "ops_mcp/output_inputs.rs"]
 mod output_inputs;
 #[path = "ops_mcp/output_tail_events.rs"]

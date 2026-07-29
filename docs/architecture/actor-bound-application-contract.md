@@ -78,6 +78,10 @@ protocol has no actor carrier. Each MCP invocation emits an
 Agent roster list/get derive their effective profiles from the pinned actor's
 config-source partition; there is no fallback to the global roster when an
 actor-specific base exists.
+Output run and phase-output MCP reads execute in process and resolve the
+persisted workflow owner before touching transcript or phase payload files.
+Cross-user, cross-tenant, unowned, and unknown records share the same
+`not_found` result.
 
 ## Direct application reads
 
@@ -197,6 +201,9 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
   their MCP implementations are typed in-process services. Agent
   run/control/status also remain outside the actor-bound surface until the
   execution protocol enforces the pinned principal end to end.
+- Output monitor/JSONL/artifact reads: these inputs are not yet guaranteed to
+  identify an actor-owned workflow, so they remain management-only even though
+  their MCP handlers now use typed in-process services.
 - MCP resources: list/read resource requests need the same typed actor/request
   context and backend enforcement.
 

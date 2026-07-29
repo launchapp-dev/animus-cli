@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct ArtifactInfoCli {
+pub(crate) struct ArtifactInfoCli {
     artifact_id: String,
     artifact_type: String,
     #[serde(default)]
@@ -26,6 +26,13 @@ pub(crate) struct RunJsonlEntryCli {
     pub(crate) line: String,
     #[serde(default)]
     pub(crate) timestamp_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct OutputPhaseOutputsResult {
+    pub(crate) workflow_id: String,
+    pub(crate) phase_id: Option<String>,
+    pub(crate) outputs: Vec<PersistedPhaseOutput>,
 }
 
 fn run_dir_candidates(project_root: &str, run_id: &str) -> Vec<PathBuf> {
@@ -317,6 +324,82 @@ fn ensure_safe_workflow_id(workflow_id: &str) -> Result<()> {
     ensure_safe_id_segment("workflow id", workflow_id)
 }
 
+pub(crate) fn output_read_application(
+    project_root: &str,
+    run_id: Option<&str>,
+    workflow_id: Option<&str>,
+    phase: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<Vec<Value>> {
+    ensure_output_actor_access(project_root, workflow_id, run_id, actor)?;
+    let resolved_run_id = match (phase, workflow_id) {
+        (Some(phase), Some(workflow_id)) => resolve_run_id_for_workflow_phase(project_root, workflow_id, phase)?,
+        _ => resolve_run_id_arg(project_root, run_id.map(str::to_string), workflow_id.map(str::to_string))?,
+    };
+    let run_dir = resolve_run_dir_for_lookup(project_root, &resolved_run_id)?
+        .ok_or_else(|| not_found_error(format!("run directory not found for {resolved_run_id}")))?;
+    let events_path = run_dir.join("events.jsonl");
+    if !events_path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(events_path)?;
+    Ok(content.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).collect())
+}
+
+pub(crate) fn output_phase_outputs_application(
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<OutputPhaseOutputsResult> {
+    ensure_output_actor_access(project_root, Some(workflow_id), None, actor)?;
+    Ok(OutputPhaseOutputsResult {
+        workflow_id: workflow_id.to_string(),
+        phase_id: phase_id.map(str::to_string),
+        outputs: get_phase_outputs(project_root, workflow_id, phase_id)?,
+    })
+}
+
+pub(crate) fn output_artifacts_application(project_root: &str, execution_id: &str) -> Result<Vec<ArtifactInfoCli>> {
+    list_artifact_infos(project_root, execution_id)
+}
+
+pub(crate) fn output_jsonl_application(project_root: &str, run_id: &str, include_entries: bool) -> Result<Value> {
+    let entries = get_run_jsonl_entries(project_root, run_id)?;
+    if include_entries {
+        Ok(serde_json::to_value(entries)?)
+    } else {
+        Ok(serde_json::to_value(entries.into_iter().map(|entry| entry.line).collect::<Vec<_>>())?)
+    }
+}
+
+pub(crate) fn output_monitor_application(
+    project_root: &str,
+    run_id: &str,
+    task_id: Option<&str>,
+    phase_id: Option<&str>,
+) -> Result<Vec<Value>> {
+    let entries = get_run_jsonl_entries(project_root, run_id)?;
+    let mut events = Vec::new();
+    for entry in entries {
+        let Ok(payload) = serde_json::from_str::<Value>(&entry.line) else {
+            continue;
+        };
+        if let Some(task_id) = task_id {
+            if payload.get("task_id").and_then(Value::as_str) != Some(task_id) {
+                continue;
+            }
+        }
+        if let Some(phase_id) = phase_id {
+            if payload.get("phase_id").and_then(Value::as_str) != Some(phase_id) {
+                continue;
+            }
+        }
+        events.push(payload);
+    }
+    Ok(events)
+}
+
 pub(crate) fn get_phase_outputs(
     project_root: &str,
     workflow_id: &str,
@@ -362,48 +445,38 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
     match command {
         OutputCommand::Read(args) => {
             let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
-            ensure_output_actor_access(
-                project_root,
-                args.workflow_id.as_deref(),
-                args.run_id.as_deref(),
-                actor.as_ref(),
-            )?;
-            let run_id = match (&args.phase, &args.workflow_id) {
-                (Some(phase), Some(workflow_id)) => {
-                    resolve_run_id_for_workflow_phase(project_root, workflow_id, phase)?
-                }
-                _ => resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?,
-            };
-            let run_dir = resolve_run_dir_for_lookup(project_root, &run_id)?
-                .ok_or_else(|| not_found_error(format!("run directory not found for {run_id}")))?;
-            let events_path = run_dir.join("events.jsonl");
-            if !events_path.exists() {
-                return print_value(Vec::<Value>::new(), json);
-            }
-            let content = fs::read_to_string(events_path)?;
-            let events: Vec<Value> =
-                content.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).collect();
-            print_value(events, json)
+            print_value(
+                output_read_application(
+                    project_root,
+                    args.run_id.as_deref(),
+                    args.workflow_id.as_deref(),
+                    args.phase.as_deref(),
+                    actor.as_ref(),
+                )?,
+                json,
+            )
         }
         OutputCommand::PhaseOutputs(args) => {
             let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
-            ensure_output_actor_access(project_root, Some(&args.workflow_id), None, actor.as_ref())?;
-            let outputs = get_phase_outputs(project_root, &args.workflow_id, args.phase_id.as_deref())?;
+            let result = output_phase_outputs_application(
+                project_root,
+                &args.workflow_id,
+                args.phase_id.as_deref(),
+                actor.as_ref(),
+            )?;
             if json {
-                print_value(
-                    serde_json::json!({
-                        "workflow_id": args.workflow_id,
-                        "phase_id": args.phase_id,
-                        "outputs": outputs,
-                    }),
-                    json,
-                )
+                print_value(result, json)
             } else {
-                println!("{}", render_phase_outputs_human(&args.workflow_id, args.phase_id.as_deref(), &outputs));
+                println!(
+                    "{}",
+                    render_phase_outputs_human(&result.workflow_id, result.phase_id.as_deref(), &result.outputs)
+                );
                 Ok(())
             }
         }
-        OutputCommand::Artifacts(args) => print_value(list_artifact_infos(project_root, &args.execution_id)?, json),
+        OutputCommand::Artifacts(args) => {
+            print_value(output_artifacts_application(project_root, &args.execution_id)?, json)
+        }
         OutputCommand::Download(args) => {
             ensure_safe_id_segment("execution id", &args.execution_id)?;
             ensure_safe_id_segment("artifact id", &args.artifact_id)?;
@@ -425,35 +498,12 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
             )
         }
         OutputCommand::Jsonl(args) => {
-            let entries = get_run_jsonl_entries(project_root, &args.run_id)?;
-            if args.entries {
-                print_value(entries, json)
-            } else {
-                let lines: Vec<String> = entries.into_iter().map(|entry| entry.line).collect();
-                print_value(lines, json)
-            }
+            print_value(output_jsonl_application(project_root, &args.run_id, args.entries)?, json)
         }
-        OutputCommand::Monitor(args) => {
-            let entries = get_run_jsonl_entries(project_root, &args.run_id)?;
-            let mut events = Vec::new();
-            for entry in entries {
-                let Ok(payload) = serde_json::from_str::<Value>(&entry.line) else {
-                    continue;
-                };
-                if let Some(task_id) = args.task_id.as_deref() {
-                    if payload.get("task_id").and_then(|value| value.as_str()) != Some(task_id) {
-                        continue;
-                    }
-                }
-                if let Some(phase_id) = args.phase_id.as_deref() {
-                    if payload.get("phase_id").and_then(|value| value.as_str()) != Some(phase_id) {
-                        continue;
-                    }
-                }
-                events.push(payload);
-            }
-            print_value(events, json)
-        }
+        OutputCommand::Monitor(args) => print_value(
+            output_monitor_application(project_root, &args.run_id, args.task_id.as_deref(), args.phase_id.as_deref())?,
+            json,
+        ),
         OutputCommand::Cli(args) => {
             let entries = get_run_jsonl_entries(project_root, &args.run_id)?;
             print_value(
