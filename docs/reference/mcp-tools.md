@@ -148,7 +148,7 @@ approval gate stays human-only.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `auto_install`, `skip_preflight`, `project_root` |
+| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `startup_cleanup`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `auto_install`, `skip_preflight`, `project_root` |
 | `animus.daemon.stop` | Stop the daemon gracefully | `project_root` |
 | `animus.daemon.status` | Check if daemon is running and view basic state | `project_root` |
 | `animus.daemon.health` | Get detailed health metrics (active agents, queue, capacity); payload carries an additive `healthy` boolean verdict (false when the daemon is down/crashed or any plugin is unhealthy; a paused runtime stays true) | `project_root` |
@@ -160,6 +160,13 @@ approval gate stays human-only.
 | `animus.daemon.config` | Read current daemon automation settings through the typed in-process configuration service | `project_root` |
 | `animus.daemon.config-set` | Update daemon runtime settings and notification config through the same typed in-process service. Prefer structured `notification_config`; the JSON-string and file fields are mutually exclusive compatibility inputs | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `max_daily_usd`, `silent_threshold_mins`, `notification_config`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
 | `animus.daemon.observe` | Routing front-door over the existing observability surfaces: returns the merged, chronological window of daemon events + logs (or routes to a single `source`). Non-streaming — always returns and never follows live. Works offline (reads scoped event/log history; the daemon need not be running) | `since`, `source` (`logs`/`events`/`stream`/`workflow`), `workflow_id`, `limit`, `project_root` |
+
+All daemon-management MCP tools execute through typed in-process services; none
+reconstructs CLI arguments or spawns a child Animus CLI. Detached start still
+launches the real daemon process, and status/health/log paths retain their
+control-wire, plugin, and on-disk state owners. The daemon family remains
+management-only because lifecycle and project-wide observability state is not
+partitioned or authorized by an authenticated actor.
 
 ---
 

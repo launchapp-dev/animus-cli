@@ -1,35 +1,8 @@
-use super::{
-    push_bool_set, push_opt, push_opt_num, push_opt_usize, DaemonEventsInput, DaemonLogsInput, DaemonObserveInput,
-    DaemonStartInput, DEFAULT_DAEMON_EVENTS_LIMIT, MAX_DAEMON_EVENTS_LIMIT,
-};
+use super::{DaemonEventsInput, DaemonLogsInput, DEFAULT_DAEMON_EVENTS_LIMIT, MAX_DAEMON_EVENTS_LIMIT};
 use anyhow::Result;
 use serde_json::{json, Value};
 
 const DEFAULT_DAEMON_LOGS_LIMIT: usize = 100;
-
-pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
-    let mut args = vec!["daemon".to_string(), "start".to_string()];
-    push_opt_usize(&mut args, "--pool-size", input.pool_size);
-    push_opt_num(&mut args, "--interval-secs", input.interval_secs);
-    push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
-    push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
-    push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
-    push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
-    push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
-    args
-}
-
-/// Builds args for `daemon observe`. The MCP surface deliberately never sets
-/// `--follow`: it returns the merged window the CLI's non-streaming path
-/// produces, so the tool always terminates.
-pub(super) fn build_daemon_observe_args(input: &DaemonObserveInput) -> Vec<String> {
-    let mut args = vec!["daemon".to_string(), "observe".to_string()];
-    push_opt(&mut args, "--since", input.since.clone());
-    push_opt(&mut args, "--source", input.source.clone());
-    push_opt(&mut args, "--workflow", input.workflow_id.clone());
-    push_opt_usize(&mut args, "--limit", input.limit);
-    args
-}
 
 pub(super) fn daemon_events_poll_limit(limit: Option<usize>) -> usize {
     let normalized = limit.unwrap_or(DEFAULT_DAEMON_EVENTS_LIMIT).max(1);
@@ -89,47 +62,4 @@ pub(super) fn build_daemon_logs_result(default_project_root: &str, input: Daemon
         "lines": lines,
         "has_more": has_more,
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_daemon_observe_args_defaults_minimal() {
-        let args = build_daemon_observe_args(&DaemonObserveInput::default());
-        assert_eq!(args, vec!["daemon".to_string(), "observe".to_string()]);
-        // Never streams: --follow must never appear.
-        assert!(!args.contains(&"--follow".to_string()));
-    }
-
-    #[test]
-    fn build_daemon_observe_args_wires_all_params_without_follow() {
-        let input = DaemonObserveInput {
-            since: Some("2h".to_string()),
-            source: Some("events".to_string()),
-            workflow_id: Some("wf-abc123".to_string()),
-            limit: Some(50),
-            project_root: Some("/repo".to_string()),
-        };
-
-        let args = build_daemon_observe_args(&input);
-
-        assert_eq!(
-            args,
-            vec![
-                "daemon".to_string(),
-                "observe".to_string(),
-                "--since".to_string(),
-                "2h".to_string(),
-                "--source".to_string(),
-                "events".to_string(),
-                "--workflow".to_string(),
-                "wf-abc123".to_string(),
-                "--limit".to_string(),
-                "50".to_string(),
-            ]
-        );
-        assert!(!args.contains(&"--follow".to_string()));
-    }
 }

@@ -17,6 +17,10 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) reconcile_stale: Option<bool>,
     #[serde(default)]
+    pub(super) auto_install: bool,
+    #[serde(default)]
+    pub(super) skip_preflight: bool,
+    #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 

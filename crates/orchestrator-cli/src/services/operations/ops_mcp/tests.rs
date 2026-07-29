@@ -805,30 +805,6 @@ fn build_guarded_list_result_rejects_non_array_payloads() {
 }
 
 #[test]
-fn build_daemon_start_args_defaults_minimal() {
-    let input = DaemonStartInput::default();
-    let args = build_daemon_start_args(&input);
-    assert_eq!(args, vec!["daemon".to_string(), "start".to_string()]);
-}
-
-#[test]
-fn build_daemon_start_args_with_flags() {
-    let input = DaemonStartInput { pool_size: Some(4), ..Default::default() };
-    let args = build_daemon_start_args(&input);
-    assert_eq!(args, vec!["daemon".to_string(), "start".to_string(), "--pool-size".to_string(), "4".to_string(),]);
-}
-
-#[test]
-fn build_daemon_start_args_includes_stale_threshold_hours() {
-    let input = DaemonStartInput { stale_threshold_hours: Some(48), ..Default::default() };
-    let args = build_daemon_start_args(&input);
-    assert_eq!(
-        args,
-        vec!["daemon".to_string(), "start".to_string(), "--stale-threshold-hours".to_string(), "48".to_string(),]
-    );
-}
-
-#[test]
 fn build_agent_run_args_defaults_detach_and_stream() {
     let input = AgentRunInput {
         tool: "codex".to_string(),
