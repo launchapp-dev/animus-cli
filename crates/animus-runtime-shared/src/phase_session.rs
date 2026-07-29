@@ -199,7 +199,7 @@ pub fn mark_workflow_environments_torn_down(scoped_root: &Path, workflow_id: &st
     let mut marked = 0usize;
     for entry in entries {
         let path = entry?.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        if !is_session_checkpoint_path(&path) {
             continue;
         }
         let raw = fs::read_to_string(&path)?;
@@ -236,7 +236,7 @@ pub fn mark_workflow_environment_torn_down(
     let mut marked = 0usize;
     for entry in entries {
         let path = entry?.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        if !is_session_checkpoint_path(&path) {
             continue;
         }
         let raw = fs::read_to_string(&path)?;
@@ -268,6 +268,12 @@ pub fn update_session_running_after_resume(
         checkpoint.blocked_reason = None;
         checkpoint.started_at = Utc::now().to_rfc3339();
     })
+}
+
+fn is_session_checkpoint_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".session.json"))
 }
 
 pub fn update_session_completed(scoped_root: &Path, workflow_id: &str, phase_id: &str) -> io::Result<()> {
@@ -398,11 +404,7 @@ pub fn find_active_checkpoint_by_run_id(
         };
         for phase_entry in phase_entries {
             let path = phase_entry?.path();
-            if !path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(".session.json"))
-            {
+            if !is_session_checkpoint_path(&path) {
                 continue;
             }
             let Some(checkpoint) = read_path(&path)? else {
@@ -738,6 +740,25 @@ mod tests {
     }
 
     #[test]
+    fn workflow_cleanup_ignores_non_checkpoint_json_files() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-artifact", "phase-a", "claude", "run-artifact", None)
+            .expect("pending");
+        update_session_environment(scoped_root, "wf-artifact", "phase-a", sample_binding()).expect("binding");
+        let phases_dir = scoped_root.join("runs").join("wf-artifact").join("phases");
+        fs::write(phases_dir.join("provider-output.json"), b"not a session checkpoint").expect("artifact");
+
+        assert_eq!(
+            mark_workflow_environments_torn_down(scoped_root, "wf-artifact").expect("mark workflow"),
+            1
+        );
+        let checkpoint =
+            read_checkpoint(scoped_root, "wf-artifact", "phase-a").expect("read").expect("checkpoint");
+        assert!(checkpoint.environment.expect("binding").torn_down);
+    }
+
+    #[test]
     fn workflow_handle_cleanup_marks_only_the_reaped_binding() {
         let temp = tempdir().expect("tempdir");
         let scoped_root = temp.path();
@@ -748,6 +769,8 @@ mod tests {
             write_session_pending(scoped_root, "wf-reap", phase_id, "claude", "run-reap", None).expect("pending");
             update_session_environment(scoped_root, "wf-reap", phase_id, binding).expect("binding");
         }
+        let phases_dir = scoped_root.join("runs").join("wf-reap").join("phases");
+        fs::write(phases_dir.join("provider-output.json"), b"not a session checkpoint").expect("artifact");
 
         assert_eq!(
             mark_workflow_environment_torn_down(
