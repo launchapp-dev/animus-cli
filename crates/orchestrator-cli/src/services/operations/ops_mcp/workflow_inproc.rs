@@ -2,21 +2,44 @@ use super::daemon_inproc::resolve_project_root;
 use super::exec_errors::build_inproc_tool_error_payload;
 use super::{build_guarded_list_result, AoMcpServer, ListGuardInput};
 use crate::services::operations::{
-    workflow_cancel_application, workflow_checkpoints_list_application, workflow_config_get_application,
-    workflow_config_validate_application, workflow_decisions_application, workflow_definitions_list_application,
-    workflow_get_application, workflow_list_application, workflow_pause_application,
-    workflow_phase_approve_application, workflow_phase_get_application, workflow_phase_reject_application,
-    workflow_phases_list_application, workflow_resume_application, WorkflowControlApplicationRequest,
-    WorkflowListApplicationRequest,
+    workflow_cancel_application, workflow_checkpoints_list_application, workflow_config_agent_remove_application,
+    workflow_config_agent_set_application, workflow_config_get_application, workflow_config_set_application,
+    workflow_config_source_application, workflow_config_validate_application,
+    workflow_config_workflow_remove_application, workflow_config_workflow_set_application,
+    workflow_decisions_application, workflow_definitions_list_application, workflow_get_application,
+    workflow_list_application, workflow_pause_application, workflow_phase_approve_application,
+    workflow_phase_get_application, workflow_phase_reject_application, workflow_phases_list_application,
+    workflow_resume_application, WorkflowControlApplicationRequest, WorkflowListApplicationRequest,
 };
 use anyhow::Result;
 use orchestrator_core::{services::ServiceHub, FileServiceHub};
 use rmcp::model::CallToolResult;
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
 fn workflow_hub(project_root: &str) -> Result<Arc<dyn ServiceHub>> {
     Ok(Arc::new(FileServiceHub::new(project_root)?))
+}
+
+fn structured_or_compat_json<T: DeserializeOwned>(
+    structured: Option<Value>,
+    input_json: Option<String>,
+    structured_field: &str,
+) -> Result<T> {
+    let value = match (structured, input_json) {
+        (Some(value), None) => value,
+        (None, Some(raw)) => {
+            serde_json::from_str(&raw).map_err(|error| crate::invalid_input_error(format!("input_json: {error}")))?
+        }
+        (Some(_), Some(_)) => {
+            return Err(crate::invalid_input_error(format!("{structured_field} and input_json are mutually exclusive")))
+        }
+        (None, None) => {
+            return Err(crate::invalid_input_error(format!("one of {structured_field} or input_json is required")))
+        }
+    };
+    serde_json::from_value(value).map_err(|error| crate::invalid_input_error(format!("{structured_field}: {error}")))
 }
 
 impl AoMcpServer {
@@ -244,6 +267,77 @@ impl AoMcpServer {
             })
             .await)
     }
+
+    pub(super) async fn workflow_config_set_inproc(
+        &self,
+        input: super::WorkflowConfigSetInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.config.set", project_root, async |root, _| {
+                let config = match (input.config, input.file) {
+                    (Some(value), None) => serde_json::from_value(value)
+                        .map_err(|error| crate::invalid_input_error(format!("config: {error}")))?,
+                    (None, Some(file)) => workflow_config_source_application(Some(&file))?,
+                    (Some(_), Some(_)) => {
+                        return Err(crate::invalid_input_error("config and file are mutually exclusive"))
+                    }
+                    (None, None) => return Err(crate::invalid_input_error("one of config or file is required")),
+                };
+                workflow_config_set_application(&root, config)
+            })
+            .await)
+    }
+
+    pub(super) async fn workflow_config_agent_set_inproc(
+        &self,
+        input: super::WorkflowConfigAgentSetInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.config.agent-set", project_root, async |root, _| {
+                let profile = structured_or_compat_json(input.profile, input.input_json, "profile")?;
+                workflow_config_agent_set_application(&root, &input.id, profile)
+            })
+            .await)
+    }
+
+    pub(super) async fn workflow_config_agent_remove_inproc(
+        &self,
+        input: super::WorkflowConfigEntityRemoveInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.config.agent-remove", project_root, async |root, _| {
+                workflow_config_agent_remove_application(&root, &input.id)
+            })
+            .await)
+    }
+
+    pub(super) async fn workflow_config_workflow_set_inproc(
+        &self,
+        input: super::WorkflowConfigWorkflowSetInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.config.workflow-set", project_root, async |root, _| {
+                let workflow = structured_or_compat_json(input.workflow, input.input_json, "workflow")?;
+                workflow_config_workflow_set_application(&root, workflow)
+            })
+            .await)
+    }
+
+    pub(super) async fn workflow_config_workflow_remove_inproc(
+        &self,
+        input: super::WorkflowConfigEntityRemoveInput,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let project_root = input.project_root.clone();
+        Ok(self
+            .run_workflow_application("animus.workflow.config.workflow-remove", project_root, async |root, _| {
+                workflow_config_workflow_remove_application(&root, &input.id)
+            })
+            .await)
+    }
 }
 
 #[cfg(test)]
@@ -431,5 +525,64 @@ mod tests {
         let payload = result.structured_content.expect("structured payload");
         assert_eq!(payload.get("tool").and_then(Value::as_str), Some("animus.workflow.config.get"));
         assert!(payload.pointer("/result/workflow_config").is_some());
+    }
+
+    #[test]
+    fn structured_agent_profile_and_compat_json_decode_to_the_same_typed_model() {
+        let value = json!({
+            "description": "Reviews changes",
+            "system_prompt": "Review the implementation",
+            "extra_config": {"reasoning_effort": "high"}
+        });
+        let structured: orchestrator_config::AgentProfileOverlay =
+            structured_or_compat_json(Some(value.clone()), None, "profile").expect("structured profile");
+        let compatibility: orchestrator_config::AgentProfileOverlay =
+            structured_or_compat_json(None, Some(value.to_string()), "profile").expect("compatibility profile");
+
+        assert_eq!(serde_json::to_value(structured).unwrap(), serde_json::to_value(compatibility).unwrap());
+    }
+
+    #[tokio::test]
+    async fn workflow_config_set_rejects_conflicting_sources_before_file_access() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let result = server
+            .workflow_config_set_inproc(super::super::WorkflowConfigSetInput {
+                config: Some(json!({})),
+                file: Some("/path/that/must/not/be/read.json".to_string()),
+                project_root: None,
+            })
+            .await
+            .expect("tool transport succeeds");
+
+        assert_eq!(result.is_error, Some(true));
+        let payload = result.structured_content.expect("typed error payload");
+        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{payload}");
+        assert!(
+            payload
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("mutually exclusive")),
+            "{payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_config_agent_set_rejects_structured_and_compat_payloads() {
+        let root = tempfile::tempdir().expect("project root");
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let result = server
+            .workflow_config_agent_set_inproc(super::super::WorkflowConfigAgentSetInput {
+                id: "reviewer".to_string(),
+                profile: Some(json!({"description": "review", "system_prompt": "review"})),
+                input_json: Some("{}".to_string()),
+                project_root: None,
+            })
+            .await
+            .expect("tool transport succeeds");
+
+        assert_eq!(result.is_error, Some(true));
+        let payload = result.structured_content.expect("typed error payload");
+        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{payload}");
     }
 }

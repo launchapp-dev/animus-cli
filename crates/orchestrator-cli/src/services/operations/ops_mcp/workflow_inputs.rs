@@ -87,9 +87,13 @@ pub(super) struct WorkflowPhaseGetInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowConfigSetInput {
-    /// Path to a JSON file with the full WorkflowConfig. Omit to read from stdin
-    /// (not available over MCP — a file path is required here).
-    pub(super) file: String,
+    /// Structured raw WorkflowConfig source model. Prefer this over `file`.
+    #[serde(default)]
+    pub(super) config: Option<Value>,
+    /// Compatibility path to a JSON file containing the raw WorkflowConfig.
+    /// Mutually exclusive with `config`.
+    #[serde(default)]
+    pub(super) file: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
@@ -97,14 +101,24 @@ pub(super) struct WorkflowConfigSetInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowConfigAgentSetInput {
     pub(super) id: String,
-    pub(super) input_json: String,
+    /// Structured agent profile overlay. Prefer this over `input_json`.
+    #[serde(default)]
+    pub(super) profile: Option<Value>,
+    /// Compatibility JSON string. Mutually exclusive with `profile`.
+    #[serde(default)]
+    pub(super) input_json: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowConfigWorkflowSetInput {
-    pub(super) input_json: String,
+    /// Structured workflow definition. Prefer this over `input_json`.
+    #[serde(default)]
+    pub(super) workflow: Option<Value>,
+    /// Compatibility JSON string. Mutually exclusive with `workflow`.
+    #[serde(default)]
+    pub(super) input_json: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

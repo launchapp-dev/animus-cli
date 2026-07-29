@@ -181,7 +181,9 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
 
 - Config writes: `animus_config_protocol::ConfigWriteRequest` needs an
   `actor: Option<Actor>` field and config-source write implementations must
-  resolve and write the same actor partition used by reads.
+  resolve and write the same actor partition used by reads. Management-mode
+  MCP already routes these operations through typed in-process application
+  services; that removes argv/JSON-string loss but does not grant actor safety.
 - Queue list/control/mutation: queue requests need actor filters and
   authorization context, and the queue/subject dispatch bridge must preserve
   the current `Actor`.
