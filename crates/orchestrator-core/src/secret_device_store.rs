@@ -548,8 +548,7 @@ mod tests {
         let cfg = serde_json::json!({
             "secrets": {
                 "key_source": key_source,
-                "key_file": key_file,
-                "backend": "device"
+                "key_file": key_file
             }
         });
         std::fs::write(animus_dir.join("config.json"), serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
@@ -648,6 +647,9 @@ mod tests {
         let key = [0xABu8; KEY_LEN];
         let key_file = tmp.path().join("server.key");
         std::fs::write(&key_file, hex::encode(key)).unwrap();
+        // Do not force `backend = device`: this exercises the production
+        // headless path where configured server key material makes `auto`
+        // select the device-encrypted store.
         write_project_secrets_config(&project_dir, Some("user-key"), Some(key_file.to_str().unwrap()));
         let scope = "test-project-scope";
         let scoped_root = tmp.path().join("state");
