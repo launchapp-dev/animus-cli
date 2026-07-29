@@ -18,9 +18,7 @@ use crate::services::plugin_clients;
 use super::config::{manual_approvals_path, title_case_phase_id};
 use super::emit_daemon_event;
 use crate::dry_run_envelope;
-use crate::services::runtime::execution_fact_projection::{
-    project_terminal_workflow_result, project_terminal_workflow_result_for_actor,
-};
+use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result_for_actor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManualApprovalRecord {
@@ -152,6 +150,19 @@ pub(crate) struct DetachedRunnerOverrides {
     /// [`WORKFLOW_ACTOR_ENV`] so the runner request the child builds carries it.
     /// `None` for local CLI / system-initiated runs.
     pub(crate) actor: Option<Actor>,
+}
+
+fn lifecycle_runner_overrides(project_root: &str, workflow_id: &str) -> DetachedRunnerOverrides {
+    DetachedRunnerOverrides { actor: super::workflow_lifecycle_actor(project_root, workflow_id), ..Default::default() }
+}
+
+fn workflow_execute_request_for_continuation(
+    project_root: &str,
+    workflow: &OrchestratorWorkflow,
+) -> workflow_proto::WorkflowExecuteRequest {
+    let mut request = workflow_execute_request_for_existing(workflow);
+    request.actor = super::workflow_lifecycle_actor(project_root, &workflow.id);
+    request
 }
 
 /// Daemon → detached-runner-child handoff for the transport-asserted [`Actor`].
@@ -410,6 +421,11 @@ pub(crate) async fn resume_workflow_with_runner(
     feedback: Option<String>,
 ) -> Result<OrchestratorWorkflow> {
     let existing = hub.workflows().get(workflow_id).await?;
+    // Lifecycle continuation must inherit the persisted launch principal.
+    // The caller may be a local operator or the daemon control wire and is not
+    // an authoritative replacement for the workflow owner.
+    let runner_overrides = lifecycle_runner_overrides(project_root, workflow_id);
+    let lifecycle_actor = runner_overrides.actor.as_ref();
     if matches!(
         existing.status,
         orchestrator_core::WorkflowStatus::Completed | orchestrator_core::WorkflowStatus::Cancelled
@@ -457,7 +473,12 @@ pub(crate) async fn resume_workflow_with_runner(
     register_workflow_runner_pid(Path::new(project_root), workflow_id, std::process::id())?;
     // Route task-status projections through the installed subject backend when
     // one owns `task` (portal), else the in-tree store.
-    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        lifecycle_actor,
+    )
+    .await;
     let outcome = match dispatch_workflow_event(
         hub.clone(),
         task_store.as_ref(),
@@ -476,7 +497,7 @@ pub(crate) async fn resume_workflow_with_runner(
         let _ = unregister_workflow_runner_pid(Path::new(project_root), workflow_id);
         return Err(anyhow!("workflow '{}' not found", workflow_id));
     };
-    if let Err(error) = spawn_detached_workflow_runner(project_root, workflow_id, &DetachedRunnerOverrides::default()) {
+    if let Err(error) = spawn_detached_workflow_runner(project_root, workflow_id, &runner_overrides) {
         // Re-pause AND re-annotate: the Resume dispatch above already
         // cleared the task's "paused by workflow <id>" marker, so without
         // re-adding it the re-paused workflow would stall unexplained.
@@ -727,8 +748,14 @@ pub(crate) async fn approve_manual_phase(
     note: &str,
 ) -> Result<Value> {
     let _runner_pid_guard = WorkflowRunnerPidGuard::register(project_root, workflow_id)?;
+    let lifecycle_actor = super::workflow_lifecycle_actor(project_root, workflow_id);
     let approval_timestamp = Utc::now().to_rfc3339();
-    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        lifecycle_actor.as_ref(),
+    )
+    .await;
     let outcome = dispatch_workflow_event(
         hub.clone(),
         task_store.as_ref(),
@@ -748,7 +775,10 @@ pub(crate) async fn approve_manual_phase(
         phase_id: phase_id.to_string(),
         note: note.to_string(),
         approved_at: approval_timestamp.clone(),
-        approved_by: protocol::ACTOR_CLI.to_string(),
+        approved_by: lifecycle_actor
+            .as_ref()
+            .map(|actor| actor.user_id.clone())
+            .unwrap_or_else(|| protocol::ACTOR_CLI.to_string()),
     });
     write_manual_approvals(project_root, &store)?;
 
@@ -759,14 +789,14 @@ pub(crate) async fn approve_manual_phase(
         // existing workflow_id). The in-tree continuation path was
         // removed; the plugin owns workflow execution after the
         // manual approval lands.
-        let plugin_request = workflow_execute_request_for_existing(&updated);
+        let plugin_request = workflow_execute_request_for_continuation(project_root, &updated);
         let project_root_path = Path::new(project_root);
         let continuation_outcome = plugin_clients::call_workflow_execute(project_root_path, &plugin_request).await;
         let continuation = match continuation_outcome {
             Ok(Some(result)) => result,
             Ok(None) => {
                 if let Ok(reloaded) = hub.workflows().get(workflow_id).await {
-                    project_terminal_workflow_result(
+                    project_terminal_workflow_result_for_actor(
                         hub.clone(),
                         project_root,
                         reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
@@ -775,6 +805,7 @@ pub(crate) async fn approve_manual_phase(
                         Some(reloaded.id.as_str()),
                         reloaded.status,
                         reloaded.failure_reason.as_deref(),
+                        lifecycle_actor.as_ref(),
                     )
                     .await;
                 }
@@ -784,7 +815,7 @@ pub(crate) async fn approve_manual_phase(
             }
             Err(error) => {
                 if let Ok(reloaded) = hub.workflows().get(workflow_id).await {
-                    project_terminal_workflow_result(
+                    project_terminal_workflow_result_for_actor(
                         hub.clone(),
                         project_root,
                         reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
@@ -793,6 +824,7 @@ pub(crate) async fn approve_manual_phase(
                         Some(reloaded.id.as_str()),
                         reloaded.status,
                         reloaded.failure_reason.as_deref(),
+                        lifecycle_actor.as_ref(),
                     )
                     .await;
                 }
@@ -810,7 +842,7 @@ pub(crate) async fn approve_manual_phase(
     }
 
     let final_workflow = hub.workflows().get(workflow_id).await?;
-    project_terminal_workflow_result(
+    project_terminal_workflow_result_for_actor(
         hub.clone(),
         project_root,
         final_workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
@@ -819,6 +851,7 @@ pub(crate) async fn approve_manual_phase(
         Some(final_workflow.id.as_str()),
         final_workflow.status,
         final_workflow.failure_reason.as_deref(),
+        lifecycle_actor.as_ref(),
     )
     .await;
     emit_daemon_event(
@@ -850,7 +883,13 @@ pub(crate) async fn reject_manual_phase(
     phase_id: &str,
     note: &str,
 ) -> Result<Value> {
-    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
+    let lifecycle_actor = super::workflow_lifecycle_actor(project_root, workflow_id);
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        lifecycle_actor.as_ref(),
+    )
+    .await;
     let outcome = dispatch_workflow_event(
         hub.clone(),
         task_store.as_ref(),
@@ -864,7 +903,7 @@ pub(crate) async fn reject_manual_phase(
     .await?;
     let updated = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", workflow_id))?;
 
-    project_terminal_workflow_result(
+    project_terminal_workflow_result_for_actor(
         hub.clone(),
         project_root,
         updated.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
@@ -873,6 +912,7 @@ pub(crate) async fn reject_manual_phase(
         Some(updated.id.as_str()),
         updated.status,
         updated.failure_reason.as_deref(),
+        lifecycle_actor.as_ref(),
     )
     .await;
 
@@ -1346,6 +1386,35 @@ workflows:
             "reattach request must carry the task subject so the runner plugin resolves subject context"
         );
         assert_eq!(request.requirement_id, None);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_continuations_rehydrate_the_persisted_actor() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _guards = isolate_plugin_discovery(&temp);
+        init_git_repo(&temp);
+        write_standard_workflow_yaml(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+        let task = create_test_task(&hub, "actor lifecycle continuation").await;
+        let actor = animus_actor::Actor {
+            user_id: "alice".to_string(),
+            claims: vec!["member".to_string()],
+            tenant_id: Some("workspace-a".to_string()),
+        };
+        let existing = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id, None), Some(&actor))
+            .await
+            .expect("workflow should start");
+
+        let overrides = super::lifecycle_runner_overrides(&project_root, &existing.id);
+        assert_eq!(overrides.actor, Some(actor.clone()), "resume must relay the persisted owner to its runner");
+        let request = super::workflow_execute_request_for_continuation(&project_root, &existing);
+        assert_eq!(request.actor, Some(actor), "manual approval continuation must retain the same actor");
     }
 
     #[test]

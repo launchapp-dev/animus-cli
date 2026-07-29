@@ -573,6 +573,173 @@ pub(crate) fn workflow_config_validate_application(project_root: &str, actor: Op
     Ok(config::validate_workflow_config_payload(project_root, actor))
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct WorkflowControlApplicationRequest {
+    pub(crate) id: String,
+    pub(crate) confirm: Option<String>,
+    pub(crate) dry_run: bool,
+}
+
+fn workflow_lifecycle_actor(project_root: &str, workflow_id: &str) -> Option<Actor> {
+    orchestrator_core::WorkflowStateManager::new(project_root).load_workflow_actor(workflow_id)
+}
+
+fn project_manual_phase_result_for_application(
+    mut result: Value,
+    project_root: &str,
+    actor: Option<&Actor>,
+    owner: Option<&Actor>,
+) -> Result<Value> {
+    let Some(workflow) = result.get_mut("workflow") else {
+        return Ok(result);
+    };
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+    *workflow = workflow_value_for_application(workflow.take(), &runtime, owner)?;
+    Ok(result)
+}
+
+pub(crate) async fn workflow_pause_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    request: WorkflowControlApplicationRequest,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let owner = authorized_workflow_actor(project_root, &request.id, actor)?;
+    let workflow = hub.workflows().get(&request.id).await?;
+    if request.dry_run {
+        return Ok(dry_run_envelope(
+            "workflow.pause",
+            serde_json::json!({"id": &workflow.id}),
+            "workflow.pause",
+            vec!["pause workflow execution".to_string()],
+            &format!("rerun 'animus workflow pause --id {} --confirm {}' to apply", workflow.id, workflow.id),
+        ));
+    }
+    ensure_destructive_confirmation(request.confirm.as_deref(), &request.id, "workflow pause", "--id")?;
+    if let Some(()) = try_workflow_pause_via_control(project_root, &request.id).await? {
+        let updated = hub.workflows().get(&request.id).await?;
+        let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+        return workflow_value_for_application(updated, &runtime, owner.as_ref());
+    }
+    let lifecycle_actor = workflow_lifecycle_actor(project_root, &request.id);
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        lifecycle_actor.as_ref(),
+    )
+    .await;
+    let outcome = dispatch_workflow_event(
+        hub,
+        task_store.as_ref(),
+        project_root,
+        WorkflowEvent::Pause { workflow_id: request.id.clone(), reason_detail: None },
+    )
+    .await?;
+    let updated =
+        outcome.workflow.ok_or_else(|| crate::not_found_error(format!("workflow not found: {}", request.id)))?;
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+    workflow_value_for_application(updated, &runtime, owner.as_ref())
+}
+
+pub(crate) async fn workflow_resume_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    force: bool,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let owner = authorized_workflow_actor(project_root, workflow_id, actor)?;
+    let existing = hub.workflows().get(workflow_id).await?;
+    if !force {
+        if let Some(reason) = existing.failure_reason.as_deref() {
+            if reason.contains("idempotency annotation") || reason.contains("sideeffecting") {
+                return Err(anyhow!(
+                    "workflow '{}' is blocked: {} — rerun with --force to override",
+                    workflow_id,
+                    reason
+                ));
+            }
+        }
+    }
+    let updated = if let Some(()) = try_workflow_resume_via_control(project_root, workflow_id).await? {
+        hub.workflows().get(workflow_id).await?
+    } else {
+        phases::resume_workflow_with_runner(hub, project_root, workflow_id, None).await?
+    };
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+    workflow_value_for_application(updated, &runtime, owner.as_ref())
+}
+
+pub(crate) async fn workflow_cancel_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    request: WorkflowControlApplicationRequest,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let owner = authorized_workflow_actor(project_root, &request.id, actor)?;
+    let workflow = hub.workflows().get(&request.id).await?;
+    if request.dry_run {
+        return Ok(dry_run_envelope(
+            "workflow.cancel",
+            serde_json::json!({"id": &workflow.id}),
+            "workflow.cancel",
+            vec!["cancel workflow execution".to_string()],
+            &format!("rerun 'animus workflow cancel --id {} --confirm {}' to apply", workflow.id, workflow.id),
+        ));
+    }
+    ensure_destructive_confirmation(request.confirm.as_deref(), &request.id, "workflow cancel", "--id")?;
+    if let Some(()) = try_workflow_cancel_via_control(project_root, &request.id).await? {
+        let updated = hub.workflows().get(&request.id).await?;
+        let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+        return workflow_value_for_application(updated, &runtime, owner.as_ref());
+    }
+    crate::services::runtime::teardown_retained_environment_for_cancel(project_root, &workflow)?;
+    let lifecycle_actor = workflow_lifecycle_actor(project_root, &request.id);
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        lifecycle_actor.as_ref(),
+    )
+    .await;
+    let outcome = dispatch_workflow_event(
+        hub,
+        task_store.as_ref(),
+        project_root,
+        WorkflowEvent::Cancel { workflow_id: request.id.clone() },
+    )
+    .await?;
+    let updated =
+        outcome.workflow.ok_or_else(|| crate::not_found_error(format!("workflow not found: {}", request.id)))?;
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+    workflow_value_for_application(updated, &runtime, owner.as_ref())
+}
+
+pub(crate) async fn workflow_phase_approve_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    feedback: &str,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let owner = authorized_workflow_actor(project_root, workflow_id, actor)?;
+    let result = phases::approve_manual_phase(hub, project_root, workflow_id, phase_id, feedback).await?;
+    project_manual_phase_result_for_application(result, project_root, actor, owner.as_ref())
+}
+
+pub(crate) async fn workflow_phase_reject_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    reason: &str,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let owner = authorized_workflow_actor(project_root, workflow_id, actor)?;
+    let result = phases::reject_manual_phase(hub, project_root, workflow_id, phase_id, reason).await?;
+    project_manual_phase_result_for_application(result, project_root, actor, owner.as_ref())
+}
+
 pub(crate) async fn handle_workflow(
     command: WorkflowCommand,
     hub: Arc<dyn ServiceHub>,
@@ -825,30 +992,7 @@ pub(crate) async fn handle_workflow(
             }
         },
         WorkflowCommand::Resume(args) => {
-            if !args.force {
-                let existing = workflows.get(&args.id).await?;
-                if let Some(reason) = existing.failure_reason.as_deref() {
-                    if reason.contains("idempotency annotation") || reason.contains("sideeffecting") {
-                        return Err(anyhow!(
-                            "workflow '{}' is blocked: {} — rerun with --force to override",
-                            args.id,
-                            reason
-                        ));
-                    }
-                }
-            }
-            if json {
-                if let Some(()) = try_workflow_resume_via_control(project_root, &args.id).await? {
-                    let workflow = workflows.get(&args.id).await?;
-                    return print_value(workflow, json);
-                }
-            }
-            // Resume must hand execution back to a workflow_runner spawn:
-            // flipping the status alone leaves a Running record with no
-            // live runner, which the orphan reconciler cancels on the next
-            // tick (resumed workflows keep their original started_at).
-            let workflow = phases::resume_workflow_with_runner(hub.clone(), project_root, &args.id, None).await?;
-            print_value(workflow, json)
+            print_value(workflow_resume_application(hub.clone(), project_root, &args.id, args.force, None).await?, json)
         }
         WorkflowCommand::ResumeStatus(args) => {
             let workflow = workflows.get(&args.id).await?;
@@ -864,81 +1008,26 @@ pub(crate) async fn handle_workflow(
                 json,
             )
         }
-        WorkflowCommand::Pause(args) => {
-            let workflow = workflows.get(&args.id).await?;
-            if args.dry_run {
-                let workflow_id = workflow.id.clone();
-                return print_value(
-                    dry_run_envelope(
-                        "workflow.pause",
-                        serde_json::json!({"id": &workflow_id}),
-                        "workflow.pause",
-                        vec!["pause workflow execution".to_string()],
-                        &format!(
-                            "rerun 'animus workflow pause --id {} --confirm {}' to apply",
-                            workflow_id, workflow_id
-                        ),
-                    ),
-                    json,
-                );
-            }
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow pause", "--id")?;
-            if json {
-                if let Some(()) = try_workflow_pause_via_control(project_root, &args.id).await? {
-                    let workflow = workflows.get(&args.id).await?;
-                    return print_value(workflow, json);
-                }
-            }
-            let task_store =
-                orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
-            let outcome = dispatch_workflow_event(
+        WorkflowCommand::Pause(args) => print_value(
+            workflow_pause_application(
                 hub.clone(),
-                task_store.as_ref(),
                 project_root,
-                WorkflowEvent::Pause { workflow_id: args.id.clone(), reason_detail: None },
+                WorkflowControlApplicationRequest { id: args.id, confirm: args.confirm, dry_run: args.dry_run },
+                None,
             )
-            .await?;
-            let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
-            print_value(workflow, json)
-        }
-        WorkflowCommand::Cancel(args) => {
-            let workflow = workflows.get(&args.id).await?;
-            if args.dry_run {
-                let workflow_id = workflow.id.clone();
-                return print_value(
-                    dry_run_envelope(
-                        "workflow.cancel",
-                        serde_json::json!({"id": &workflow_id}),
-                        "workflow.cancel",
-                        vec!["cancel workflow execution".to_string()],
-                        &format!(
-                            "rerun 'animus workflow cancel --id {} --confirm {}' to apply",
-                            workflow_id, workflow_id
-                        ),
-                    ),
-                    json,
-                );
-            }
-            ensure_destructive_confirmation(args.confirm.as_deref(), &args.id, "workflow cancel", "--id")?;
-            if json {
-                if let Some(()) = try_workflow_cancel_via_control(project_root, &args.id).await? {
-                    let workflow = workflows.get(&args.id).await?;
-                    return print_value(workflow, json);
-                }
-            }
-            crate::services::runtime::teardown_retained_environment_for_cancel(project_root, &workflow)?;
-            let task_store =
-                orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
-            let outcome = dispatch_workflow_event(
+            .await?,
+            json,
+        ),
+        WorkflowCommand::Cancel(args) => print_value(
+            workflow_cancel_application(
                 hub.clone(),
-                task_store.as_ref(),
                 project_root,
-                WorkflowEvent::Cancel { workflow_id: args.id.clone() },
+                WorkflowControlApplicationRequest { id: args.id, confirm: args.confirm, dry_run: args.dry_run },
+                None,
             )
-            .await?;
-            let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
-            print_value(workflow, json)
-        }
+            .await?,
+            json,
+        ),
         WorkflowCommand::Prune(args) => {
             let filter = orchestrator_core::WorkflowRunPruneFilter {
                 older_than_days: None,
@@ -968,11 +1057,13 @@ pub(crate) async fn handle_workflow(
         }
         WorkflowCommand::Phase { command } => match command {
             WorkflowPhaseCommand::Approve(args) => print_value(
-                phases::approve_manual_phase(hub.clone(), project_root, &args.id, &args.phase, &args.note).await?,
+                workflow_phase_approve_application(hub.clone(), project_root, &args.id, &args.phase, &args.note, None)
+                    .await?,
                 json,
             ),
             WorkflowPhaseCommand::Reject(args) => print_value(
-                phases::reject_manual_phase(hub.clone(), project_root, &args.id, &args.phase, &args.note).await?,
+                workflow_phase_reject_application(hub.clone(), project_root, &args.id, &args.phase, &args.note, None)
+                    .await?,
                 json,
             ),
         },

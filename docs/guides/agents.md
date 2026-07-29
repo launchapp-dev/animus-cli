@@ -44,16 +44,19 @@ the target repo when present.
 Trusted application hosts start an actor-bound server with both
 `--require-actor` and `--actor-json`. Missing or malformed identity fails server
 startup rather than falling back to global scope. The actor-bound router exposes
-only paths that enforce the pin: workflow run/list/get, workflow config get/validate,
-workflow output reads, subject list/get/create/update/batch-create/batch-update/status,
-chat sends, interaction creation/management, and tool discovery. A child command
-cannot override the server actor.
+only paths that enforce the pin: workflow run/list/get/control/execute,
+decisions/checkpoints/manual-phase and config reads, workflow output reads,
+subject list/get/create/update/batch-create/batch-update/next/status,
+interaction creation/management, and tool discovery. A child command cannot
+override the server actor. Workflow controls authorize the persisted owner
+before mutation and lifecycle continuations retain that owner when launching a
+runner.
 
-Subject `next`, queue operations, config writes, and other global tools are
-absent from an actor-bound server. Their pinned protocols cannot yet enforce
-the same authenticated actor, so exposing them would create an identity
-downgrade. Actor-bound subject calls use the v2 subject protocol and never
-fall back to legacy v1 methods.
+Queue operations, config writes, and other global tools are absent from an
+actor-bound server. Their pinned protocols cannot yet enforce the same
+authenticated actor, so exposing them would create an identity downgrade.
+Actor-bound subject calls use the v2 subject protocol and never fall back to
+legacy v1 methods.
 See [Actor-bound application contract](../architecture/actor-bound-application-contract.md).
 
 The total includes both the CLI-shaped `animus.agent.memory.*` wrappers and the
