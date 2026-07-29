@@ -674,11 +674,28 @@ fn save_pm_config(project_root: &str, value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) -> Result<()> {
-    if args.notification_config_json.is_some() && args.notification_config_file.is_some() {
-        anyhow::bail!("--notification-config-json and --notification-config-file cannot be used together");
-    }
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DaemonConfigApplicationRequest {
+    pub(crate) pool_size: Option<usize>,
+    pub(crate) interval_secs: Option<u64>,
+    pub(crate) max_tasks_per_tick: Option<usize>,
+    pub(crate) stale_threshold_hours: Option<u64>,
+    pub(crate) phase_timeout_secs: Option<u64>,
+    pub(crate) max_daily_usd: Option<f64>,
+    pub(crate) silent_threshold_mins: Option<u64>,
+    pub(crate) notification_config: Option<serde_json::Value>,
+    pub(crate) clear_notification_config: bool,
+}
 
+pub(crate) fn daemon_config_application(
+    project_root: &str,
+    request: DaemonConfigApplicationRequest,
+) -> Result<serde_json::Value> {
+    if request.notification_config.is_some() && request.clear_notification_config {
+        return Err(crate::invalid_input_error(
+            "notification_config and clear_notification_config cannot be used together",
+        ));
+    }
     let mut config = load_pm_config(project_root)?;
     if !config.is_object() {
         config = serde_json::json!({});
@@ -687,27 +704,27 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     let mut updated = false;
 
     // Runtime-reconfigurable settings (hot-reloaded by daemon)
-    if let Some(v) = args.pool_size {
+    if let Some(v) = request.pool_size {
         config["pool_size"] = serde_json::json!(v);
         updated = true;
     }
-    if let Some(v) = args.interval_secs {
+    if let Some(v) = request.interval_secs {
         config["interval_secs"] = serde_json::json!(v);
         updated = true;
     }
-    if let Some(v) = args.max_tasks_per_tick {
+    if let Some(v) = request.max_tasks_per_tick {
         config["max_tasks_per_tick"] = serde_json::json!(v);
         updated = true;
     }
-    if let Some(v) = args.stale_threshold_hours {
+    if let Some(v) = request.stale_threshold_hours {
         config["stale_threshold_hours"] = serde_json::json!(v);
         updated = true;
     }
-    if let Some(v) = args.phase_timeout_secs {
+    if let Some(v) = request.phase_timeout_secs {
         config["phase_timeout_secs"] = serde_json::json!(v);
         updated = true;
     }
-    if let Some(v) = args.max_daily_usd {
+    if let Some(v) = request.max_daily_usd {
         // Store the cap as a top-level key the daemon's cost layer reads
         // (`daily_cap::read_max_daily_usd`). A non-positive value persists as
         // an EXPLICIT "uncapped" override (clamped to 0) so it overrides any
@@ -715,27 +732,16 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         config["max_daily_usd"] = serde_json::json!(v.max(0.0));
         updated = true;
     }
-    if let Some(v) = args.silent_threshold_mins {
+    if let Some(v) = request.silent_threshold_mins {
         config["silent_threshold_mins"] = serde_json::json!(v);
         updated = true;
     }
-    if args.clear_notification_config {
+    if request.clear_notification_config {
         clear_notification_config(&mut config);
         updated = true;
     }
 
-    if let Some(raw_json) = args.notification_config_json.as_deref() {
-        let value: serde_json::Value =
-            serde_json::from_str(raw_json).context("failed to parse --notification-config-json")?;
-        config["notification_config"] = value;
-        updated = true;
-    }
-
-    if let Some(config_path) = args.notification_config_file.as_deref() {
-        let raw_json = fs::read_to_string(config_path)
-            .with_context(|| format!("failed to read daemon notification config file at {}", config_path))?;
-        let value: serde_json::Value = serde_json::from_str(raw_json.as_str())
-            .with_context(|| format!("failed to parse daemon notification config file at {}", config_path))?;
+    if let Some(value) = request.notification_config {
         config["notification_config"] = value;
         updated = true;
     }
@@ -746,22 +752,59 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
 
     let notification_config = read_notification_config_from_pm_config(&config);
 
+    Ok(serde_json::json!({
+        "config_path": pm_config_path(project_root).display().to_string(),
+        "pool_size": config.get("pool_size").and_then(serde_json::Value::as_u64),
+        "interval_secs": config.get("interval_secs").and_then(serde_json::Value::as_u64),
+        "max_tasks_per_tick": config.get("max_tasks_per_tick").and_then(serde_json::Value::as_u64),
+        "stale_threshold_hours": config.get("stale_threshold_hours").and_then(serde_json::Value::as_u64),
+        "phase_timeout_secs": config.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
+        "max_daily_usd": config.get("max_daily_usd").and_then(serde_json::Value::as_f64),
+        "silent_threshold_mins": config.get("silent_threshold_mins")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(orchestrator_core::DEFAULT_SILENT_THRESHOLD_MINS),
+        "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
+        "notification_config": notification_config,
+        "updated": updated
+    }))
+}
+
+fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) -> Result<()> {
+    if args.notification_config_json.is_some() && args.notification_config_file.is_some() {
+        return Err(crate::invalid_input_error(
+            "--notification-config-json and --notification-config-file cannot be used together",
+        ));
+    }
+    let notification_config = match (args.notification_config_json, args.notification_config_file) {
+        (Some(raw_json), None) => {
+            Some(serde_json::from_str(&raw_json).context("failed to parse --notification-config-json")?)
+        }
+        (None, Some(config_path)) => {
+            let raw_json = fs::read_to_string(&config_path)
+                .with_context(|| format!("failed to read daemon notification config file at {config_path}"))?;
+            Some(
+                serde_json::from_str(&raw_json)
+                    .with_context(|| format!("failed to parse daemon notification config file at {config_path}"))?,
+            )
+        }
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("conflict checked above"),
+    };
     print_value(
-        serde_json::json!({
-            "config_path": pm_config_path(project_root).display().to_string(),
-            "pool_size": config.get("pool_size").and_then(serde_json::Value::as_u64),
-            "interval_secs": config.get("interval_secs").and_then(serde_json::Value::as_u64),
-            "max_tasks_per_tick": config.get("max_tasks_per_tick").and_then(serde_json::Value::as_u64),
-            "stale_threshold_hours": config.get("stale_threshold_hours").and_then(serde_json::Value::as_u64),
-            "phase_timeout_secs": config.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
-            "max_daily_usd": config.get("max_daily_usd").and_then(serde_json::Value::as_f64),
-            "silent_threshold_mins": config.get("silent_threshold_mins")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(orchestrator_core::DEFAULT_SILENT_THRESHOLD_MINS),
-            "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
-            "notification_config": notification_config,
-            "updated": updated
-        }),
+        daemon_config_application(
+            project_root,
+            DaemonConfigApplicationRequest {
+                pool_size: args.pool_size,
+                interval_secs: args.interval_secs,
+                max_tasks_per_tick: args.max_tasks_per_tick,
+                stale_threshold_hours: args.stale_threshold_hours,
+                phase_timeout_secs: args.phase_timeout_secs,
+                max_daily_usd: args.max_daily_usd,
+                silent_threshold_mins: args.silent_threshold_mins,
+                notification_config,
+                clear_notification_config: args.clear_notification_config,
+            },
+        )?,
         json,
     )
 }

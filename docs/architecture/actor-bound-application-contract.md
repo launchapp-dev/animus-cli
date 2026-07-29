@@ -204,6 +204,11 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
 - Output monitor/JSONL/artifact reads: these inputs are not yet guaranteed to
   identify an actor-owned workflow, so they remain management-only even though
   their MCP handlers now use typed in-process services.
+- Cost/budget and daemon configuration: their MCP handlers use shared typed
+  in-process services, including one daemon-configuration write path for the
+  fleet daily budget. The underlying cost state and daemon configuration are
+  still global stores with no actor field or authorization context, so these
+  tools remain management-only.
 - MCP resources: list/read resource requests need the same typed actor/request
   context and backend enforcement.
 

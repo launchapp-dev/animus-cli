@@ -1,6 +1,6 @@
 use super::{
-    push_bool_set, push_opt, push_opt_num, push_opt_usize, DaemonConfigSetInput, DaemonEventsInput, DaemonLogsInput,
-    DaemonObserveInput, DaemonStartInput, DEFAULT_DAEMON_EVENTS_LIMIT, MAX_DAEMON_EVENTS_LIMIT,
+    push_bool_set, push_opt, push_opt_num, push_opt_usize, DaemonEventsInput, DaemonLogsInput, DaemonObserveInput,
+    DaemonStartInput, DEFAULT_DAEMON_EVENTS_LIMIT, MAX_DAEMON_EVENTS_LIMIT,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -16,25 +16,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
-    args
-}
-
-pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<String> {
-    let mut args = vec!["daemon".to_string(), "config".to_string()];
-    push_opt_usize(&mut args, "--pool-size", input.pool_size);
-    push_opt_num(&mut args, "--interval-secs", input.interval_secs);
-    push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
-    push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
-    push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
-    if let Some(max_daily_usd) = input.max_daily_usd {
-        args.push("--max-daily-usd".to_string());
-        args.push(max_daily_usd.to_string());
-    }
-    push_opt(&mut args, "--notification-config-json", input.notification_config_json.clone());
-    push_opt(&mut args, "--notification-config-file", input.notification_config_file.clone());
-    if input.clear_notification_config {
-        args.push("--clear-notification-config".to_string());
-    }
     args
 }
 
@@ -113,24 +94,6 @@ pub(super) fn build_daemon_logs_result(default_project_root: &str, input: Daemon
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn build_daemon_config_set_args_includes_notification_config_flags() {
-        let input = DaemonConfigSetInput {
-            notification_config_json: Some("{\"schema\":\"animus.daemon-notification-config.v1\"}".to_string()),
-            notification_config_file: Some(".animus/notification-config.json".to_string()),
-            clear_notification_config: true,
-            ..Default::default()
-        };
-
-        let args = build_daemon_config_set_args(&input);
-
-        assert!(args.contains(&"--notification-config-json".to_string()));
-        assert!(args.contains(&"{\"schema\":\"animus.daemon-notification-config.v1\"}".to_string()));
-        assert!(args.contains(&"--notification-config-file".to_string()));
-        assert!(args.contains(&".animus/notification-config.json".to_string()));
-        assert!(args.contains(&"--clear-notification-config".to_string()));
-    }
 
     #[test]
     fn build_daemon_observe_args_defaults_minimal() {

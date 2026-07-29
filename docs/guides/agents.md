@@ -229,6 +229,7 @@ dispatch control.
 { "pool_size": 3, "auto_install": true }                    // animus.daemon.start (always detaches)
 { "skip_preflight": true }                  // animus.daemon.start (dev escape hatch)
 { "pool_size": 4, "interval_secs": 10 }     // animus.daemon.config-set
+{ "notification_config": { "desktop": { "enabled": true } } } // structured config-set
 { "limit": 50 }                              // animus.daemon.events
 { "project_root": "/repo" }                  // animus.queue.list / stats
 { "task_id": "TASK-001" }                    // animus.queue.enqueue (task)
@@ -242,6 +243,14 @@ dispatch control.
 `auto_install` when you want the daemon to remediate missing required plugins
 from its recommended defaults before continuing; use `skip_preflight` only for
 dev or intentionally degraded runs.
+
+Daemon configuration and all cost/budget MCP tools execute through typed
+in-process services. `animus.budget.set` shares the daemon configuration write
+path, so the MCP and CLI surfaces cannot drift. Prefer the structured
+`notification_config` object; `notification_config_json` and
+`notification_config_file` remain mutually exclusive compatibility inputs.
+These fleet-wide stores are management-only until their protocols support
+actor-partitioned authorization.
 
 ## Output and Logs Operations
 
