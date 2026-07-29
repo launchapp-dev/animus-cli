@@ -8,7 +8,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_queue_list(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.queue.list", vec!["queue".to_string(), "list".to_string()], params.0.project_root).await
+        self.queue_list_inproc(params.0.project_root).await
     }
 
     #[tool(
@@ -17,7 +17,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_queue_stats(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.queue.stats", vec!["queue".to_string(), "stats".to_string()], params.0.project_root).await
+        self.queue_stats_inproc(params.0.project_root).await
     }
 
     #[tool(
@@ -26,9 +26,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<QueueEnqueueInput>()
     )]
     async fn ao_queue_enqueue(&self, params: Parameters<QueueEnqueueInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_queue_enqueue_args(&input);
-        self.run_tool("animus.queue.enqueue", args, input.project_root).await
+        self.queue_enqueue_inproc(params.0).await
     }
 
     #[tool(
@@ -37,9 +35,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<QueueSubjectInput>()
     )]
     async fn ao_queue_hold(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_queue_subject_args("hold", &input);
-        self.run_tool("animus.queue.hold", args, input.project_root).await
+        self.queue_bulk_inproc("animus.queue.hold", crate::services::operations::QueueBulkVerb::Hold, params.0).await
     }
 
     #[tool(
@@ -48,9 +44,8 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<QueueSubjectInput>()
     )]
     async fn ao_queue_release(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_queue_subject_args("release", &input);
-        self.run_tool("animus.queue.release", args, input.project_root).await
+        self.queue_bulk_inproc("animus.queue.release", crate::services::operations::QueueBulkVerb::Release, params.0)
+            .await
     }
 
     #[tool(
@@ -59,9 +54,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<QueueSubjectInput>()
     )]
     async fn ao_queue_drop(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_queue_subject_args("drop", &input);
-        self.run_tool("animus.queue.drop", args, input.project_root).await
+        self.queue_bulk_inproc("animus.queue.drop", crate::services::operations::QueueBulkVerb::Drop, params.0).await
     }
 
     #[tool(
@@ -70,8 +63,6 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<QueueReorderInput>()
     )]
     async fn ao_queue_reorder(&self, params: Parameters<QueueReorderInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_queue_reorder_args(&input);
-        self.run_tool("animus.queue.reorder", args, input.project_root).await
+        self.queue_reorder_inproc(params.0).await
     }
 }
