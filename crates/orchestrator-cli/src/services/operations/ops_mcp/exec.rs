@@ -1,5 +1,5 @@
 use super::exec_errors::{batch_item_error_from_result, build_tool_error_payload, extract_cli_success_data};
-use super::{build_guarded_list_result, AoMcpServer, BatchItemExec, ListGuardInput, OnError, BATCH_RESULT_SCHEMA};
+use super::{AoMcpServer, BatchItemExec, OnError, BATCH_RESULT_SCHEMA};
 use animus_actor::Actor;
 use anyhow::Result;
 use orchestrator_daemon_runtime::{Audit, AuditActor, AuditEvent, AuditEventKind};
@@ -72,39 +72,6 @@ impl AoMcpServer {
                         "tool": tool_name,
                         "result": data,
                     })))
-                } else {
-                    Ok(CallToolResult::structured_error(build_tool_error_payload(tool_name, &result)))
-                }
-            }
-            Err(err) => Ok(CallToolResult::structured_error(json!({
-                "tool": tool_name,
-                "error": err.to_string(),
-            }))),
-        }
-    }
-
-    pub(super) async fn run_list_tool(
-        &self,
-        tool_name: &str,
-        requested_args: Vec<String>,
-        project_root_override: Option<String>,
-        guard: ListGuardInput,
-    ) -> Result<CallToolResult, McpError> {
-        self.audit_actor_tool_invocation(tool_name, &requested_args);
-        match self.execute_ao(requested_args, project_root_override).await {
-            Ok(result) => {
-                if result.success {
-                    let data = extract_cli_success_data(result.stdout_json);
-                    match build_guarded_list_result(tool_name, data, guard) {
-                        Ok(shaped) => Ok(CallToolResult::structured(json!({
-                            "tool": tool_name,
-                            "result": shaped,
-                        }))),
-                        Err(error) => Ok(CallToolResult::structured_error(json!({
-                            "tool": tool_name,
-                            "error": error.to_string(),
-                        }))),
-                    }
                 } else {
                     Ok(CallToolResult::structured_error(build_tool_error_payload(tool_name, &result)))
                 }

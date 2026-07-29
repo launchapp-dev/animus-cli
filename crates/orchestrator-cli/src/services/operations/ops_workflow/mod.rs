@@ -447,22 +447,130 @@ fn emit_daemon_event(project_root: &str, event_type: &str, data: Value) -> Resul
     Ok(())
 }
 
-fn build_workflow_query(args: crate::WorkflowListArgs) -> Result<WorkflowQuery> {
+#[derive(Debug, Clone)]
+pub(crate) struct WorkflowListApplicationRequest {
+    pub(crate) status: Option<String>,
+    pub(crate) workflow_ref: Option<String>,
+    pub(crate) subject_id: Option<String>,
+    pub(crate) phase_id: Option<String>,
+    pub(crate) search: Option<String>,
+    pub(crate) sort: Option<String>,
+    pub(crate) limit: Option<usize>,
+    pub(crate) offset: usize,
+}
+
+impl From<crate::WorkflowListArgs> for WorkflowListApplicationRequest {
+    fn from(args: crate::WorkflowListArgs) -> Self {
+        Self {
+            status: args.status,
+            workflow_ref: args.workflow_ref,
+            subject_id: args.subject_id,
+            phase_id: args.phase_id,
+            search: args.search,
+            sort: args.sort,
+            limit: args.limit,
+            offset: args.offset,
+        }
+    }
+}
+
+fn build_workflow_query(request: WorkflowListApplicationRequest) -> Result<WorkflowQuery> {
     Ok(WorkflowQuery {
         filter: WorkflowFilter {
-            status: parse_workflow_status_opt(args.status.as_deref())?,
-            workflow_ref: args.workflow_ref,
+            status: parse_workflow_status_opt(request.status.as_deref())
+                .map_err(|error| crate::invalid_input_error(error.to_string()))?,
+            workflow_ref: request.workflow_ref,
             // The workflow record's subject-linkage column stores the id in the
             // exact form the dispatch carried (built-in kinds keep the qualified
             // `task:TASK-001`; the filter is an exact match), so pass the
             // `--subject-id` value through verbatim rather than normalizing it.
-            task_id: args.subject_id,
-            phase_id: args.phase_id,
-            search_text: args.search,
+            task_id: request.subject_id,
+            phase_id: request.phase_id,
+            search_text: request.search,
         },
-        page: ListPageRequest { limit: args.limit, offset: args.offset },
-        sort: parse_workflow_query_sort_opt(args.sort.as_deref())?.unwrap_or_default(),
+        page: ListPageRequest { limit: request.limit, offset: request.offset },
+        sort: parse_workflow_query_sort_opt(request.sort.as_deref())
+            .map_err(|error| crate::invalid_input_error(error.to_string()))?
+            .unwrap_or_default(),
     })
+}
+
+pub(crate) async fn workflow_list_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    request: WorkflowListApplicationRequest,
+    actor: Option<&Actor>,
+) -> Result<Vec<Value>> {
+    let requested_limit = request.limit;
+    let requested_offset = request.offset;
+    let mut query = build_workflow_query(request)?;
+    if actor.is_some() {
+        // Ownership must be applied before application pagination.
+        query.page = ListPageRequest { limit: None, offset: 0 };
+    }
+    let page = hub.workflows().query(query).await?;
+    if let Some(actor) = actor {
+        let runtime =
+            animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, Some(actor));
+        return actor_owned_workflow_page(project_root, page.items, actor, requested_offset, requested_limit)
+            .into_iter()
+            .map(|(workflow, owner)| workflow_value_for_application(workflow, &runtime, Some(&owner)))
+            .collect();
+    }
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load(project_root);
+    page.items.into_iter().map(|workflow| workflow_value_for_application(workflow, &runtime, None)).collect()
+}
+
+pub(crate) async fn workflow_get_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let owner = authorized_workflow_actor(project_root, workflow_id, actor)?;
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+    let workflow = hub.workflows().get(workflow_id).await?;
+    workflow_value_for_application(workflow, &runtime, owner.as_ref())
+}
+
+pub(crate) async fn workflow_decisions_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    ensure_workflow_actor_access(project_root, workflow_id, actor)?;
+    Ok(serde_json::to_value(hub.workflows().decisions(workflow_id).await?)?)
+}
+
+pub(crate) async fn workflow_checkpoints_list_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    workflow_id: &str,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    ensure_workflow_actor_access(project_root, workflow_id, actor)?;
+    Ok(serde_json::to_value(hub.workflows().list_checkpoints(workflow_id).await?)?)
+}
+
+pub(crate) fn workflow_phases_list_application(project_root: &str) -> Result<Value> {
+    phases::list_phase_payload(project_root)
+}
+
+pub(crate) fn workflow_phase_get_application(project_root: &str, phase_id: &str) -> Result<Value> {
+    phases::phase_payload(project_root, phase_id)
+}
+
+pub(crate) fn workflow_definitions_list_application(project_root: &str) -> Result<Value> {
+    Ok(serde_json::to_value(orchestrator_core::load_workflow_config(Path::new(project_root), None)?.workflows)?)
+}
+
+pub(crate) fn workflow_config_get_application(project_root: &str, actor: Option<&Actor>) -> Result<Value> {
+    Ok(config::get_workflow_config_payload(project_root, actor))
+}
+
+pub(crate) fn workflow_config_validate_application(project_root: &str, actor: Option<&Actor>) -> Result<Value> {
+    Ok(config::validate_workflow_config_payload(project_root, actor))
 }
 
 pub(crate) async fn handle_workflow(
@@ -512,43 +620,29 @@ pub(crate) async fn handle_workflow(
             }
             let requested_limit = args.limit;
             let requested_offset = args.offset;
-            let mut query = build_workflow_query(args)?;
+            let request = WorkflowListApplicationRequest::from(args);
+            if json {
+                return print_value(
+                    workflow_list_application(hub.clone(), project_root, request, actor.as_ref()).await?,
+                    true,
+                );
+            }
+            let mut query = build_workflow_query(request)?;
             if actor.is_some() {
-                // Ownership must be applied before application pagination.
-                // Fetch the filtered/sorted local set without DB paging, then
-                // partition and paginate the actor-visible rows.
                 query.page = ListPageRequest { limit: None, offset: 0 };
             }
             let page = workflows.query(query).await?;
-            if let Some(actor) = actor.as_ref() {
-                let owned =
-                    actor_owned_workflow_page(project_root, page.items, actor, requested_offset, requested_limit);
-                if !json {
-                    let items: Vec<_> = owned.into_iter().map(|(workflow, _)| workflow).collect();
-                    print_workflow_list_table(&items);
-                    return Ok(());
+            let items = match actor.as_ref() {
+                Some(actor) => {
+                    actor_owned_workflow_page(project_root, page.items, actor, requested_offset, requested_limit)
+                        .into_iter()
+                        .map(|(workflow, _)| workflow)
+                        .collect()
                 }
-                let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(
-                    project_root,
-                    Some(actor),
-                );
-                let values = owned
-                    .into_iter()
-                    .map(|(workflow, owner)| workflow_value_for_application(workflow, &runtime, Some(&owner)))
-                    .collect::<Result<Vec<_>>>()?;
-                return print_value(values, true);
-            }
-            if !json {
-                print_workflow_list_table(&page.items);
-                return Ok(());
-            }
-            let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load(project_root);
-            let values = page
-                .items
-                .into_iter()
-                .map(|workflow| workflow_value_for_application(workflow, &runtime, None))
-                .collect::<Result<Vec<_>>>()?;
-            print_value(values, json)
+                None => page.items,
+            };
+            print_workflow_list_table(&items);
+            Ok(())
         }
         WorkflowCommand::Get(args) => {
             let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
@@ -562,18 +656,22 @@ pub(crate) async fn handle_workflow(
                     return print_value(workflow_value_for_application(run, &runtime, owner.as_ref())?, true);
                 }
             }
-            let workflow = workflows.get(&args.id).await?;
-            match owner.as_ref() {
-                Some(owner) if json => {
-                    print_value(workflow_value_for_application(workflow, &runtime, Some(owner))?, true)
-                }
-                None if json => print_value(workflow_value_for_application(workflow, &runtime, None)?, true),
-                _ => print_value(workflow, json),
+            if json {
+                return print_value(
+                    workflow_get_application(hub.clone(), project_root, &args.id, actor.as_ref()).await?,
+                    true,
+                );
             }
+            print_value(workflows.get(&args.id).await?, false)
         }
-        WorkflowCommand::Decisions(args) => print_value(workflows.decisions(&args.id).await?, json),
+        WorkflowCommand::Decisions(args) => {
+            print_value(workflow_decisions_application(hub.clone(), project_root, &args.id, None).await?, json)
+        }
         WorkflowCommand::Checkpoints { command } => match command {
-            WorkflowCheckpointCommand::List(args) => print_value(workflows.list_checkpoints(&args.id).await?, json),
+            WorkflowCheckpointCommand::List(args) => print_value(
+                workflow_checkpoints_list_application(hub.clone(), project_root, &args.id, None).await?,
+                json,
+            ),
             WorkflowCheckpointCommand::Get(args) => {
                 print_value(workflows.get_checkpoint(&args.id, args.checkpoint).await?, json)
             }
@@ -879,8 +977,10 @@ pub(crate) async fn handle_workflow(
             ),
         },
         WorkflowCommand::Phases { command } => match command {
-            WorkflowPhasesCommand::List => print_value(phases::list_phase_payload(project_root)?, json),
-            WorkflowPhasesCommand::Get(args) => print_value(phases::phase_payload(project_root, &args.phase)?, json),
+            WorkflowPhasesCommand::List => print_value(workflow_phases_list_application(project_root)?, json),
+            WorkflowPhasesCommand::Get(args) => {
+                print_value(workflow_phase_get_application(project_root, &args.phase)?, json)
+            }
             WorkflowPhasesCommand::Upsert(args) => {
                 let definition: orchestrator_core::PhaseExecutionDefinition =
                     serde_json::from_str(&args.input_json).with_context(|| {
@@ -902,10 +1002,7 @@ pub(crate) async fn handle_workflow(
             }
         },
         WorkflowCommand::Definitions { command } => match command {
-            WorkflowDefinitionsCommand::List => {
-                let wf_config = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
-                print_value(wf_config.workflows, json)
-            }
+            WorkflowDefinitionsCommand::List => print_value(workflow_definitions_list_application(project_root)?, json),
             WorkflowDefinitionsCommand::Upsert(args) => {
                 let workflow: orchestrator_core::WorkflowDefinition =
                     serde_json::from_str(&args.input_json).with_context(|| {
@@ -917,11 +1014,11 @@ pub(crate) async fn handle_workflow(
         WorkflowCommand::Config { command } => match command {
             WorkflowConfigCommand::Get(args) => {
                 let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
-                print_value(config::get_workflow_config_payload(project_root, actor.as_ref()), json)
+                print_value(workflow_config_get_application(project_root, actor.as_ref())?, json)
             }
             WorkflowConfigCommand::Validate(args) => {
                 let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
-                let payload = config::validate_workflow_config_payload(project_root, actor.as_ref());
+                let payload = workflow_config_validate_application(project_root, actor.as_ref())?;
                 if json {
                     print_value(payload, json)
                 } else {
