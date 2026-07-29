@@ -17,7 +17,7 @@ use crate::{print_value, LogsCommand, LogsTailArgs};
 /// the wire branch projects back into the same response shape the
 /// in-tree branch emits.
 #[derive(Debug, Serialize)]
-struct WireLogEntryView {
+pub(crate) struct WireLogEntryView {
     ts: String,
     level: String,
     cat: String,
@@ -29,7 +29,7 @@ struct WireLogEntryView {
 }
 
 #[derive(Debug, Serialize)]
-struct LogsTailResponse {
+pub(crate) struct LogsTailResponse {
     backend: &'static str,
     plugin_name: Option<String>,
     project_root: String,
@@ -41,7 +41,7 @@ struct LogsTailResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct WireLogsTailResponse {
+pub(crate) struct WireLogsTailResponse {
     backend: &'static str,
     plugin_name: Option<String>,
     project_root: String,
@@ -49,18 +49,99 @@ struct WireLogsTailResponse {
     entries: Vec<WireLogEntryView>,
 }
 
-pub(crate) async fn handle_logs(command: LogsCommand, project_root: &str, json: bool) -> Result<()> {
-    match command {
-        LogsCommand::Tail(args) => handle_logs_tail(args, project_root, json).await,
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub(crate) enum LogsTailApplicationResponse {
+    Local(LogsTailResponse),
+    Wire(WireLogsTailResponse),
+}
+
+impl LogsTailApplicationResponse {
+    fn entries_are_empty(&self) -> bool {
+        match self {
+            Self::Local(response) => response.entries.is_empty(),
+            Self::Wire(response) => response.entries.is_empty(),
+        }
+    }
+
+    fn local_plugin_fallback(&self) -> Option<&str> {
+        match self {
+            Self::Local(response) if response.backend == "plugin" && response.transport == "local" => {
+                response.plugin_name.as_deref()
+            }
+            _ => None,
+        }
+    }
+
+    fn render_human(&self) {
+        match self {
+            Self::Local(response) => {
+                for entry in &response.entries {
+                    let plugin_suffix =
+                        entry.provider.as_deref().map(|provider| format!(" [{provider}]")).unwrap_or_default();
+                    println!("{} {:>5} {}{} :: {}", entry.ts, entry.level, entry.cat, plugin_suffix, entry.msg);
+                }
+            }
+            Self::Wire(response) => {
+                for entry in &response.entries {
+                    let plugin_suffix =
+                        entry.provider.as_deref().map(|provider| format!(" [{provider}]")).unwrap_or_default();
+                    println!("{} {:>5} {}{} :: {}", entry.ts, entry.level, entry.cat, plugin_suffix, entry.msg);
+                }
+            }
+        }
     }
 }
 
-async fn handle_logs_tail(args: LogsTailArgs, project_root: &str, json: bool) -> Result<()> {
-    let level = parse_level(&args.level)?;
-    let since_duration = parse_duration(&args.since)?;
+#[derive(Debug, Clone)]
+pub(crate) struct LogsTailApplicationRequest {
+    pub(crate) plugin: Option<String>,
+    pub(crate) level: String,
+    pub(crate) since: String,
+    pub(crate) limit: usize,
+}
+
+impl From<LogsTailArgs> for LogsTailApplicationRequest {
+    fn from(args: LogsTailArgs) -> Self {
+        Self { plugin: args.plugin, level: args.level, since: args.since, limit: args.limit }
+    }
+}
+
+pub(crate) async fn handle_logs(command: LogsCommand, project_root: &str, json: bool) -> Result<()> {
+    match command {
+        LogsCommand::Tail(args) => {
+            let request = LogsTailApplicationRequest::from(args);
+            let response = logs_tail_application(request.clone(), project_root).await?;
+            if json {
+                return print_value(response, true);
+            }
+            if let Some(plugin) = response.local_plugin_fallback() {
+                eprintln!(
+                    "note: active backend is plugin '{}' but daemon is not running; \
+                     reading in-tree events.jsonl. Start the daemon (`animus daemon start`) \
+                     to route through the plugin.",
+                    plugin
+                );
+            }
+            if response.entries_are_empty() {
+                print_empty_logs_hint(&request.since, &request.level);
+            }
+            response.render_human();
+            Ok(())
+        }
+    }
+}
+
+pub(crate) async fn logs_tail_application(
+    request: LogsTailApplicationRequest,
+    project_root: &str,
+) -> Result<LogsTailApplicationResponse> {
+    let level = parse_level(&request.level).map_err(|error| crate::invalid_input_error(error.to_string()))?;
+    let since_duration =
+        parse_duration(&request.since).map_err(|error| crate::invalid_input_error(error.to_string()))?;
     let since_dt = Utc::now() - since_duration;
     let since_ts = since_dt.to_rfc3339();
-    let limit = args.limit.max(1);
+    let limit = request.limit.max(1);
 
     let resolution = resolve_log_storage_dispatch(Path::new(project_root))?;
     let backend_label: &'static str = match resolution.selected.as_ref() {
@@ -76,21 +157,15 @@ async fn handle_logs_tail(args: LogsTailArgs, project_root: &str, json: bool) ->
     // down: fall back to direct events.jsonl read so `animus logs tail`
     // keeps working without a daemon process.
     if let Some(entries) =
-        try_daemon_logs_via_control(project_root, level, &since_dt, args.plugin.as_deref(), limit).await?
+        try_daemon_logs_via_control(project_root, level, &since_dt, request.plugin.as_deref(), limit).await?
     {
-        if entries.is_empty() && !json {
-            print_empty_logs_hint(&args.since, &args.level);
-        }
-        return emit_wire_response(
-            WireLogsTailResponse {
-                backend: backend_label,
-                plugin_name,
-                project_root: project_root_for_response,
-                transport: "wire",
-                entries,
-            },
-            json,
-        );
+        return Ok(LogsTailApplicationResponse::Wire(WireLogsTailResponse {
+            backend: backend_label,
+            plugin_name,
+            project_root: project_root_for_response,
+            transport: "wire",
+            entries,
+        }));
     }
 
     // Daemon-down fallback: open events.jsonl directly through the
@@ -98,47 +173,28 @@ async fn handle_logs_tail(args: LogsTailArgs, project_root: &str, json: bool) ->
     match resolution.selected.as_ref() {
         LogStorageDispatch::InTree { project_root: pr } => {
             let logger = Logger::for_project(pr);
-            let entries = read_in_tree_entries(&logger, limit, level, since_ts.as_str(), args.plugin.as_deref());
-            if entries.is_empty() && !json {
-                print_empty_logs_hint(&args.since, &args.level);
-            }
-            emit_response(
-                LogsTailResponse {
-                    backend: "in_tree",
-                    plugin_name: None,
-                    project_root: pr.display().to_string(),
-                    transport: "local",
-                    entries,
-                },
-                json,
-            )
+            let entries = read_in_tree_entries(&logger, limit, level, since_ts.as_str(), request.plugin.as_deref());
+            Ok(LogsTailApplicationResponse::Local(LogsTailResponse {
+                backend: "in_tree",
+                plugin_name: None,
+                project_root: pr.display().to_string(),
+                transport: "local",
+                entries,
+            }))
         }
         LogStorageDispatch::Plugin { project_root: pr, plugin } => {
             // Daemon down: we can't reach the plugin, so degrade to the
-            // in-tree fallback file and tell the operator what happened.
+            // in-tree fallback file. The CLI renderer tells the operator what
+            // happened; typed application callers receive transport="local".
             let logger = Logger::for_project(pr);
-            let entries = read_in_tree_entries(&logger, limit, level, since_ts.as_str(), args.plugin.as_deref());
-            if !json {
-                eprintln!(
-                    "note: active backend is plugin '{}' but daemon is not running; \
-                     reading in-tree events.jsonl. Start the daemon (`animus daemon start`) \
-                     to route through the plugin.",
-                    plugin.name
-                );
-                if entries.is_empty() {
-                    print_empty_logs_hint(&args.since, &args.level);
-                }
-            }
-            emit_response(
-                LogsTailResponse {
-                    backend: "plugin",
-                    plugin_name: Some(plugin.name.clone()),
-                    project_root: pr.display().to_string(),
-                    transport: "local",
-                    entries,
-                },
-                json,
-            )
+            let entries = read_in_tree_entries(&logger, limit, level, since_ts.as_str(), request.plugin.as_deref());
+            Ok(LogsTailApplicationResponse::Local(LogsTailResponse {
+                backend: "plugin",
+                plugin_name: Some(plugin.name.clone()),
+                project_root: pr.display().to_string(),
+                transport: "local",
+                entries,
+            }))
         }
     }
 }
@@ -211,30 +267,6 @@ fn print_empty_logs_hint(since: &str, level: &str) {
         "no log entries in the last {since} (default --since 1h, --level {level}); \
          try --since 24h or --level debug"
     );
-}
-
-fn emit_response(response: LogsTailResponse, json: bool) -> Result<()> {
-    if json {
-        print_value(response, true)
-    } else {
-        for entry in &response.entries {
-            let plugin_suffix = entry.provider.as_deref().map(|p| format!(" [{}]", p)).unwrap_or_default();
-            println!("{} {:>5} {}{} :: {}", entry.ts, entry.level, entry.cat, plugin_suffix, entry.msg);
-        }
-        Ok(())
-    }
-}
-
-fn emit_wire_response(response: WireLogsTailResponse, json: bool) -> Result<()> {
-    if json {
-        print_value(response, true)
-    } else {
-        for entry in &response.entries {
-            let plugin_suffix = entry.provider.as_deref().map(|p| format!(" [{}]", p)).unwrap_or_default();
-            println!("{} {:>5} {}{} :: {}", entry.ts, entry.level, entry.cat, plugin_suffix, entry.msg);
-        }
-        Ok(())
-    }
 }
 
 fn read_in_tree_entries(

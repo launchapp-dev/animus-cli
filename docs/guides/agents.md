@@ -252,11 +252,35 @@ path, so the MCP and CLI surfaces cannot drift. Prefer the structured
 These fleet-wide stores are management-only until their protocols support
 actor-partitioned authorization.
 
+## Environment Operations
+
+Environment list/get/teardown/reap tools share typed in-process application
+services with the CLI. The installed environment plugin still owns the remote
+node lifecycle through its typed protocol; MCP no longer rebuilds CLI argv or
+spawns a child Animus process.
+
+```json
+{}                                                   // animus.environment.list
+{ "id": "animus-run-abc123" }                        // animus.environment.get
+{ "id": "animus-run-abc123" }                        // animus.environment.teardown
+{ "dry_run": true, "older_than_secs": 3600 }         // animus.environment.reap preview
+{ "all": true, "force": true }                       // also reap healthy orphans
+```
+
+These tools remain management-only until the environment node-management
+protocol carries an authenticated actor and the owning plugin enforces its
+user/tenant partition.
+
 ## Output and Logs Operations
 
 Use output tools for run artifacts and structured execution streams. Use
 `animus.logs.tail` for recent daemon-level logs. This MCP tool is a bounded
 pull, not a live follow stream.
+
+Log tail also executes through a shared typed in-process service. It preserves
+the daemon control-wire path and local `events.jsonl` fallback without a child
+CLI. It remains management-only because project logs and the log-storage
+protocol are not actor-partitioned.
 
 Output reads execute through typed in-process services rather than a child CLI.
 Actor-bound application hosts expose run and phase-output reads only; both

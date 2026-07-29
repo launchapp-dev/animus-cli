@@ -1,10 +1,9 @@
 //! `animus.environment.*` MCP tools.
 //!
 //! Surface the CLI's `animus environment {list,get,teardown,reap}` node-
-//! management verbs through MCP so agents + the portal can inspect and reap
-//! ephemeral run nodes without shelling out. Mirrors the logs_tools pattern —
-//! typed input struct, args builder, `run_tool` shell-out — so the environment
-//! plugin's node-management logic is shared between the CLI and MCP callers.
+//! management verbs through typed application services so agents + the portal
+//! can inspect and reap ephemeral run nodes without a child CLI. The installed
+//! environment plugin remains the intentional out-of-process state owner.
 
 use super::*;
 
@@ -57,43 +56,6 @@ pub(super) struct EnvironmentReapInput {
     pub(super) project_root: Option<String>,
 }
 
-pub(super) fn build_environment_list_args(input: &EnvironmentListInput) -> Vec<String> {
-    let mut args = vec!["environment".to_string(), "list".to_string()];
-    push_opt(&mut args, "--environment", input.environment.clone());
-    args
-}
-
-pub(super) fn build_environment_get_args(input: &EnvironmentGetInput) -> Vec<String> {
-    let mut args = vec!["environment".to_string(), "get".to_string(), input.id.clone()];
-    push_opt(&mut args, "--environment", input.environment.clone());
-    args
-}
-
-pub(super) fn build_environment_teardown_args(input: &EnvironmentTeardownInput) -> Vec<String> {
-    let mut args = vec!["environment".to_string(), "teardown".to_string(), input.id.clone()];
-    push_opt(&mut args, "--environment", input.environment.clone());
-    args
-}
-
-pub(super) fn build_environment_reap_args(input: &EnvironmentReapInput) -> Vec<String> {
-    let mut args = vec!["environment".to_string(), "reap".to_string()];
-    if input.all {
-        args.push("--all".to_string());
-    }
-    if input.force {
-        args.push("--force".to_string());
-    }
-    if input.dry_run {
-        args.push("--dry-run".to_string());
-    }
-    if let Some(secs) = input.older_than_secs {
-        args.push("--older-than-secs".to_string());
-        args.push(secs.to_string());
-    }
-    push_opt(&mut args, "--environment", input.environment.clone());
-    args
-}
-
 #[tool_router(router = environment_tool_router, vis = "pub(super)")]
 impl AoMcpServer {
     #[tool(
@@ -102,10 +64,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<EnvironmentListInput>()
     )]
     async fn ao_environment_list(&self, params: Parameters<EnvironmentListInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_environment_list_args(&input);
-        self.run_tool("animus.environment.list", args, project_root).await
+        Ok(self.environment_list_inproc(params.0))
     }
 
     #[tool(
@@ -114,10 +73,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<EnvironmentGetInput>()
     )]
     async fn ao_environment_get(&self, params: Parameters<EnvironmentGetInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_environment_get_args(&input);
-        self.run_tool("animus.environment.get", args, project_root).await
+        Ok(self.environment_get_inproc(params.0))
     }
 
     #[tool(
@@ -129,10 +85,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<EnvironmentTeardownInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_environment_teardown_args(&input);
-        self.run_tool("animus.environment.teardown", args, project_root).await
+        Ok(self.environment_teardown_inproc(params.0))
     }
 
     #[tool(
@@ -141,9 +94,6 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<EnvironmentReapInput>()
     )]
     async fn ao_environment_reap(&self, params: Parameters<EnvironmentReapInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let project_root = input.project_root.clone();
-        let args = build_environment_reap_args(&input);
-        self.run_tool("animus.environment.reap", args, project_root).await
+        Ok(self.environment_reap_inproc(params.0))
     }
 }

@@ -51,6 +51,8 @@ mod daemon_inproc;
 mod daemon_inputs;
 #[path = "ops_mcp/daemon_tools.rs"]
 mod daemon_tools;
+#[path = "ops_mcp/environment_inproc.rs"]
+mod environment_inproc;
 #[path = "ops_mcp/environment_tools.rs"]
 mod environment_tools;
 #[path = "ops_mcp/exec.rs"]
@@ -67,6 +69,8 @@ mod list_guard;
 mod list_profiles;
 #[path = "ops_mcp/list_types.rs"]
 mod list_types;
+#[path = "ops_mcp/logs_inproc.rs"]
+mod logs_inproc;
 #[path = "ops_mcp/logs_tools.rs"]
 mod logs_tools;
 #[path = "ops_mcp/memory_tools.rs"]
