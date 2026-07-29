@@ -244,6 +244,13 @@ dispatch control.
 from its recommended defaults before continuing; use `skip_preflight` only for
 dev or intentionally degraded runs.
 
+Daemon start/stop/pause/resume/observe and the existing status, health, events,
+agents, logs, and configuration tools all use typed in-process application
+services. Detached start still launches the daemon process itself; the removed
+process was only the redundant child CLI between MCP and that service. Daemon
+management remains unavailable to actor-bound agent servers because daemon
+lifecycle and project-wide observation are not user/tenant partitioned.
+
 Daemon configuration and all cost/budget MCP tools execute through typed
 in-process services. `animus.budget.set` shares the daemon configuration write
 path, so the MCP and CLI surfaces cannot drift. Prefer the structured

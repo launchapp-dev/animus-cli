@@ -9,6 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::DaemonStatus;
 use orchestrator_daemon_runtime::DaemonRuntimeState;
+use serde::Serialize;
 
 const NOTIFICATION_CONFIG_SCHEMA: &str = "animus.daemon-notification-config.v1";
 const NOTIFICATION_CONFIG_PM_KEY: &str = "notification_config";
@@ -57,6 +58,37 @@ struct AutonomousDaemonSpawn {
     child: Child,
     log_path: PathBuf,
     startup_log_offset: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DaemonStartApplicationView {
+    message: &'static str,
+    autonomous: bool,
+    detached: bool,
+    daemon_pid: u32,
+    log_path: String,
+    #[serde(skip)]
+    pub(crate) already_running: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DaemonStopApplicationView {
+    message: &'static str,
+    graceful: bool,
+    shutdown_timeout_secs: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DaemonLifecycleApplicationView {
+    pub(crate) message: &'static str,
+}
+
+#[derive(Debug)]
+pub(crate) struct DaemonObserveApplicationRequest {
+    pub(crate) since: Option<String>,
+    pub(crate) source: Option<ObserveSource>,
+    pub(crate) workflow: Option<String>,
+    pub(crate) limit: usize,
 }
 
 pub(crate) fn canonicalize_lossy(path: &str) -> String {
@@ -1050,24 +1082,14 @@ pub(crate) async fn handle_daemon(
             Ok(())
         }
         DaemonCommand::Pause => {
-            let result = daemon.pause().await;
-            if result.is_ok() {
-                let _ = set_runtime_paused(project_root, true);
-                // Wake a parked daemon loop so it observes the pause now
-                // instead of on the next heartbeat. Fire-and-forget.
-                orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
-            }
-            result.map(|_| print_ok("daemon paused", json))
+            let result = daemon_pause_application(hub.clone(), project_root).await?;
+            print_ok(result.message, json);
+            Ok(())
         }
         DaemonCommand::Resume => {
-            let result = daemon.resume().await;
-            if result.is_ok() {
-                let _ = set_runtime_paused(project_root, false);
-                // Wake a parked daemon loop so ready work dispatches now
-                // instead of on the next heartbeat. Fire-and-forget.
-                orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
-            }
-            result.map(|_| print_ok("daemon resumed", json))
+            let result = daemon_resume_application(hub.clone(), project_root).await?;
+            print_ok(result.message, json);
+            Ok(())
         }
         DaemonCommand::Status => handle_daemon_status_command(project_root, json).await,
         DaemonCommand::Health => handle_daemon_health_command(project_root, json).await,
@@ -1108,41 +1130,48 @@ async fn handle_daemon_start(args: DaemonStartArgs, project_root: &str, json: bo
     if !json {
         let _ = crate::services::metrics::maybe_prompt_first_run(std::path::Path::new(project_root));
     }
+    let result = daemon_start_application(args, project_root).await?;
+    if json {
+        return print_value(result, true);
+    }
+    if result.already_running {
+        return print_value(result, false);
+    }
+    println!("daemon started in background (pid {})", result.daemon_pid);
+    println!("logs: {}", result.log_path);
+    println!("note: `animus daemon start` now always detaches; use `animus daemon run` to stay in the foreground.");
+    Ok(())
+}
+
+pub(crate) async fn daemon_start_application(
+    args: DaemonStartArgs,
+    project_root: &str,
+) -> Result<DaemonStartApplicationView> {
     let log_path = autonomous_daemon_log_path(project_root);
     if let Some(existing_pid) = get_daemon_pid(project_root)? {
         if is_process_alive(existing_pid) {
             let _ = set_runtime_paused(project_root, false);
-            return print_value(
-                serde_json::json!({
-                    "message": "daemon already running",
-                    "autonomous": true,
-                    "detached": true,
-                    "daemon_pid": existing_pid,
-                    "log_path": log_path.display().to_string(),
-                }),
-                json,
-            );
+            return Ok(DaemonStartApplicationView {
+                message: "daemon already running",
+                autonomous: true,
+                detached: true,
+                daemon_pid: existing_pid,
+                log_path: log_path.display().to_string(),
+                already_running: true,
+            });
         }
         let _ = set_daemon_pid(project_root, None);
     }
 
     let daemon_pid = start_autonomous_daemon(project_root, &args).await?;
-    if json {
-        return print_value(
-            serde_json::json!({
-                "message": "daemon started in background",
-                "autonomous": true,
-                "detached": true,
-                "daemon_pid": daemon_pid,
-                "log_path": log_path.display().to_string(),
-            }),
-            json,
-        );
-    }
-    println!("daemon started in background (pid {daemon_pid})");
-    println!("logs: {}", log_path.display());
-    println!("note: `animus daemon start` now always detaches; use `animus daemon run` to stay in the foreground.");
-    Ok(())
+    Ok(DaemonStartApplicationView {
+        message: "daemon started in background",
+        autonomous: true,
+        detached: true,
+        daemon_pid,
+        log_path: log_path.display().to_string(),
+        already_running: false,
+    })
 }
 
 async fn start_autonomous_daemon(project_root: &str, args: &DaemonStartArgs) -> Result<u32> {
@@ -1354,6 +1383,21 @@ fn render_daemon_metrics_snapshot(
 /// `events` / `logs` / `stream` handler, or merges their existing readers for
 /// the window/bare views.
 async fn handle_daemon_observe(args: DaemonObserveArgs, project_root: &str, json: bool) -> Result<()> {
+    if json && !args.follow {
+        return print_value(
+            daemon_observe_application(
+                DaemonObserveApplicationRequest {
+                    since: args.since,
+                    source: args.source,
+                    workflow: args.workflow,
+                    limit: args.limit,
+                },
+                project_root,
+            )?,
+            true,
+        );
+    }
+
     // Parse --since once into a window (u64::MAX = no time bound) so every
     // branch that reads from the merged collectors honors it.
     let window_secs = match args.since.as_deref() {
@@ -1480,6 +1524,33 @@ async fn handle_daemon_observe(args: DaemonObserveArgs, project_root: &str, json
     let lines =
         collect_observe_window(project_root, u64::MAX, args.workflow.as_deref(), args.limit, ObserveSources::Both);
     render_observe_lines(&lines, json)
+}
+
+pub(crate) fn daemon_observe_application(
+    request: DaemonObserveApplicationRequest,
+    project_root: &str,
+) -> Result<serde_json::Value> {
+    let window_secs = match request.since.as_deref() {
+        Some(since) => crate::cli_types::parse_duration_secs(since, 60)
+            .map_err(|error| crate::invalid_input_error(format!("invalid --since value '{since}': {error}")))?,
+        None => u64::MAX,
+    };
+    let sources = match request.source {
+        Some(ObserveSource::Events) => ObserveSources::EventsOnly,
+        Some(ObserveSource::Logs | ObserveSource::Stream | ObserveSource::Workflow) => ObserveSources::LogsOnly,
+        None => ObserveSources::Both,
+    };
+    let lines =
+        collect_observe_window(project_root, window_secs, request.workflow.as_deref(), request.limit.max(1), sources);
+
+    if request.source.is_some() || window_secs != u64::MAX {
+        return Ok(observe_lines_json(&lines));
+    }
+
+    Ok(serde_json::json!({
+        "matrix": observe_matrix_json(),
+        "recent": lines.iter().map(observe_line_json).collect::<Vec<_>>(),
+    }))
 }
 
 /// Which underlying readers `collect_observe_window` pulls from. Lets the
@@ -1675,16 +1746,7 @@ fn rfc3339_to_unix(ts: &str) -> Option<u64> {
 
 fn render_observe_lines(lines: &[ObserveLine], json: bool) -> Result<()> {
     if json {
-        return print_value(
-            serde_json::json!({
-                "lines": lines.iter().map(|l| serde_json::json!({
-                    "source": l.source,
-                    "timestamp": l.timestamp,
-                    "text": l.text,
-                })).collect::<Vec<_>>(),
-            }),
-            json,
-        );
+        return print_value(observe_lines_json(lines), true);
     }
     if lines.is_empty() {
         println!("(no recent events or logs)");
@@ -1694,6 +1756,20 @@ fn render_observe_lines(lines: &[ObserveLine], json: bool) -> Result<()> {
         println!("{:<7} {} {}", line.source, line.timestamp, line.text);
     }
     Ok(())
+}
+
+fn observe_line_json(line: &ObserveLine) -> serde_json::Value {
+    serde_json::json!({
+        "source": line.source,
+        "timestamp": line.timestamp,
+        "text": line.text,
+    })
+}
+
+fn observe_lines_json(lines: &[ObserveLine]) -> serde_json::Value {
+    serde_json::json!({
+        "lines": lines.iter().map(observe_line_json).collect::<Vec<_>>(),
+    })
 }
 
 /// Rows of the `observe` data-source matrix: verb | data source | live? |
@@ -2157,18 +2233,39 @@ async fn handle_daemon_stop(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    let outcome = stop_daemon(hub.as_ref(), project_root, args.shutdown_timeout_secs).await?;
+    print_value(daemon_stop_application(hub, project_root, args.shutdown_timeout_secs).await?, json)
+}
+
+pub(crate) async fn daemon_stop_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    shutdown_timeout_secs: u64,
+) -> Result<DaemonStopApplicationView> {
+    let outcome = stop_daemon(hub.as_ref(), project_root, shutdown_timeout_secs).await?;
 
     let graceful = outcome.existing_pid.map(|pid| !outcome.forced && !is_process_alive(pid)).unwrap_or(true);
 
-    print_value(
-        serde_json::json!({
-            "message": "daemon stopped",
-            "graceful": graceful,
-            "shutdown_timeout_secs": args.shutdown_timeout_secs,
-        }),
-        json,
-    )
+    Ok(DaemonStopApplicationView { message: "daemon stopped", graceful, shutdown_timeout_secs })
+}
+
+pub(crate) async fn daemon_pause_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> Result<DaemonLifecycleApplicationView> {
+    hub.daemon().pause().await?;
+    let _ = set_runtime_paused(project_root, true);
+    orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
+    Ok(DaemonLifecycleApplicationView { message: "daemon paused" })
+}
+
+pub(crate) async fn daemon_resume_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+) -> Result<DaemonLifecycleApplicationView> {
+    hub.daemon().resume().await?;
+    let _ = set_runtime_paused(project_root, false);
+    orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
+    Ok(DaemonLifecycleApplicationView { message: "daemon resumed" })
 }
 
 const DEFAULT_DAEMON_LOG_LINES: usize = 100;

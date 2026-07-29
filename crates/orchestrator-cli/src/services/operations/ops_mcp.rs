@@ -128,9 +128,7 @@ use common_types::*;
 #[cfg(test)]
 use compaction::compact_json_str;
 use compaction::compact_json_text;
-use daemon::{
-    build_daemon_events_poll_result, build_daemon_logs_result, build_daemon_observe_args, build_daemon_start_args,
-};
+use daemon::{build_daemon_events_poll_result, build_daemon_logs_result};
 #[cfg(test)]
 use daemon::{daemon_events_poll_limit, resolve_daemon_events_project_root};
 use daemon_inputs::*;
@@ -221,21 +219,7 @@ fn push_opt(args: &mut Vec<String>, flag: &str, value: Option<String>) {
     }
 }
 
-fn push_bool_set(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
-    if let Some(v) = value {
-        args.push(flag.to_string());
-        args.push(v.to_string());
-    }
-}
-
 fn push_opt_num(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
-    if let Some(v) = value {
-        args.push(flag.to_string());
-        args.push(v.to_string());
-    }
-}
-
-fn push_opt_usize(args: &mut Vec<String>, flag: &str, value: Option<usize>) {
     if let Some(v) = value {
         args.push(flag.to_string());
         args.push(v.to_string());

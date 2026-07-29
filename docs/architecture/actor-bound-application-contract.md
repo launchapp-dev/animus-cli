@@ -209,6 +209,11 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
   fleet daily budget. The underlying cost state and daemon configuration are
   still global stores with no actor field or authorization context, so these
   tools remain management-only.
+- Daemon lifecycle and observation: start/stop/pause/resume/observe use shared
+  typed in-process services, while the detached daemon process, control wire,
+  and scoped history files remain their intentional state owners. Those
+  operations control or expose project-wide state without an actor-aware
+  authorization protocol, so the daemon family remains management-only.
 - Environment node management: list/get/teardown/reap use shared typed
   in-process application services, then call the installed environment plugin
   through its typed protocol. That protocol has no actor field and the plugin's

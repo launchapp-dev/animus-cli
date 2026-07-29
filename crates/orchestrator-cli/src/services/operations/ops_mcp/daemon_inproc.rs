@@ -1,16 +1,20 @@
 use anyhow::{Context, Result};
-use orchestrator_core::DaemonStatus;
+use orchestrator_core::{DaemonStatus, FileServiceHub};
 use orchestrator_daemon_runtime::control::ControlClient;
 use protocol::is_process_alive;
 use serde_json::{json, Value};
 use std::path::Path;
+use std::sync::Arc;
 
 use super::exec_errors::build_inproc_tool_error_payload;
 use super::AoMcpServer;
 use crate::services::runtime::{
-    canonicalize_lossy, daemon_config_application, overlay_budget_health, overlay_daily_cap_status,
-    overlay_runtime_pause, read_daemon_pid, remove_daemon_pid, set_daemon_pid, DaemonConfigApplicationRequest,
+    canonicalize_lossy, daemon_config_application, daemon_observe_application, daemon_pause_application,
+    daemon_resume_application, daemon_start_application, daemon_stop_application, overlay_budget_health,
+    overlay_daily_cap_status, overlay_runtime_pause, read_daemon_pid, remove_daemon_pid, set_daemon_pid,
+    DaemonConfigApplicationRequest, DaemonObserveApplicationRequest,
 };
+use crate::{DaemonSchedulerArgs, DaemonStartArgs, ObserveSource};
 use rmcp::model::CallToolResult;
 
 pub(super) fn resolve_project_root(default_root: &str, override_value: Option<String>) -> String {
@@ -150,6 +154,130 @@ fn notification_config_from_input(input: &super::DaemonConfigSetInput) -> Result
 }
 
 impl AoMcpServer {
+    fn daemon_start_args(input: &super::DaemonStartInput) -> Result<DaemonStartArgs> {
+        fn require_positive<T>(name: &str, value: Option<T>) -> Result<()>
+        where
+            T: PartialEq + From<u8>,
+        {
+            if value.is_some_and(|value| value == T::from(0)) {
+                return Err(crate::invalid_input_error(format!("{name} must be greater than zero")));
+            }
+            Ok(())
+        }
+
+        require_positive("pool_size", input.pool_size)?;
+        require_positive("interval_secs", input.interval_secs)?;
+        require_positive("stale_threshold_hours", input.stale_threshold_hours)?;
+        require_positive("max_tasks_per_tick", input.max_tasks_per_tick)?;
+        require_positive("phase_timeout_secs", input.phase_timeout_secs)?;
+
+        Ok(DaemonStartArgs {
+            scheduler: DaemonSchedulerArgs {
+                pool_size: input.pool_size,
+                interval_secs: input.interval_secs,
+                startup_cleanup: input.startup_cleanup.unwrap_or(true),
+                reconcile_stale: input.reconcile_stale.unwrap_or(true),
+                stale_threshold_hours: input.stale_threshold_hours,
+                max_tasks_per_tick: input.max_tasks_per_tick,
+                phase_timeout_secs: input.phase_timeout_secs,
+            },
+            auto_install: input.auto_install,
+            skip_preflight: input.skip_preflight,
+        })
+    }
+
+    fn daemon_observe_request(input: super::DaemonObserveInput) -> Result<DaemonObserveApplicationRequest> {
+        if input.limit == Some(0) {
+            return Err(crate::invalid_input_error("limit must be greater than zero"));
+        }
+        let source = match input.source.as_deref() {
+            None => None,
+            Some("events") => Some(ObserveSource::Events),
+            Some("logs") => Some(ObserveSource::Logs),
+            Some("stream") => Some(ObserveSource::Stream),
+            Some("workflow") => Some(ObserveSource::Workflow),
+            Some(value) => {
+                return Err(crate::invalid_input_error(format!(
+                    "invalid source '{value}'; expected events|logs|stream|workflow"
+                )));
+            }
+        };
+        Ok(DaemonObserveApplicationRequest {
+            since: input.since,
+            source,
+            workflow: input.workflow_id,
+            limit: input.limit.unwrap_or(20),
+        })
+    }
+
+    pub(super) async fn daemon_start_inproc(&self, input: super::DaemonStartInput) -> CallToolResult {
+        const TOOL: &str = "animus.daemon.start";
+        self.audit_actor_tool_decision(TOOL, false, "management-only");
+        let project_root = resolve_project_root(&self.default_project_root, input.project_root.clone());
+        let args = match Self::daemon_start_args(&input) {
+            Ok(args) => args,
+            Err(error) => return CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        };
+        match daemon_start_application(args, &project_root).await {
+            Ok(result) => CallToolResult::structured(json!({ "tool": TOOL, "result": result })),
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        }
+    }
+
+    pub(super) async fn daemon_stop_inproc(&self, project_root: Option<String>) -> CallToolResult {
+        const TOOL: &str = "animus.daemon.stop";
+        self.audit_actor_tool_decision(TOOL, false, "management-only");
+        let project_root = resolve_project_root(&self.default_project_root, project_root);
+        let result = FileServiceHub::new(&project_root).map(Arc::new);
+        match result {
+            Ok(hub) => match daemon_stop_application(hub, &project_root, 60).await {
+                Ok(result) => CallToolResult::structured(json!({ "tool": TOOL, "result": result })),
+                Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+            },
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        }
+    }
+
+    async fn daemon_pause_resume_inproc(&self, tool: &'static str, project_root: Option<String>) -> CallToolResult {
+        self.audit_actor_tool_decision(tool, false, "management-only");
+        let project_root = resolve_project_root(&self.default_project_root, project_root);
+        let hub = match FileServiceHub::new(&project_root) {
+            Ok(hub) => Arc::new(hub),
+            Err(error) => return CallToolResult::structured_error(build_inproc_tool_error_payload(tool, &error)),
+        };
+        let result = if tool == "animus.daemon.pause" {
+            daemon_pause_application(hub, &project_root).await
+        } else {
+            daemon_resume_application(hub, &project_root).await
+        };
+        match result {
+            Ok(result) => CallToolResult::structured(json!({ "tool": tool, "result": result })),
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(tool, &error)),
+        }
+    }
+
+    pub(super) async fn daemon_pause_inproc(&self, project_root: Option<String>) -> CallToolResult {
+        self.daemon_pause_resume_inproc("animus.daemon.pause", project_root).await
+    }
+
+    pub(super) async fn daemon_resume_inproc(&self, project_root: Option<String>) -> CallToolResult {
+        self.daemon_pause_resume_inproc("animus.daemon.resume", project_root).await
+    }
+
+    pub(super) fn daemon_observe_inproc(&self, input: super::DaemonObserveInput) -> CallToolResult {
+        const TOOL: &str = "animus.daemon.observe";
+        self.audit_actor_tool_decision(TOOL, false, "management-only");
+        let project_root = resolve_project_root(&self.default_project_root, input.project_root.clone());
+        let request = match Self::daemon_observe_request(input) {
+            Ok(request) => request,
+            Err(error) => return CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        };
+        match daemon_observe_application(request, &project_root) {
+            Ok(result) => CallToolResult::structured(json!({ "tool": TOOL, "result": result })),
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(TOOL, &error)),
+        }
+    }
+
     fn run_daemon_config_application(
         &self,
         tool_name: &str,
@@ -267,5 +395,51 @@ mod config_tests {
         assert_eq!(result.is_error, Some(true));
         let payload = result.structured_content.expect("typed conflict error");
         assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"), "{payload}");
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use serde_json::Value;
+
+    use super::super::{new_ao_mcp_server, DaemonObserveInput, DaemonStartInput};
+
+    #[test]
+    fn daemon_start_input_is_typed_and_rejects_zero_before_spawning() {
+        let input = DaemonStartInput { interval_secs: Some(0), ..Default::default() };
+        let error = super::AoMcpServer::daemon_start_args(&input).expect_err("zero interval must be rejected");
+        assert!(error.to_string().contains("interval_secs must be greater than zero"), "{error:#}");
+
+        let input = DaemonStartInput {
+            pool_size: Some(4),
+            startup_cleanup: Some(false),
+            reconcile_stale: Some(false),
+            auto_install: true,
+            skip_preflight: true,
+            ..Default::default()
+        };
+        let args = super::AoMcpServer::daemon_start_args(&input).expect("typed start args");
+        assert_eq!(args.scheduler.pool_size, Some(4));
+        assert!(!args.scheduler.startup_cleanup);
+        assert!(!args.scheduler.reconcile_stale);
+        assert!(args.auto_install);
+        assert!(args.skip_preflight);
+    }
+
+    #[test]
+    fn daemon_observe_runs_in_process_and_returns_structured_validation_errors() {
+        let temp = tempfile::tempdir().expect("project root");
+        let server = new_ao_mcp_server(temp.path().to_string_lossy().as_ref());
+        let invalid = server
+            .daemon_observe_inproc(DaemonObserveInput { source: Some("unknown".to_string()), ..Default::default() });
+        assert_eq!(invalid.is_error, Some(true));
+        let payload = invalid.structured_content.expect("typed error payload");
+        assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"));
+
+        let result = server.daemon_observe_inproc(DaemonObserveInput::default());
+        assert_ne!(result.is_error, Some(true));
+        let payload = result.structured_content.expect("typed observe payload");
+        assert!(payload.pointer("/result/matrix").and_then(Value::as_array).is_some());
+        assert!(payload.pointer("/result/recent").and_then(Value::as_array).is_some());
     }
 }

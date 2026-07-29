@@ -10,9 +10,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<DaemonStartInput>()
     )]
     async fn ao_daemon_start(&self, params: Parameters<DaemonStartInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_daemon_start_args(&input);
-        self.run_tool("animus.daemon.start", args, input.project_root).await
+        Ok(self.daemon_start_inproc(params.0).await)
     }
 
     #[tool(
@@ -21,7 +19,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_daemon_stop(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.stop", vec!["daemon".to_string(), "stop".to_string()], params.0.project_root).await
+        Ok(self.daemon_stop_inproc(params.0.project_root).await)
     }
 
     #[tool(
@@ -64,8 +62,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_daemon_pause(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.pause", vec!["daemon".to_string(), "pause".to_string()], params.0.project_root)
-            .await
+        Ok(self.daemon_pause_inproc(params.0.project_root).await)
     }
 
     #[tool(
@@ -74,8 +71,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_daemon_resume(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.resume", vec!["daemon".to_string(), "resume".to_string()], params.0.project_root)
-            .await
+        Ok(self.daemon_resume_inproc(params.0.project_root).await)
     }
 
     #[tool(
@@ -155,8 +151,6 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<DaemonObserveInput>()
     )]
     async fn ao_daemon_observe(&self, params: Parameters<DaemonObserveInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_daemon_observe_args(&input);
-        self.run_tool("animus.daemon.observe", args, input.project_root).await
+        Ok(self.daemon_observe_inproc(params.0))
     }
 }
