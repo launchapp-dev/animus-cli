@@ -26,9 +26,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<AgentRunInput>()
     )]
     async fn ao_agent_run(&self, params: Parameters<AgentRunInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = build_agent_run_args(&input);
-        self.run_tool("animus.agent.run", args, input.project_root).await
+        Ok(self.agent_run_inproc(params.0).await)
     }
 
     #[tool(
@@ -37,16 +35,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<AgentControlInput>()
     )]
     async fn ao_agent_control(&self, params: Parameters<AgentControlInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec![
-            "agent".to_string(),
-            "control".to_string(),
-            "--run-id".to_string(),
-            input.run_id,
-            "--action".to_string(),
-            input.action,
-        ];
-        self.run_tool("animus.agent.control", args, input.project_root).await
+        Ok(self.agent_control_inproc(params.0))
     }
 
     #[tool(
@@ -55,9 +44,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<AgentStatusInput>()
     )]
     async fn ao_agent_status(&self, params: Parameters<AgentStatusInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec!["agent".to_string(), "status".to_string(), "--run-id".to_string(), input.run_id];
-        self.run_tool("animus.agent.status", args, input.project_root).await
+        Ok(self.agent_status_inproc(params.0))
     }
 
     #[tool(

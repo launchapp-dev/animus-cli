@@ -25,8 +25,6 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-#[path = "ops_mcp/agent_command_args.rs"]
-mod agent_command_args;
 #[path = "ops_mcp/agent_inproc.rs"]
 mod agent_inproc;
 #[path = "ops_mcp/agent_inputs.rs"]
@@ -122,7 +120,6 @@ mod workflow_inputs;
 #[path = "ops_mcp/workflow_runtime_tools.rs"]
 mod workflow_runtime_tools;
 
-use agent_command_args::build_agent_run_args;
 use agent_inputs::*;
 use common_types::*;
 #[cfg(test)]

@@ -199,8 +199,10 @@ These surfaces remain absent from actor-bound MCP until their protocols change:
 - Agent memory/message operations: their project stores are currently keyed by
   agent/project rather than actor, so they remain management-only even though
   their MCP implementations are typed in-process services. Agent
-  run/control/status also remain outside the actor-bound surface until the
-  execution protocol enforces the pinned principal end to end.
+  run/control/status now use typed in-process application services too, with
+  the provider plugin owning the live session and scoped JSONL owning durable
+  status. They remain outside the actor-bound surface until the execution
+  protocol enforces the pinned principal end to end.
 - Output monitor/JSONL/artifact reads: these inputs are not yet guaranteed to
   identify an actor-owned workflow, so they remain management-only even though
   their MCP handlers now use typed in-process services.

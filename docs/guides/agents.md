@@ -625,6 +625,12 @@ Act on `remediation` first when present; see the
   native resume so the flags apply to every turn's provider process. See the
   ad-hoc skill application section in the
   [CLI Command Surface](../reference/cli/index.md).
+- The full MCP server routes `animus.agent.run`, `animus.agent.control`, and
+  `animus.agent.status` through the same typed application services as the CLI.
+  The provider plugin still owns the live session and the scoped JSONL log is
+  the durable source for status. The current provider-only runtime does not
+  expose pause/resume/terminate, so control returns a typed `unavailable`
+  error rather than implying that a child CLI accepted the action.
 
 See also: [MCP Tools Reference](../reference/mcp-tools.md),
 [CLI Command Surface](../reference/cli/index.md), and
