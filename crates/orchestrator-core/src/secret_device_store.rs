@@ -424,8 +424,11 @@ fn resolve_auto_backend(cfg: &protocol::SecretsConfig, scoped_root: &Path) -> &'
 /// via `key_source`, a `key_file` path (honored by `auto` and `user-key`), or
 /// injected via the corresponding env var.
 fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
-    use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
-    matches!(cfg.key_source.as_deref(), Some("user-key") | Some("user_key") | Some("passphrase"))
+    use crate::secret_keysource::{KeySourceKind, ENV_PASSPHRASE, ENV_USER_KEY};
+    cfg.key_source
+        .as_deref()
+        .and_then(|source| KeySourceKind::parse(source).ok())
+        .is_some_and(|source| matches!(source, KeySourceKind::UserKey | KeySourceKind::Passphrase))
         || cfg.key_file.is_some()
         || std::env::var(ENV_USER_KEY).is_ok()
         || std::env::var(ENV_PASSPHRASE).is_ok()
@@ -606,6 +609,8 @@ mod tests {
     fn has_server_key_configured_via_config_key_source() {
         let cfg = protocol::SecretsConfig { key_source: Some("user-key".to_string()), ..Default::default() };
         assert!(has_server_key_configured(&cfg));
+        let cfg_alias = protocol::SecretsConfig { key_source: Some("userkey".to_string()), ..Default::default() };
+        assert!(has_server_key_configured(&cfg_alias));
         let cfg2 = protocol::SecretsConfig { key_source: Some("passphrase".to_string()), ..Default::default() };
         assert!(has_server_key_configured(&cfg2));
         let cfg3 = protocol::SecretsConfig { key_source: Some("device-id".to_string()), ..Default::default() };
