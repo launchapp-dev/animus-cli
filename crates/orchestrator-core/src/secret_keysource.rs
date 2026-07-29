@@ -432,6 +432,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn resolve_auto_prefers_env_user_key_over_configured_key_file() {
+        let env_key = [0x66u8; KEY_LEN];
+        let file_key = [0x77u8; KEY_LEN];
+        let tmp = tempfile::tempdir().unwrap();
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, hex::encode(file_key)).unwrap();
+        let _guard = env_lock().lock().unwrap();
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::set_var(ENV_USER_KEY, hex::encode(env_key));
+        let config = KeySourceConfig { kind_override: None, key_file: Some(key_file), passphrase: None };
+        let salt = [0u8; 16];
+        let result = resolve_auto(&config, &salt);
+        match &prev {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        let src = result.expect("resolve_auto with both server key sources should succeed");
+        assert_eq!(src.id(), "user-key");
+        assert_eq!(*src.key().unwrap(), env_key, "ANIMUS_SECRET_KEY must override the configured key file");
+    }
+
+    #[test]
     fn resolve_auto_uses_passphrase_when_passphrase_env_is_set() {
         let _guard = env_lock().lock().unwrap();
         let prev_key = std::env::var(ENV_USER_KEY).ok();
