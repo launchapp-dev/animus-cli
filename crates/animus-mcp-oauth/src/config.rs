@@ -60,8 +60,13 @@ pub struct ServerResolution {
 pub fn build_secret_store(project_root: &Path) -> Result<Arc<dyn SecretStore>, ServerResolutionError> {
     let scoped_root = scoped_state_root(project_root)
         .ok_or_else(|| ServerResolutionError::NoScopedRoot(project_root.display().to_string()))?;
+    Ok(build_secret_store_at(project_root, scoped_root))
+}
+
+fn build_secret_store_at(project_root: &Path, scoped_root: impl Into<std::path::PathBuf>) -> Arc<dyn SecretStore> {
+    let scoped_root = scoped_root.into();
     let scope = resolve_keychain_scope(project_root, &scoped_root);
-    Ok(Arc::from(orchestrator_core::build_secret_store_for_project(&scope, scoped_root, project_root)))
+    Arc::from(orchestrator_core::build_secret_store_for_project(&scope, scoped_root, project_root))
 }
 
 /// Pick the keychain service-scope string from the adopted scoped state
@@ -191,5 +196,45 @@ fn finalize(
             is_authorization_code: false,
             broker_oauth: None,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oauth_secret_store_honors_project_key_file_without_env_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, "a5".repeat(32)).unwrap();
+        let config = serde_json::json!({
+            "secrets": {
+                "key_source": "user-key",
+                "key_file": key_file
+            }
+        });
+        std::fs::write(animus_dir.join("config.json"), serde_json::to_vec(&config).unwrap()).unwrap();
+
+        let previous_key = std::env::var("ANIMUS_SECRET_KEY").ok();
+        std::env::remove_var("ANIMUS_SECRET_KEY");
+        let store = build_secret_store_at(&project_root, tmp.path().join("state"));
+        let result = store.set("oauth:test", "token");
+        let stored = result.and_then(|()| store.get("oauth:test"));
+        match previous_key {
+            Some(value) => std::env::set_var("ANIMUS_SECRET_KEY", value),
+            None => std::env::remove_var("ANIMUS_SECRET_KEY"),
+        }
+
+        assert_eq!(
+            stored
+                .expect("OAuth secret operations must use the project-configured key file")
+                .as_deref(),
+            Some("token")
+        );
     }
 }
