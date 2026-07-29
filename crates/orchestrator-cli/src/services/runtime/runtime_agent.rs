@@ -14,6 +14,10 @@ mod status;
 
 pub(crate) use interactions::handle_agent_approve_hook;
 use interactions::{handle_agent_interactions_answer, handle_agent_interactions_list, handle_agent_interactions_show};
+pub(crate) use profiles::{
+    agent_get_application, agent_list_application, agent_memory_append_application, agent_memory_clear_application,
+    agent_memory_get_application, agent_message_list_application, agent_message_send_application,
+};
 use profiles::{
     handle_agent_get, handle_agent_list, handle_agent_memory_append, handle_agent_memory_clear,
     handle_agent_memory_get, handle_agent_message_list, handle_agent_message_send,

@@ -8,7 +8,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_agent_list(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.agent.list", vec!["agent".to_string(), "list".to_string()], params.0.project_root).await
+        Ok(self.agent_list_inproc(params.0.project_root))
     }
 
     #[tool(
@@ -17,9 +17,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<AgentProfileInput>()
     )]
     async fn ao_agent_get(&self, params: Parameters<AgentProfileInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args = vec!["agent".to_string(), "get".to_string(), "--id".to_string(), input.id];
-        self.run_tool("animus.agent.get", args, input.project_root).await
+        Ok(self.agent_get_inproc(params.0))
     }
 
     #[tool(
@@ -68,10 +66,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<AgentMemoryGetInput>()
     )]
     async fn ao_agent_memory_get(&self, params: Parameters<AgentMemoryGetInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args =
-            vec!["agent".to_string(), "memory".to_string(), "get".to_string(), "--agent".to_string(), input.agent];
-        self.run_tool("animus.agent.memory.get", args, input.project_root).await
+        Ok(self.agent_memory_get_inproc(params.0))
     }
 
     #[tool(
@@ -83,18 +78,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<AgentMemoryAppendInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec![
-            "agent".to_string(),
-            "memory".to_string(),
-            "append".to_string(),
-            "--agent".to_string(),
-            input.agent,
-            "--text".to_string(),
-            input.text,
-        ];
-        push_opt(&mut args, "--source", input.source);
-        self.run_tool("animus.agent.memory.append", args, input.project_root).await
+        Ok(self.agent_memory_append_inproc(params.0))
     }
 
     #[tool(
@@ -103,10 +87,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<AgentMemoryGetInput>()
     )]
     async fn ao_agent_memory_clear(&self, params: Parameters<AgentMemoryGetInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let args =
-            vec!["agent".to_string(), "memory".to_string(), "clear".to_string(), "--agent".to_string(), input.agent];
-        self.run_tool("animus.agent.memory.clear", args, input.project_root).await
+        Ok(self.agent_memory_clear_inproc(params.0))
     }
 
     #[tool(
@@ -118,22 +99,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<AgentMessageSendInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec![
-            "agent".to_string(),
-            "message".to_string(),
-            "send".to_string(),
-            "--channel".to_string(),
-            input.channel,
-            "--from".to_string(),
-            input.from,
-            "--text".to_string(),
-            input.text,
-        ];
-        push_opt(&mut args, "--to", input.to);
-        push_opt(&mut args, "--workflow-id", input.workflow_id);
-        push_opt(&mut args, "--phase-id", input.phase_id);
-        self.run_tool("animus.agent.message.send", args, input.project_root).await
+        Ok(self.agent_message_send_inproc(params.0))
     }
 
     #[tool(
@@ -145,11 +111,6 @@ impl AoMcpServer {
         &self,
         params: Parameters<AgentMessageListInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["agent".to_string(), "message".to_string(), "list".to_string()];
-        push_opt(&mut args, "--channel", input.channel);
-        push_opt(&mut args, "--agent", input.agent);
-        push_opt(&mut args, "--limit", input.limit.map(|value| value.to_string()));
-        self.run_tool("animus.agent.message.list", args, input.project_root).await
+        Ok(self.agent_message_list_inproc(params.0))
     }
 }
