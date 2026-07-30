@@ -60,6 +60,7 @@ pub enum CollisionReason {
     Capacity { capacity: usize },
     DuplicateTaskGeneration { task: TaskGeneration },
     TaskAlreadyActive { task_id: String, generation: String },
+    LeaseExpired { task: TaskGeneration, lease_generation: u64 },
     ResourceOwned { resource: String, value: String, task: TaskGeneration },
     RepositoryRef { repository: String, git_ref: String, task: TaskGeneration },
 }
@@ -249,6 +250,18 @@ impl CodingScheduler {
                     reason: CollisionReason::TaskAlreadyActive {
                         task_id: task.task_id.clone(),
                         generation: state.leases[index].task.generation.clone(),
+                    },
+                };
+            }
+            // Expiry fences every allocation mutation, not only heartbeats.
+            // Otherwise a daemon holding stale persisted credentials could
+            // prepare and bind a second node while restart reconciliation is
+            // still deciding whether the original runner/node survived.
+            if state.leases[index].expires_at <= Utc::now() {
+                return ReservationOutcome::Rejected {
+                    reason: CollisionReason::LeaseExpired {
+                        task: task.clone(),
+                        lease_generation,
                     },
                 };
             }
@@ -791,5 +804,28 @@ mod tests {
             RecoveryOutcome::Recovered { .. }
         ));
         assert!(scheduler.status().unwrap().recovery_needed.is_empty());
+    }
+
+    #[test]
+    fn expired_lease_cannot_bind_a_replacement_before_reconciliation() {
+        let temp = tempfile::tempdir().unwrap();
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"))
+            .with_lease_ttl(Duration::milliseconds(-1));
+        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
+            panic!("reservation rejected");
+        };
+        let mut replacement = lease.resources.clone();
+        replacement.workspace_id = Some("replacement-workspace".into());
+        replacement.environment_id = Some("replacement-environment".into());
+
+        assert!(matches!(
+            scheduler
+                .bind_resources(&lease.task, lease.lease_generation, &lease.owner, replacement)
+                .unwrap(),
+            ReservationOutcome::Rejected {
+                reason: CollisionReason::LeaseExpired { lease_generation, .. }
+            } if lease_generation == lease.lease_generation
+        ));
+        assert_eq!(scheduler.status().unwrap().recovery_needed.len(), 1);
     }
 }
