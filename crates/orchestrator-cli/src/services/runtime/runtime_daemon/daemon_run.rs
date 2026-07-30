@@ -980,11 +980,7 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
         .map(|workflow| {
             (
                 workflow.id.to_ascii_lowercase(),
-                workflow
-                    .phases
-                    .iter()
-                    .map(|phase| phase.phase_id().to_ascii_lowercase())
-                    .collect(),
+                workflow.phases.iter().map(|phase| phase.phase_id().to_ascii_lowercase()).collect(),
             )
         })
         .collect();

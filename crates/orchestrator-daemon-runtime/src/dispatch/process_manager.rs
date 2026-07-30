@@ -613,10 +613,10 @@ impl ProcessManager {
         // previous daemon adopted, even if the workflow currently points at a
         // local phase (or its configuration changed while the daemon was
         // down). The checkpoint is the runner-owned recovery oracle.
-        let persisted_environment = target_workflow_id
-            .and_then(|workflow_id| persisted_workflow_environment(project_root, workflow_id));
-        let environment_id = persisted_environment
-            .or_else(|| self.resolve_dispatch_environment(dispatch, current_phase_id))?;
+        let persisted_environment =
+            target_workflow_id.and_then(|workflow_id| persisted_workflow_environment(project_root, workflow_id));
+        let environment_id =
+            persisted_environment.or_else(|| self.resolve_dispatch_environment(dispatch, current_phase_id))?;
         if is_local_environment(&environment_id) {
             return None;
         }
@@ -669,25 +669,21 @@ impl ProcessManager {
         // still needs the broker when any later phase delegates; otherwise
         // that phase falls back to runner-owned prepare and cannot be adopted
         // after a daemon restart.
-        self.workflow_phases
-            .get(&workflow_key)
-            .into_iter()
-            .flat_map(|phases| phases.iter())
-            .find_map(|phase_id| {
-                let phase_environment = self
-                    .workflow_phase_environments
-                    .get(&workflow_key)
-                    .and_then(|phases| phases.get(phase_id))
-                    .map(String::as_str);
-                orchestrator_config::workflow_config::resolve_environment(
-                    dispatch.subject_kind(),
-                    None,
-                    phase_environment,
-                    workflow_env,
-                    self.environment_routing.as_ref(),
-                )
-                .filter(|environment| !is_local_environment(environment))
-            })
+        self.workflow_phases.get(&workflow_key).into_iter().flat_map(|phases| phases.iter()).find_map(|phase_id| {
+            let phase_environment = self
+                .workflow_phase_environments
+                .get(&workflow_key)
+                .and_then(|phases| phases.get(phase_id))
+                .map(String::as_str);
+            orchestrator_config::workflow_config::resolve_environment(
+                dispatch.subject_kind(),
+                None,
+                phase_environment,
+                workflow_env,
+                self.environment_routing.as_ref(),
+            )
+            .filter(|environment| !is_local_environment(environment))
+        })
     }
 
     /// Bind a fresh per-spawn event pipe and attach the
@@ -1195,9 +1191,7 @@ mod tests {
     fn local_first_delegated_second_workflow_selects_broker_environment() {
         let mut manager = ProcessManager::new();
         manager.workflow_initial_phases.insert("delegated".to_string(), "plan".to_string());
-        manager
-            .workflow_phases
-            .insert("delegated".to_string(), vec!["plan".to_string(), "code".to_string()]);
+        manager.workflow_phases.insert("delegated".to_string(), vec!["plan".to_string(), "code".to_string()]);
         manager.workflow_phase_environments.insert(
             "delegated".to_string(),
             std::collections::HashMap::from([
@@ -1221,16 +1215,15 @@ mod tests {
 
     #[test]
     fn persisted_runner_binding_wins_over_current_local_phase() {
+        use animus_environment_protocol::EnvironmentHandle;
         use animus_runtime_shared::phase_session::{
             update_session_environment, update_session_running, write_session_pending, EnvironmentBinding,
         };
-        use animus_environment_protocol::EnvironmentHandle;
 
         let temp = TempDir::new().expect("tempdir");
         let scoped_root =
             protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
-        write_session_pending(&scoped_root, "wf-bound", "code", "claude", "agent-1", None)
-            .expect("pending checkpoint");
+        write_session_pending(&scoped_root, "wf-bound", "code", "claude", "agent-1", None).expect("pending checkpoint");
         update_session_running(&scoped_root, "wf-bound", "code").expect("running checkpoint");
         update_session_environment(
             &scoped_root,

@@ -2881,6 +2881,7 @@ version = "0.7.0-rc.32"
 dependencies = [
  "animus-actor",
  "animus-application-protocol",
+ "animus-config-protocol",
  "animus-control-protocol",
  "animus-environment-protocol",
  "animus-log-storage-protocol",

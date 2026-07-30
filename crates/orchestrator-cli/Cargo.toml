@@ -53,6 +53,7 @@ animus-application-protocol = { workspace = true }
 # `services::runtime::runtime_agent::environment_exec`.
 animus-environment-protocol = { workspace = true }
 animus-control-protocol = { workspace = true }
+animus-config-protocol = { workspace = true }
 animus-log-storage-protocol = { workspace = true }
 animus-subject-protocol-wire = { workspace = true }
 animus-actor = { workspace = true }

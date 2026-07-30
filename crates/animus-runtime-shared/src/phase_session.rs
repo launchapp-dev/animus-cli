@@ -351,6 +351,40 @@ pub fn read_path(path: &Path) -> io::Result<Option<SessionCheckpoint>> {
     }
 }
 
+/// Read every phase checkpoint persisted for one workflow, regardless of
+/// status or whether the phase still appears in the workflow's current plan.
+///
+/// Retained delegated environments are workflow-scoped leases. A workflow
+/// definition can change between the run that created a checkpoint and a
+/// later cancellation, so cleanup must use the durable checkpoint directory
+/// as its source of truth instead of scanning only the current phase plan.
+pub fn list_workflow_checkpoints(scoped_root: &Path, workflow_id: &str) -> io::Result<Vec<SessionCheckpoint>> {
+    let phases_dir = scoped_root.join("runs").join(sanitize(workflow_id)).join("phases");
+    let entries = match fs::read_dir(phases_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if !is_session_checkpoint_path(&path) {
+            continue;
+        }
+        if let Some(checkpoint) = read_path(&path)? {
+            // The sanitized directory name is not an ownership boundary:
+            // distinct workflow ids can sanitize to the same path, and files
+            // can also be misplaced. Never return a checkpoint whose durable
+            // embedded owner does not match the workflow being enumerated.
+            if checkpoint.workflow_id != workflow_id {
+                continue;
+            }
+            out.push(checkpoint);
+        }
+    }
+    Ok(out)
+}
+
 pub fn list_running_checkpoints(scoped_root: &Path) -> io::Result<Vec<(PathBuf, SessionCheckpoint)>> {
     let runs_dir = scoped_root.join("runs");
     let mut out = Vec::new();
@@ -747,6 +781,45 @@ mod tests {
         assert_eq!(mark_workflow_environments_torn_down(scoped_root, "wf-artifact").expect("mark workflow"), 1);
         let checkpoint = read_checkpoint(scoped_root, "wf-artifact", "phase-a").expect("read").expect("checkpoint");
         assert!(checkpoint.environment.expect("binding").torn_down);
+    }
+
+    #[test]
+    fn workflow_checkpoint_listing_includes_historical_terminal_phases() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        for phase_id in ["removed-phase", "current-phase"] {
+            write_session_pending(scoped_root, "wf-history", phase_id, "claude", phase_id, None).expect("pending");
+        }
+        update_session_completed(scoped_root, "wf-history", "removed-phase").expect("terminalize historical phase");
+        let phases_dir = scoped_root.join("runs").join("wf-history").join("phases");
+        fs::write(phases_dir.join("provider-output.json"), b"not a checkpoint").expect("artifact");
+
+        let mut phase_ids = list_workflow_checkpoints(scoped_root, "wf-history")
+            .expect("list checkpoints")
+            .into_iter()
+            .map(|checkpoint| checkpoint.phase_id)
+            .collect::<Vec<_>>();
+        phase_ids.sort();
+        assert_eq!(phase_ids, ["current-phase", "removed-phase"]);
+    }
+
+    #[test]
+    fn workflow_checkpoint_listing_rejects_mismatched_embedded_owner() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-owner", "phase-a", "claude", "run-owner", None).expect("pending");
+
+        let path = phase_session_path(scoped_root, "wf-owner", "phase-a");
+        let mut checkpoint: Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read checkpoint json")).expect("parse checkpoint");
+        checkpoint["workflow_id"] = Value::String("wf-foreign".to_string());
+        fs::write(&path, serde_json::to_vec_pretty(&checkpoint).expect("serialize checkpoint"))
+            .expect("misplace foreign checkpoint");
+
+        assert!(
+            list_workflow_checkpoints(scoped_root, "wf-owner").expect("list owner checkpoints").is_empty(),
+            "a checkpoint's embedded workflow owner must match the workflow directory being enumerated"
+        );
     }
 
     #[test]

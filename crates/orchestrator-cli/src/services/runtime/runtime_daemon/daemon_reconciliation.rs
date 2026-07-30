@@ -3,7 +3,7 @@ use crate::services::runtime::execution_fact_projection::project_terminal_workfl
 use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running_workflow;
 use animus_environment_protocol::{ExecResponse, HarnessCommand};
 use animus_runtime_shared::phase_session::{
-    mark_environment_torn_down, read_checkpoint, update_session_failed, EnvironmentBinding,
+    list_workflow_checkpoints, mark_environment_torn_down, read_checkpoint, update_session_failed, EnvironmentBinding,
 };
 use anyhow::{Context, Result};
 use orchestrator_core::{
@@ -347,7 +347,7 @@ where
     F: FnMut(&EnvironmentBinding) -> anyhow::Result<()>,
 {
     let mut teardown = teardown;
-    for (binding, phase_ids) in retained_delegate_bindings(scoped_root, workflow) {
+    for (binding, phase_ids) in retained_delegate_bindings(scoped_root, workflow)? {
         teardown(&binding)?;
         for phase_id in &phase_ids {
             mark_environment_torn_down(scoped_root, &workflow.id, phase_id).with_context(|| {
@@ -375,26 +375,24 @@ where
 fn retained_delegate_bindings(
     scoped_root: &Path,
     workflow: &OrchestratorWorkflow,
-) -> Vec<(EnvironmentBinding, Vec<String>)> {
+) -> anyhow::Result<Vec<(EnvironmentBinding, Vec<String>)>> {
     let mut groups: Vec<(EnvironmentBinding, Vec<String>)> = Vec::new();
-    for phase in &workflow.phases {
-        let Some(binding) = read_checkpoint(scoped_root, &workflow.id, &phase.phase_id)
-            .ok()
-            .flatten()
-            .and_then(|checkpoint| checkpoint.environment)
-            .filter(|binding| !binding.torn_down)
-        else {
+    let checkpoints = list_workflow_checkpoints(scoped_root, &workflow.id)
+        .with_context(|| format!("failed to scan retained environment checkpoints for workflow {}", workflow.id))?;
+    for checkpoint in checkpoints {
+        let phase_id = checkpoint.phase_id;
+        let Some(binding) = checkpoint.environment.filter(|binding| !binding.torn_down) else {
             continue;
         };
         if let Some((_, phase_ids)) = groups.iter_mut().find(|(candidate, _)| {
             candidate.environment_id == binding.environment_id && candidate.handle == binding.handle
         }) {
-            phase_ids.push(phase.phase_id.clone());
+            phase_ids.push(phase_id);
         } else {
-            groups.push((binding, vec![phase.phase_id.clone()]));
+            groups.push((binding, vec![phase_id]));
         }
     }
-    groups
+    Ok(groups)
 }
 
 /// Liveness of a delegated node, as observed by a trivial exec probe.
@@ -2121,6 +2119,41 @@ mod tests {
         let checkpoint =
             read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
         assert!(checkpoint.environment.expect("binding").torn_down, "successful cleanup releases the hold");
+    }
+
+    #[tokio::test]
+    async fn external_cancel_rejects_mismatched_workflow_checkpoint_without_teardown() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-foreign")).await;
+        let workflow = hub.workflows().get(&workflow_id).await.expect("workflow loads");
+
+        // Model a sanitized-directory collision or misplaced checkpoint: the
+        // file sits below this workflow's directory but durably belongs to a
+        // different workflow.
+        let path = animus_runtime_shared::phase_session::phase_session_path(&scoped_root, &workflow_id, &phase_id);
+        let mut checkpoint: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read checkpoint")).expect("parse checkpoint");
+        checkpoint["workflow_id"] = serde_json::Value::String("different-workflow".to_string());
+        std::fs::write(&path, serde_json::to_vec_pretty(&checkpoint).expect("serialize checkpoint"))
+            .expect("write mismatched checkpoint");
+
+        let teardown_calls = AtomicUsize::new(0);
+        super::teardown_retained_environment_with(&scoped_root, &workflow, |_| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("foreign checkpoint is ignored");
+
+        assert_eq!(
+            teardown_calls.load(Ordering::SeqCst),
+            0,
+            "cleanup must never teardown a node owned by another workflow"
+        );
     }
 
     #[tokio::test]
