@@ -5127,6 +5127,7 @@ struct InstallProvenance {
 fn probe_manifest(binary_path: &Path) -> Result<PluginManifest> {
     let output = std::process::Command::new(binary_path)
         .arg("--manifest")
+        .env("TOKIO_WORKER_THREADS", animus_runtime_shared::cgroup_threads::tokio_worker_threads().to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -7129,6 +7130,31 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_manifest_propagates_tokio_worker_thread_bound() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plugin = temp.path().join("animus-plugin-worker-env");
+        let expected = animus_runtime_shared::cgroup_threads::tokio_worker_threads();
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$TOKIO_WORKER_THREADS\" != \"{expected}\" ]; then\n\
+               echo \"unexpected TOKIO_WORKER_THREADS=$TOKIO_WORKER_THREADS\" >&2\n\
+               exit 17\n\
+             fi\n\
+             printf '{{\"name\":\"worker-env\",\"version\":\"0.1.0\",\"plugin_kind\":\"custom\",\"description\":\"t\",\"protocol_version\":\"1.0.0\",\"capabilities\":[]}}\\n'\n"
+        );
+        std::fs::write(&plugin, script).expect("write plugin");
+        let mut perms = std::fs::metadata(&plugin).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&plugin, perms).expect("chmod");
+
+        let manifest = probe_manifest(&plugin).expect("manifest probe must receive the tokio worker bound");
+        assert_eq!(manifest.name, "worker-env");
+    }
 
     /// Build a single-target integrity map for the CURRENT build target whose
     /// archive + installed-binary shas both equal `sha`. Mirrors how an install

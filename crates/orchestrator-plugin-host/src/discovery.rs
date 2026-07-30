@@ -1138,6 +1138,7 @@ async fn fetch_manifest_inner(path: &Path) -> Result<PluginManifest> {
             command.env(var, value);
         }
     }
+    command.env("TOKIO_WORKER_THREADS", animus_runtime_utils::cgroup_threads::tokio_worker_threads().to_string());
 
     let mut child = command.spawn().with_context(|| format!("failed to run {}", path.display()))?;
     let mut stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("failed to capture plugin stdout"))?;
@@ -2024,6 +2025,31 @@ mod tests {
 
         let manifest = fetch_manifest(&plugin).expect("manifest probe must succeed when env is scrubbed");
         assert_eq!(manifest.name, "snoop", "manifest must round-trip when secret is scrubbed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fetch_manifest_sets_tokio_worker_threads_after_clearing_env() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plugin = temp.path().join("animus-plugin-worker-env");
+        let expected = animus_runtime_utils::cgroup_threads::tokio_worker_threads();
+        let script = format!(
+            "#!/bin/sh\n\
+             if [ \"$TOKIO_WORKER_THREADS\" != \"{expected}\" ]; then\n\
+               echo \"unexpected TOKIO_WORKER_THREADS=$TOKIO_WORKER_THREADS\" >&2\n\
+               exit 17\n\
+             fi\n\
+             printf '{{\"name\":\"worker-env\",\"version\":\"0.1.0\",\"plugin_kind\":\"custom\",\"description\":\"t\",\"protocol_version\":\"1.0.0\",\"capabilities\":[]}}\\n'\n"
+        );
+        fs::write(&plugin, script).expect("write plugin");
+        let mut perms = fs::metadata(&plugin).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&plugin, perms).expect("chmod");
+
+        let manifest = fetch_manifest(&plugin).expect("manifest probe must receive the tokio worker bound");
+        assert_eq!(manifest.name, "worker-env");
     }
 
     // ---- global plugin install dir precedence (v0.4.19) ----------------

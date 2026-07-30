@@ -30,12 +30,13 @@ cargo build -p orchestrator-daemon-runtime
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 9 crates. The current workspace members are:
+The workspace is a Cargo workspace of 10 crates. The current workspace members are:
 
 ```text
 crates/
 ├── animus-plugin-runtime/
 ├── animus-runtime-shared/
+├── animus-runtime-utils/
 ├── animus-mcp-oauth/
 ├── orchestrator-cli/
 ├── orchestrator-config/

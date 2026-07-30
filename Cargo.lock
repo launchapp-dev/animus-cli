@@ -247,6 +247,7 @@ dependencies = [
  "animus-actor",
  "animus-environment-protocol",
  "animus-plugin-protocol",
+ "animus-runtime-utils",
  "anyhow",
  "async-trait",
  "chrono",
@@ -269,6 +270,10 @@ dependencies = [
  "uuid",
  "zstd",
 ]
+
+[[package]]
+name = "animus-runtime-utils"
+version = "0.1.0"
 
 [[package]]
 name = "animus-session-backend"
@@ -3065,6 +3070,7 @@ version = "0.1.0"
 dependencies = [
  "animus-actor",
  "animus-plugin-protocol",
+ "animus-runtime-utils",
  "animus-session-backend",
  "animus-subject-protocol",
  "anyhow",

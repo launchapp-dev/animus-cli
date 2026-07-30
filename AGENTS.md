@@ -41,6 +41,7 @@ crates/
 ├── animus-mcp-oauth/            # OAuth authorization-code + PKCE helpers and proxy bridge for protected MCP servers
 ├── animus-plugin-protocol/      # In-tree stdio plugin protocol types
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
+├── animus-runtime-utils/        # Dependency-light cgroup/runtime sizing helpers
 ├── orchestrator-cli/            # Main `animus` binary
 ├── orchestrator-config/         # Workflow, pack, and template config loading
 ├── orchestrator-core/           # Domain services, subject_adapter, store, bootstrap, state mutation APIs

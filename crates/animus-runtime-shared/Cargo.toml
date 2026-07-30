@@ -11,6 +11,7 @@ name = "animus_runtime_shared"
 path = "src/lib.rs"
 
 [dependencies]
+animus-runtime-utils = { workspace = true }
 anyhow = "1.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }

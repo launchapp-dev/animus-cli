@@ -1,6 +1,6 @@
 # Crate Map
 
-The Animus workspace is a Cargo workspace of 9 crates organized by runtime
+The Animus workspace is a Cargo workspace of 10 crates organized by runtime
 responsibility. `Cargo.toml` is the source of truth for membership.
 
 The `protocol` (kernel wire types) and `animus-config-protocol` crates moved
@@ -20,6 +20,7 @@ them as git deps pinned to an `animus-protocol` tag.
 |---|---|
 | `orchestrator-daemon-runtime` | Daemon queue, scheduling, subject dispatch, trigger handling, and runtime supervision |
 | `animus-runtime-shared` | Shared workflow execution helpers, runtime contracts, agent memory wiring, and runner IPC utilities consumed by daemon code and external `workflow_runner` plugins |
+| `animus-runtime-utils` | Dependency-light cgroup CPU quota detection and Tokio worker-pool sizing shared by runtime entry points and plugin launch seams |
 | `animus-mcp-oauth` | Interactive OAuth (authorization-code + PKCE) for protected MCP servers via rmcp's auth engine, keychain-backed token storage, and the `animus-mcp-proxy` stdio bridge that injects + refreshes bearer tokens for agents |
 
 Provider invocation no longer uses an in-tree `agent-runner` crate. Agent and

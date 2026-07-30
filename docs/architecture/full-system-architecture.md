@@ -30,13 +30,13 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 9 workspace members.
+`Cargo.toml` currently declares 10 workspace members.
 
 | Group | Crates |
 |---|---|
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
-| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` |
+| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `animus-runtime-utils` (dependency-light cgroup-aware runtime sizing) |
 | Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-runtime` |
 | Support | `orchestrator-logging`, `animus-mcp-oauth` |
 
