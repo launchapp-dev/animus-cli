@@ -202,6 +202,12 @@ fn finalize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     struct EnvVarGuard {
         name: &'static str,
@@ -226,6 +232,10 @@ mod tests {
     }
 
     fn assert_oauth_store_uses_project_key_file(key_source: &str) {
+        // Secret-key environment variables are process-global. Keep removal,
+        // store construction, and restoration in one serialized window so
+        // these tests cannot borrow or overwrite another test's key.
+        let _env_guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let project_root = tmp.path().join("project");
         let animus_dir = project_root.join(".animus");
