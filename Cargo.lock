@@ -2893,7 +2893,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.7.0-rc.33"
+version = "0.7.0-rc.34"
 dependencies = [
  "animus-actor",
  "animus-application-protocol",
