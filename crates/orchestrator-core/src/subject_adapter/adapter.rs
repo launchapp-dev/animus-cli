@@ -306,12 +306,23 @@ fn build_context_from_plugin(
     fallback_title: Option<&str>,
     fallback_description: Option<&str>,
 ) -> Result<SubjectContext> {
+    // The dispatch layer records built-in task/requirement subjects with a
+    // QUALIFIED id (`task:TASK-411`) so their queue key stays in lockstep with
+    // the `--task-id` path (see
+    // `orchestrator-cli::services::operations::subject_id_dispatch::subject_ref_preserving_key`).
+    // A plugin-resolved `SubjectRef` therefore carries that qualified form in its
+    // `id` field. `SubjectContext::subject_id` MUST instead be the BARE native id:
+    // the in-tree task adapter emits it bare (its store keys on the bare id), and
+    // the workflow runner sets its `{{subject_native_id}}` template var from this
+    // field and requires the bare id (a `:` yields an invalid git branch name like
+    // `animus/task:TASK-411`). Strip the leading `<kind>:` qualifier to match.
+    let native_id = strip_leading_kind_prefix(subject.id(), subject.kind());
     let title = response
         .get("title")
         .and_then(serde_json::Value::as_str)
         .map(ToOwned::to_owned)
         .or_else(|| fallback_title.map(ToOwned::to_owned))
-        .unwrap_or_else(|| subject.id().to_string());
+        .unwrap_or_else(|| native_id.to_string());
     let description = response
         .get("description")
         .and_then(serde_json::Value::as_str)
@@ -338,12 +349,49 @@ fn build_context_from_plugin(
     attributes.insert(SUBJECT_ATTR_PLUGIN_RESOLVED.to_string(), "true".to_string());
     Ok(SubjectContext {
         subject_kind: subject.kind().to_string(),
-        subject_id: subject.id().to_string(),
+        subject_id: native_id.to_string(),
         subject_title: title,
         subject_description: description,
         attributes,
         task: None,
     })
+}
+
+/// Strip a leading `<kind>:` qualifier from a subject id, yielding the BARE
+/// native id the backend actually stores (`task:TASK-411` -> `TASK-411`).
+///
+/// A plugin-resolved built-in subject arrives with a qualified `id` field
+/// because the dispatch layer keeps built-in task/requirement ids qualified for
+/// queue-key parity with the `--task-id` path (see
+/// `orchestrator-cli::services::operations::subject_id_dispatch::subject_ref_preserving_key`).
+/// Downstream (the workflow runner's `{{subject_native_id}}`, git branch names)
+/// requires the bare native id.
+///
+/// The id may be qualified with either the subject's full native kind
+/// (`animus.task:TASK-1`) or its short user-facing alias — the trailing dotted
+/// segment (`task:TASK-1`, which is what a router-resolved `queue enqueue`
+/// records). A leading `<prefix>:` is stripped only when `<prefix>`
+/// case-insensitively equals the subject's `kind` OR that kind's last dotted
+/// segment, so a bare id (no prefix) or an unrelated `foo:` prefix (a genuine
+/// colon in a local id) passes through unchanged.
+///
+/// Mirrors
+/// `orchestrator-daemon-runtime::dispatch::build_runner_command_from_dispatch::strip_leading_kind_prefix`
+/// verbatim; duplicated (not shared) because `orchestrator-daemon-runtime`
+/// depends on `orchestrator-core`, not the reverse.
+fn strip_leading_kind_prefix<'a>(id: &'a str, kind: &str) -> &'a str {
+    let Some((prefix, rest)) = id.split_once(':') else {
+        return id;
+    };
+    if rest.is_empty() {
+        return id;
+    }
+    let short = kind.rsplit('.').next().unwrap_or(kind);
+    if prefix.eq_ignore_ascii_case(kind) || prefix.eq_ignore_ascii_case(short) {
+        rest
+    } else {
+        id
+    }
 }
 
 #[must_use]
@@ -1948,5 +1996,76 @@ mod tests {
         assert!(msg.contains("not resolvable"), "expected combined error message, got: {msg}");
         assert!(msg.contains("in-tree"), "expected in-tree error context, got: {msg}");
         assert!(msg.contains("plugin"), "expected plugin error context, got: {msg}");
+    }
+
+    // ---------------------------------------------------------------------
+    // Plugin-resolved subjects must expose the BARE native id in
+    // `SubjectContext::subject_id`. The dispatch layer keeps built-in
+    // task/requirement ids QUALIFIED (`task:TASK-411`) for queue-key parity, so
+    // `SubjectRef::id()` on the plugin path is qualified; the workflow runner
+    // feeds `subject_id` into `{{subject_native_id}}` and a `:` breaks git branch
+    // names (`animus/task:TASK-411`). These pin the strip so the plugin path
+    // matches the in-tree adapter's bare-id convention.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn build_context_from_plugin_strips_qualified_task_prefix() {
+        // Built-in task kind is namespaced (`animus.task`) but the qualified id
+        // uses the short alias prefix (`task:`); the native id must come out bare.
+        let subject = SubjectRef::new(SUBJECT_KIND_TASK, "task:TASK-411");
+        let ctx = build_context_from_plugin(&subject, serde_json::json!({}), None, None).unwrap();
+        assert_eq!(ctx.subject_kind, SUBJECT_KIND_TASK);
+        assert_eq!(ctx.subject_id, "TASK-411", "subject_id must be the bare native id");
+        // No plugin/fallback title -> falls back to the bare native id, not the
+        // qualified form.
+        assert_eq!(ctx.subject_title, "TASK-411");
+        assert_eq!(ctx.attributes.get(SUBJECT_ATTR_PLUGIN_RESOLVED).map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn build_context_from_plugin_strips_full_namespaced_kind_prefix() {
+        // A backend may echo the id qualified with the FULL native kind.
+        let subject = SubjectRef::new(SUBJECT_KIND_REQUIREMENT, "animus.requirement:REQ-7");
+        let ctx = build_context_from_plugin(&subject, serde_json::json!({}), None, None).unwrap();
+        assert_eq!(ctx.subject_id, "REQ-7");
+    }
+
+    #[test]
+    fn build_context_from_plugin_keeps_bare_dynamic_id() {
+        // Dynamic kinds are stored bare already: nothing to strip.
+        let subject = SubjectRef::new("transcript", "TRANSCRIPT-001");
+        let ctx = build_context_from_plugin(&subject, serde_json::json!({}), None, None).unwrap();
+        assert_eq!(ctx.subject_kind, "transcript");
+        assert_eq!(ctx.subject_id, "TRANSCRIPT-001");
+    }
+
+    #[test]
+    fn build_context_from_plugin_strips_qualified_dynamic_prefix() {
+        // A qualified dynamic id still de-qualifies to its bare native form.
+        let subject = SubjectRef::new("transcript", "transcript:TRANSCRIPT-001");
+        let ctx = build_context_from_plugin(&subject, serde_json::json!({}), None, None).unwrap();
+        assert_eq!(ctx.subject_id, "TRANSCRIPT-001");
+    }
+
+    #[test]
+    fn build_context_from_plugin_preserves_unrelated_colon_id() {
+        // An id whose colon prefix does NOT match the kind (or its short alias)
+        // is a genuine part of the native id and must survive untouched.
+        let subject = SubjectRef::new("blog", "draft:2024:post-1");
+        let ctx = build_context_from_plugin(&subject, serde_json::json!({}), None, None).unwrap();
+        assert_eq!(ctx.subject_id, "draft:2024:post-1");
+    }
+
+    #[test]
+    fn strip_leading_kind_prefix_only_strips_matching_kind() {
+        assert_eq!(strip_leading_kind_prefix("task:TASK-244", "animus.task"), "TASK-244");
+        assert_eq!(strip_leading_kind_prefix("animus.task:TASK-244", "animus.task"), "TASK-244");
+        assert_eq!(strip_leading_kind_prefix("requirement:REQ-1", "animus.requirement"), "REQ-1");
+        // Bare id: unchanged.
+        assert_eq!(strip_leading_kind_prefix("TASK-244", "animus.task"), "TASK-244");
+        // Unrelated prefix: unchanged.
+        assert_eq!(strip_leading_kind_prefix("foo:BAR-1", "animus.task"), "foo:BAR-1");
+        // Empty native segment: unchanged (defensive).
+        assert_eq!(strip_leading_kind_prefix("task:", "animus.task"), "task:");
     }
 }
