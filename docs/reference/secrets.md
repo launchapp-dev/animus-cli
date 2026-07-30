@@ -79,7 +79,9 @@ OAuth operations, including `animus mcp auth --complete`:
 - **`auto`** — keeps existing keyring installs on the keyring (never strands
   secrets); selects the device store when a server key is supplied through
   `ANIMUS_SECRET_KEY`, `ANIMUS_SECRET_PASSPHRASE`, or `key_file`, and continues
-  using the device store once one exists for the scope.
+  using the device store once one exists for the scope. Setting `key_file`
+  is sufficient; `key_source: "user-key"` is optional when `backend` and
+  `key_source` remain `auto`.
 
 ### Key sources (what wraps the device store's master key)
 

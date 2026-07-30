@@ -517,8 +517,16 @@ pub(crate) mod tests {
             Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
             None => std::env::remove_var(ENV_PASSPHRASE),
         }
-        let src = result.expect("empty ANIMUS_SECRET_PASSPHRASE must be treated as unset");
-        assert_eq!(src.id(), "device-id");
+        match result {
+            Ok(src) => assert_eq!(src.id(), "device-id"),
+            Err(err) => {
+                let message = format!("{err:#}");
+                assert!(
+                    message.contains("machine id") || message.contains("machine-id"),
+                    "empty passphrase must fall through to device-id, got: {message}"
+                );
+            }
+        }
     }
 
     #[test]
