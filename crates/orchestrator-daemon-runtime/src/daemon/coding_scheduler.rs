@@ -290,7 +290,19 @@ impl CodingScheduler {
                     state.leases[index].expires_at = Utc::now() + self.lease_ttl;
                     RecoveryOutcome::Recovered { lease: state.leases[index].clone() }
                 }
-                RecoveryObservation::DeadNode | RecoveryObservation::Terminal => {
+                RecoveryObservation::DeadNode => {
+                    // The journal/workflow still owns this generation and will
+                    // redispatch it. Drop only identities belonging to the dead
+                    // allocation so the replacement can be bound to the same
+                    // fence; retaining the lease prevents queue admission from
+                    // preparing a second replacement concurrently.
+                    state.leases[index].resources.workspace_id = None;
+                    state.leases[index].resources.environment_id = None;
+                    state.leases[index].recovered = true;
+                    state.leases[index].expires_at = Utc::now() + self.lease_ttl;
+                    RecoveryOutcome::Recovered { lease: state.leases[index].clone() }
+                }
+                RecoveryObservation::Terminal => {
                     let lease = state.leases.remove(index);
                     RecoveryOutcome::Released {
                         task: lease.task,
@@ -395,15 +407,19 @@ fn collision(
         });
     }
     for existing in &state.leases {
-        if existing.resources.repository == resources.repository
-            && resources.git_ref.is_some()
-            && existing.resources.git_ref == resources.git_ref
-        {
-            return Some(CollisionReason::RepositoryRef {
-                repository: resources.repository.clone(),
-                git_ref: resources.git_ref.clone().unwrap_or_default(),
-                task: existing.task.clone(),
-            });
+        if same_repository(&existing.resources.repository, &resources.repository) {
+            if let (Some(held), Some(wanted)) = (
+                existing.resources.git_ref.as_deref().and_then(normalized_git_ref),
+                resources.git_ref.as_deref().and_then(normalized_git_ref),
+            ) {
+                if held == wanted {
+                    return Some(CollisionReason::RepositoryRef {
+                        repository: resources.repository.clone(),
+                        git_ref: resources.git_ref.clone().unwrap_or_default(),
+                        task: existing.task.clone(),
+                    });
+                }
+            }
         }
         for (name, wanted, held) in [
             ("queue_item", &resources.queue_item_id, &existing.resources.queue_item_id),
@@ -431,7 +447,7 @@ fn collision(
                 }
             }
         }
-        if existing.resources.repository == resources.repository
+        if same_repository(&existing.resources.repository, &resources.repository)
             && resources.branch.is_some()
             && existing.resources.branch == resources.branch
         {
@@ -453,6 +469,61 @@ fn collision(
     }
     (state.leases.len() >= CODING_SCHEDULER_CAPACITY)
         .then_some(CollisionReason::Capacity { capacity: CODING_SCHEDULER_CAPACITY })
+}
+
+fn same_repository(left: &str, right: &str) -> bool {
+    normalized_repository(left) == normalized_repository(right)
+}
+
+fn normalized_repository(value: &str) -> String {
+    let value = value.trim();
+
+    if let Some((_, remainder)) = value.split_once("://") {
+        let (authority, path) = remainder.split_once('/').unwrap_or((remainder, ""));
+        let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+        return repository_host_path(host, path);
+    }
+
+    // Git's SCP-like syntax has no scheme: `git@host:owner/repository.git`.
+    // Require a slash after the colon so shorthand names and Windows paths do
+    // not accidentally become remote repository URLs.
+    let first_slash = value.find('/');
+    if let Some(colon) = value.find(':') {
+        if first_slash.is_some_and(|slash| colon < slash) {
+            let host = value[..colon].rsplit_once('@').map_or(&value[..colon], |(_, host)| host);
+            return repository_host_path(host, &value[colon + 1..]);
+        }
+    }
+
+    trim_repository_path(value).to_string()
+}
+
+fn repository_host_path(host: &str, path: &str) -> String {
+    let host = host.trim().trim_end_matches('/').to_ascii_lowercase();
+    let path = trim_repository_path(path);
+    if path.is_empty() {
+        host
+    } else {
+        format!("{host}/{path}")
+    }
+}
+
+fn trim_repository_path(value: &str) -> &str {
+    value.trim().trim_matches('/').trim_end_matches(".git").trim_end_matches('/')
+}
+
+fn normalized_git_ref(value: &str) -> Option<&str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(
+        value
+            .strip_prefix("refs/heads/")
+            .or_else(|| value.strip_prefix("refs/remotes/origin/"))
+            .or_else(|| value.strip_prefix("origin/"))
+            .unwrap_or(value),
+    )
 }
 
 fn validate(task: &TaskGeneration, resources: &CodingRunResources) -> Result<()> {
@@ -549,6 +620,32 @@ mod tests {
     }
 
     #[test]
+    fn rejects_equivalent_repository_and_ref_spellings() {
+        let temp = tempfile::tempdir().unwrap();
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
+        let mut held = resources(1);
+        held.repository = "https://GitHub.COM/launchapp/animus.git".into();
+        held.git_ref = Some("refs/heads/main".into());
+        held.branch = None;
+        scheduler.reserve(task(1), held).unwrap();
+
+        for (n, repository) in [
+            (2, "https://github.com/launchapp/animus/"),
+            (3, "ssh://git@github.com/launchapp/animus.git"),
+            (4, "git@github.com:launchapp/animus.git"),
+        ] {
+            let mut wanted = resources(n);
+            wanted.repository = repository.into();
+            wanted.git_ref = Some("origin/main".into());
+            wanted.branch = None;
+            assert!(matches!(
+                scheduler.reserve(task(n), wanted).unwrap(),
+                ReservationOutcome::Rejected { reason: CollisionReason::RepositoryRef { .. } }
+            ));
+        }
+    }
+
+    #[test]
     fn retained_node_is_adopted_and_stale_owner_is_fenced() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("leases.json");
@@ -591,14 +688,61 @@ mod tests {
     }
 
     #[test]
-    fn dead_and_terminal_observations_release_capacity() {
+    fn dead_node_restart_preserves_fence_for_exactly_one_replacement() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("leases.json");
+        let scheduler = CodingScheduler::with_state_path(path.clone());
+        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
+            panic!("reservation rejected");
+        };
+
+        let restarted = CodingScheduler::with_state_path(path.clone());
+        let RecoveryOutcome::Recovered { lease: recovered } = restarted
+            .reconcile(&lease.task, lease.lease_generation, RecoveryObservation::DeadNode)
+            .unwrap()
+        else {
+            panic!("dead node was not recovered");
+        };
+        assert_eq!(recovered.lease_generation, lease.lease_generation);
+        assert_eq!(recovered.owner, lease.owner);
+        assert_eq!(recovered.resources.workflow_id, lease.resources.workflow_id);
+        assert!(recovered.resources.workspace_id.is_none());
+        assert!(recovered.resources.environment_id.is_none());
+        assert!(matches!(
+            restarted.reserve(lease.task.clone(), lease.resources.clone()).unwrap(),
+            ReservationOutcome::Rejected { reason: CollisionReason::DuplicateTaskGeneration { .. } }
+        ));
+
+        let mut replacement = recovered.resources.clone();
+        replacement.workspace_id = Some("replacement-workspace".into());
+        replacement.environment_id = Some("replacement-environment".into());
+        assert!(matches!(
+            restarted
+                .bind_resources(
+                    &recovered.task,
+                    recovered.lease_generation,
+                    &recovered.owner,
+                    replacement.clone(),
+                )
+                .unwrap(),
+            ReservationOutcome::Reserved { .. }
+        ));
+
+        let persisted = CodingScheduler::with_state_path(path).status().unwrap();
+        assert_eq!(persisted.reservations.len(), 1);
+        assert_eq!(persisted.reservations[0].lease_generation, lease.lease_generation);
+        assert_eq!(persisted.reservations[0].resources, replacement);
+    }
+
+    #[test]
+    fn terminal_observation_releases_capacity() {
         let temp = tempfile::tempdir().unwrap();
         let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
         let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
             panic!("reservation rejected");
         };
         assert!(matches!(
-            scheduler.reconcile(&lease.task, lease.lease_generation, RecoveryObservation::DeadNode).unwrap(),
+            scheduler.reconcile(&lease.task, lease.lease_generation, RecoveryObservation::Terminal).unwrap(),
             RecoveryOutcome::Released { .. }
         ));
         assert_eq!(scheduler.status().unwrap().available, CODING_SCHEDULER_CAPACITY);

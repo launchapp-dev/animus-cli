@@ -941,8 +941,10 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let coding_scheduler = CodingScheduler::for_project(std::path::Path::new(project_root))?;
     // Restart reconciliation deliberately reuses the durable session
     // checkpoints from TASK-793/TASK-933. An exact running checkpoint keeps
-    // its reservation (and retained environment) fenced; only a proven
-    // terminal workflow or dead retained node releases the reservation.
+    // its reservation (and retained environment) fenced. A dead retained node
+    // clears only its allocation identities so journal redispatch can bind one
+    // replacement to the same generation; only a terminal workflow releases
+    // the reservation.
     let scoped_root = protocol::repository_scope::scoped_state_root(std::path::Path::new(project_root))
         .ok_or_else(|| anyhow::anyhow!("a home directory is required for daemon restart reconciliation"))?;
     let running_checkpoints = list_running_checkpoints(&scoped_root).unwrap_or_default();
