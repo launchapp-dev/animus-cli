@@ -1,6 +1,7 @@
 use super::*;
 use orchestrator_daemon_runtime::{
-    execute_dispatch_plan_via_runner, DispatchNoticeSink, DispatchSelectionSource, PlannedDispatchStart,
+    execute_dispatch_plan_via_runner, CodingLease, CodingRunResources, CodingScheduler, DispatchNoticeSink,
+    DispatchSelectionSource, PlannedDispatchStart, ReservationOutcome, TaskGeneration,
 };
 pub use orchestrator_daemon_runtime::{DispatchNotice, DispatchWorkflowStartSummary};
 use tracing::warn;
@@ -12,6 +13,7 @@ use animus_subject_protocol_wire::SubjectId as QueueSubjectId;
 pub async fn dispatch_queued_entries_via_runner(
     root: &str,
     process_manager: &mut ProcessManager,
+    coding_scheduler: &CodingScheduler,
     limit: usize,
 ) -> anyhow::Result<DispatchWorkflowStartSummary> {
     let active_subject_ids = process_manager.active_subject_ids();
@@ -19,6 +21,7 @@ pub async fn dispatch_queued_entries_via_runner(
     let mut planned_starts: Vec<PlannedDispatchStart> = Vec::new();
     let mut plugin_owned_subject_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut leased_entry_ids: Vec<String> = Vec::new();
+    let mut coding_leases: Vec<CodingLease> = Vec::new();
     let mut undecodable_entry_ids: Vec<String> = Vec::new();
     let project_root_path = std::path::Path::new(root);
 
@@ -60,6 +63,54 @@ pub async fn dispatch_queued_entries_via_runner(
                     undecodable_entry_ids.push(entry.entry_id.clone());
                     continue;
                 };
+                let task_id = dispatch
+                    .task_id()
+                    .or_else(|| dispatch.subject_id())
+                    .unwrap_or(&entry.entry_id)
+                    .to_string();
+                // The queue row is the authoritative task-generation identity.
+                // Optional repo resources are recorded only when the producer
+                // supplied them; workspace/environment/branch allocation happens
+                // later and must be attached with the scheduler's fenced bind.
+                let generation =
+                    dispatch.vars.get("task_generation").cloned().unwrap_or_else(|| entry.entry_id.clone());
+                let branch = dispatch.vars.get("branch").cloned().or_else(|| {
+                    dispatch
+                        .task_id()
+                        .map(|task_id| format!("animus/{}", protocol::sanitize_identifier(task_id, "task")))
+                });
+                let git_ref = dispatch.vars.get("git_ref").cloned().or_else(|| branch.clone());
+                let pull_request = ["pull_request", "pull_request_url", "pr_url", "pr_number"]
+                    .iter()
+                    .find_map(|key| dispatch.vars.get(*key).cloned())
+                    .filter(|value| !value.trim().is_empty());
+                let resources = CodingRunResources {
+                    repository: std::fs::canonicalize(project_root_path)
+                        .unwrap_or_else(|_| project_root_path.to_path_buf())
+                        .to_string_lossy()
+                        .into_owned(),
+                    git_ref,
+                    queue_item_id: entry.entry_id.clone(),
+                    workflow_id: workflow_id.clone(),
+                    workspace_id: None,
+                    environment_id: None,
+                    branch,
+                    pull_request,
+                };
+                let lease = match coding_scheduler.reserve(TaskGeneration { task_id, generation }, resources)? {
+                    ReservationOutcome::Reserved { lease } => lease,
+                    ReservationOutcome::Rejected { reason } => {
+                        warn!(
+                            actor = protocol::ACTOR_DAEMON,
+                            entry_id = %entry.entry_id,
+                            collision = ?reason,
+                            "coding scheduler rejected queue admission; releasing entry to pending"
+                        );
+                        release_leased_entry_to_pending(project_root_path, &entry.entry_id, "coding-scheduler-collision")
+                            .await;
+                        continue;
+                    }
+                };
                 // Within-batch dedupe: the queue's `exclude_subjects` filter
                 // honors the snapshot we sent at lease time, but multiple
                 // pending entries for the same subject (different
@@ -82,11 +133,13 @@ pub async fn dispatch_queued_entries_via_runner(
                             "within-batch-duplicate-subject",
                         )
                         .await;
+                        let _ = coding_scheduler.release(&lease.task, lease.lease_generation, &lease.owner);
                         continue;
                     }
                     plugin_owned_subject_keys.insert(subject_key);
                 }
                 leased_entry_ids.push(entry.entry_id.clone());
+                coding_leases.push(lease);
                 planned_starts.push(PlannedDispatchStart {
                     dispatch,
                     workflow_id: Some(workflow_id),
@@ -135,15 +188,22 @@ pub async fn dispatch_queued_entries_via_runner(
     for (idx, entry_id) in leased_entry_ids.iter().enumerate() {
         match notice_sink.outcomes.get(idx) {
             // Runner spawned: the entry is now Assigned to a live workflow.
-            Some(DispatchEntryOutcome::Started) => {}
+            Some(DispatchEntryOutcome::Started) => {
+                let lease = &coding_leases[idx];
+                let _ = coding_scheduler.renew(&lease.task, lease.lease_generation, &lease.owner);
+            }
             // Recoverable defer (workflow concurrency cap) or never attempted
             // (dispatch limit reached mid-batch): back to Pending for the next
             // tick — closing them would permanently drop legitimate queued work.
             Some(DispatchEntryOutcome::Deferred) | None => {
+                let lease = &coding_leases[idx];
+                let _ = coding_scheduler.release(&lease.task, lease.lease_generation, &lease.owner);
                 release_leased_entry_to_pending(project_root_path, entry_id, "spawn-deferred").await;
             }
             // Hard spawn failure: close the entry as FAILED.
             Some(DispatchEntryOutcome::Failed) => {
+                let lease = &coding_leases[idx];
+                let _ = coding_scheduler.release(&lease.task, lease.lease_generation, &lease.owner);
                 let req = QueueCompletionRequest {
                     entry_id: entry_id.clone(),
                     status: queue_proto::completion_status::FAILED.to_string(),

@@ -203,6 +203,7 @@ struct Inner {
     /// run_id -> spawn-time context (project_root + expected environment id).
     pending: StdMutex<HashMap<String, PendingContext>>,
     client_resolver: Arc<ClientResolver>,
+    coding_scheduler: Option<crate::CodingScheduler>,
     /// The socket acceptor task; aborted + socket unlinked on drop.
     acceptor: StdMutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -236,8 +237,16 @@ impl EnvironmentBroker {
     /// resident [`EnvironmentClient`] the broker drives spawns its warm plugin
     /// host onto THIS runtime and is pinned there for the run's lifetime.
     pub async fn start(project_root: &str) -> std::io::Result<Self> {
+        Self::start_with_scheduler(project_root, None).await
+    }
+
+    pub async fn start_with_scheduler(
+        project_root: &str,
+        coding_scheduler: Option<crate::CodingScheduler>,
+    ) -> std::io::Result<Self> {
         Self::start_with_resolver(
             project_root,
+            coding_scheduler,
             Arc::new(|project_root, environment_id| {
                 Ok(Arc::new(EnvironmentClient::resolve(project_root, environment_id)?))
             }),
@@ -245,7 +254,11 @@ impl EnvironmentBroker {
         .await
     }
 
-    async fn start_with_resolver(project_root: &str, client_resolver: Arc<ClientResolver>) -> std::io::Result<Self> {
+    async fn start_with_resolver(
+        project_root: &str,
+        coding_scheduler: Option<crate::CodingScheduler>,
+        client_resolver: Arc<ClientResolver>,
+    ) -> std::io::Result<Self> {
         let records_dir = broker_records_dir(project_root);
         std::fs::create_dir_all(&records_dir)?;
         let socket_path = broker_socket_path(&records_dir);
@@ -262,6 +275,7 @@ impl EnvironmentBroker {
             key_locks: StdMutex::new(HashMap::new()),
             pending: StdMutex::new(HashMap::new()),
             client_resolver,
+            coding_scheduler,
             acceptor: StdMutex::new(None),
         });
 
@@ -392,16 +406,26 @@ impl EnvironmentBroker {
             // second restart after the phase boundary cannot prove ownership.
             bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
                 .with_context(|| format!("persisting reused phase environment binding for run {run_id}"))?;
+            self.bind_coding_resources(run_id, environment_id, &handle, &spec)?;
             return Ok((handle.workspace_root.clone(), handle.id.clone()));
         }
 
-        // Slow path: prepare the node ONCE. Record BEFORE prepare so a crash
-        // mid-prepare still leaves a durable marker for the startup reaper.
-        self.write_record_required(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None)
-            .with_context(|| format!("persisting preparing lease for run {run_id}"))?;
-
         let mut spec = spec;
         set_run_id_metadata(&mut spec, run_id);
+        // Preserve the real allocation request across prepare. Its repo/ref and
+        // provider metadata must be fenced before the node reaches the runner.
+        let allocated_resources = spec.clone();
+
+        // Fence every identity known from the request before asking a provider
+        // to allocate anything. In particular, two runs targeting the same
+        // repository ref/branch/PR must not both reach `prepare`: doing the
+        // collision check afterwards can create a duplicate remote node.
+        self.bind_requested_coding_resources(run_id, &allocated_resources)?;
+
+        // Record BEFORE prepare so a crash mid-prepare still leaves a durable
+        // marker for the startup reaper.
+        self.write_record_required(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None)
+            .with_context(|| format!("persisting preparing lease for run {run_id}"))?;
 
         let project_root = pending.project_root.clone();
         let environment_id_owned = environment_id.to_string();
@@ -457,6 +481,22 @@ impl EnvironmentBroker {
                         )
                     });
                 }
+                if let Err(error) =
+                    self.bind_coding_resources(run_id, environment_id, &handle, &allocated_resources)
+                {
+                    let cleanup = client.teardown(&handle).err();
+                    if cleanup.is_none() {
+                        self.delete_record(run_id);
+                    }
+                    return Err(error).with_context(|| {
+                        format!(
+                            "binding prepared node to coding lease for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
                 let response = (handle.workspace_root.clone(), handle.id.clone());
                 self.inner.leases.lock().await.insert(
                     run_id.to_string(),
@@ -475,6 +515,99 @@ impl EnvironmentBroker {
                 self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Failed, None);
                 self.delete_record(run_id);
                 Err(error)
+            }
+        }
+    }
+
+    fn bind_coding_resources(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        handle: &EnvironmentHandle,
+        spec: &EnvironmentSpec,
+    ) -> Result<()> {
+        self.bind_requested_coding_resources(run_id, spec)?;
+        self.bind_provider_coding_resources(run_id, environment_id, handle)
+    }
+
+    fn bind_requested_coding_resources(&self, run_id: &str, spec: &EnvironmentSpec) -> Result<()> {
+        let Some(scheduler) = self.inner.coding_scheduler.as_ref() else {
+            return Ok(());
+        };
+        let lease = self.coding_lease_for_workflow(scheduler, run_id)?;
+        let mut resources = lease.resources.clone();
+        if let Some(primary) = spec.repos.iter().find(|repo| repo.primary).or_else(|| spec.repos.first()) {
+            if !primary.url.trim().is_empty() {
+                resources.repository = primary.url.clone();
+            }
+            if primary.git_ref.as_ref().is_some_and(|git_ref| !git_ref.trim().is_empty()) {
+                resources.git_ref = primary.git_ref.clone();
+            }
+        }
+        resources.branch =
+            allocation_string(&spec.metadata, &["branch", "head_branch"]).or(resources.branch);
+        resources.pull_request = allocation_string(
+            &spec.metadata,
+            &["pull_request", "pull_request_url", "pr_url", "pr_number"],
+        )
+        .or(resources.pull_request);
+        self.bind_coding_lease(scheduler, run_id, &lease, resources)
+    }
+
+    fn bind_provider_coding_resources(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        handle: &EnvironmentHandle,
+    ) -> Result<()> {
+        let Some(scheduler) = self.inner.coding_scheduler.as_ref() else {
+            return Ok(());
+        };
+        let lease = self.coding_lease_for_workflow(scheduler, run_id)?;
+        let mut resources = lease.resources.clone();
+        // A workspace root is a mount path inside the allocated environment,
+        // not an allocation identity. Different nodes commonly expose the
+        // same path (for example `/workspace`), so include the provider and
+        // provider-issued handle id to keep independent allocations distinct.
+        resources.workspace_id = Some(format!(
+            "{environment_id}:{}:{}",
+            handle.id, handle.workspace_root
+        ));
+        resources.environment_id = Some(format!("{environment_id}:{}", handle.id));
+        resources.branch =
+            allocation_string(&handle.metadata, &["branch", "head_branch"]).or(resources.branch);
+        resources.pull_request = allocation_string(
+            &handle.metadata,
+            &["pull_request", "pull_request_url", "pr_url", "pr_number"],
+        )
+        .or(resources.pull_request);
+        self.bind_coding_lease(scheduler, run_id, &lease, resources)
+    }
+
+    fn coding_lease_for_workflow(
+        &self,
+        scheduler: &crate::CodingScheduler,
+        run_id: &str,
+    ) -> Result<crate::CodingLease> {
+        scheduler
+            .status()?
+            .reservations
+            .into_iter()
+            .find(|lease| lease.resources.workflow_id == run_id)
+            .ok_or_else(|| anyhow!("no coding lease owns workflow {run_id}"))
+    }
+
+    fn bind_coding_lease(
+        &self,
+        scheduler: &crate::CodingScheduler,
+        run_id: &str,
+        lease: &crate::CodingLease,
+        resources: crate::CodingRunResources,
+    ) -> Result<()> {
+        match scheduler.bind_resources(&lease.task, lease.lease_generation, &lease.owner, resources)? {
+            crate::ReservationOutcome::Reserved { .. } => Ok(()),
+            crate::ReservationOutcome::Rejected { reason } => {
+                bail!("coding resource collision for workflow {run_id}: {reason:?}")
             }
         }
     }
@@ -934,6 +1067,20 @@ fn set_run_id_metadata(spec: &mut EnvironmentSpec, run_id: &str) {
     }
 }
 
+/// Normalize allocation identities emitted by environment providers. PR
+/// numbers are often JSON numbers while branches and URLs are strings.
+fn allocation_string(metadata: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        let value = metadata.get(*key)?;
+        let normalized = match value {
+            serde_json::Value::String(value) => value.trim().to_string(),
+            serde_json::Value::Number(value) => value.to_string(),
+            _ => return None,
+        };
+        (!normalized.is_empty()).then_some(normalized)
+    })
+}
+
 /// Directory holding the broker's durable records and (length permitting) its
 /// socket. Scoped state root when resolvable; a `$TMPDIR` fallback otherwise
 /// (tests / non-git contexts) so the broker still works without cross-restart
@@ -1213,7 +1360,9 @@ mod tests {
         };
 
         let first =
-            EnvironmentBroker::start_with_resolver(&project_root, resolver.clone()).await.expect("start first broker");
+            EnvironmentBroker::start_with_resolver(&project_root, None, resolver.clone())
+                .await
+                .expect("start first broker");
         first.register_run("wf-restart", &project_root, "railway");
         let spec = EnvironmentSpec {
             kind: "railway".to_string(),
@@ -1233,7 +1382,9 @@ mod tests {
         first.stop_acceptor_for_restart_test();
         drop(first);
         let replacement =
-            EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start replacement broker");
+            EnvironmentBroker::start_with_resolver(&project_root, None, resolver)
+                .await
+                .expect("start replacement broker");
         assert!(
             replacement.owns_ready_lease("wf-restart", "railway", &fake.handle).await,
             "replacement daemon adopts the exact persisted handle"
@@ -1318,5 +1469,171 @@ mod tests {
         };
         let err = broker.acquire("wf-1", "container", spec).await.expect_err("must reject mismatch");
         assert!(err.to_string().contains("is bound to environment 'railway'"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn second_generation_collision_is_rejected_before_prepare_without_allocation_identities() {
+        use animus_runtime_shared::phase_session::{update_session_running, write_session_pending};
+        use crate::{CodingRunResources, CodingScheduler, ReservationOutcome, TaskGeneration};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("coding-leases.json"));
+        for (task, generation, workflow) in [("task-a", "gen-a", "wf-a"), ("task-b", "gen-b", "wf-b")] {
+            let outcome = scheduler
+                .reserve(
+                    TaskGeneration { task_id: task.into(), generation: generation.into() },
+                    CodingRunResources {
+                        repository: project_root.clone(),
+                        git_ref: None,
+                        queue_item_id: format!("queue-{task}"),
+                        workflow_id: workflow.into(),
+                        workspace_id: None,
+                        environment_id: None,
+                        branch: None,
+                        pull_request: None,
+                    },
+                )
+                .expect("reserve");
+            assert!(matches!(outcome, ReservationOutcome::Reserved { .. }));
+            write_session_pending(&scoped_root, workflow, "code", "codex", task, None).expect("pending checkpoint");
+            update_session_running(&scoped_root, workflow, "code").expect("running checkpoint");
+        }
+
+        let fake = Arc::new(FakeLeaseClient {
+            handle: EnvironmentHandle {
+                id: "shared-node".into(),
+                workspace_root: "/workspace/shared".into(),
+                metadata: json!({
+                    "branch": "animus/shared",
+                    "pull_request_url": "https://example.test/pull/7"
+                }),
+            },
+            prepares: AtomicUsize::new(0),
+            execs: AtomicUsize::new(0),
+            teardowns: AtomicUsize::new(0),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+        let broker = EnvironmentBroker::start_with_resolver(&project_root, Some(scheduler.clone()), resolver)
+            .await
+            .expect("start broker");
+        let spec = EnvironmentSpec {
+            kind: "railway".into(),
+            repos: vec![orchestrator_core::environment::RepoRef {
+                url: project_root.clone(),
+                name: None,
+                git_ref: Some("refs/heads/animus/shared".into()),
+                primary: true,
+            }],
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: json!({
+                "branch": "animus/shared",
+                "pull_request_url": "https://example.test/pull/7"
+            }),
+        };
+
+        broker.register_run("wf-a", &project_root, "railway");
+        broker.acquire("wf-a", "railway", spec.clone()).await.expect("first allocation");
+        broker.register_run("wf-b", &project_root, "railway");
+        let error = broker.acquire("wf-b", "railway", spec).await.expect_err("collision must reject");
+
+        assert!(error.to_string().contains("coding resource collision"), "{error:#}");
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1, "rejected allocation must not reach prepare");
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 0, "no rejected allocation exists to tear down");
+        assert!(!broker.inner.leases.lock().await.contains_key("wf-b"), "rejected node must not be retained");
+        let reservations = scheduler.status().expect("scheduler status").reservations;
+        let first = reservations.iter().find(|lease| lease.resources.workflow_id == "wf-a").expect("first lease");
+        let second = reservations.iter().find(|lease| lease.resources.workflow_id == "wf-b").expect("second lease");
+        assert_eq!(first.resources.branch.as_deref(), Some("animus/shared"));
+        assert_eq!(first.resources.pull_request.as_deref(), Some("https://example.test/pull/7"));
+        assert!(second.resources.workspace_id.is_none(), "failed bind must leave prior reservation unchanged");
+        assert!(second.resources.environment_id.is_none(), "failed bind must not retain an environment allocation");
+        assert!(second.resources.branch.is_none(), "failed bind must not retain branch allocation");
+        assert!(second.resources.pull_request.is_none(), "failed bind must not retain PR allocation");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn distinct_nodes_with_the_same_mount_path_bind_concurrently() {
+        use crate::{CodingRunResources, CodingScheduler, ReservationOutcome, TaskGeneration};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("coding-leases.json"));
+        for (task, generation, workflow) in [("task-a", "gen-a", "wf-a"), ("task-b", "gen-b", "wf-b")] {
+            let outcome = scheduler
+                .reserve(
+                    TaskGeneration { task_id: task.into(), generation: generation.into() },
+                    CodingRunResources {
+                        repository: project_root.clone(),
+                        git_ref: None,
+                        queue_item_id: format!("queue-{task}"),
+                        workflow_id: workflow.into(),
+                        workspace_id: None,
+                        environment_id: None,
+                        branch: None,
+                        pull_request: None,
+                    },
+                )
+                .expect("reserve");
+            assert!(matches!(outcome, ReservationOutcome::Reserved { .. }));
+        }
+
+        let broker = EnvironmentBroker::start_with_resolver(
+            &project_root,
+            Some(scheduler.clone()),
+            Arc::new(|_, _| unreachable!("binding resources does not resolve a client")),
+        )
+        .await
+        .expect("start broker");
+        for (workflow, handle_id, git_ref, branch) in [
+            ("wf-a", "node-a", "refs/heads/animus/a", "animus/a"),
+            ("wf-b", "node-b", "refs/heads/animus/b", "animus/b"),
+        ] {
+            let handle = EnvironmentHandle {
+                id: handle_id.into(),
+                workspace_root: "/workspace/shared".into(),
+                metadata: serde_json::Value::Null,
+            };
+            let spec = EnvironmentSpec {
+                kind: "railway".into(),
+                repos: vec![orchestrator_core::environment::RepoRef {
+                    url: project_root.clone(),
+                    name: None,
+                    git_ref: Some(git_ref.into()),
+                    primary: true,
+                }],
+                image: None,
+                resources: None,
+                env: std::collections::BTreeMap::new(),
+                metadata: json!({ "branch": branch }),
+            };
+            broker
+                .bind_coding_resources(workflow, "railway", &handle, &spec)
+                .expect("distinct node must bind");
+        }
+
+        let reservations = scheduler.status().expect("scheduler status").reservations;
+        assert_eq!(reservations.len(), 2, "both reservations must remain");
+        for (workflow, handle_id, branch) in
+            [("wf-a", "node-a", "animus/a"), ("wf-b", "node-b", "animus/b")]
+        {
+            let lease = reservations
+                .iter()
+                .find(|lease| lease.resources.workflow_id == workflow)
+                .expect("bound reservation");
+            let expected_workspace_id = format!("railway:{handle_id}:/workspace/shared");
+            assert_eq!(
+                lease.resources.workspace_id.as_deref(),
+                Some(expected_workspace_id.as_str())
+            );
+            assert_eq!(lease.resources.branch.as_deref(), Some(branch));
+        }
     }
 }

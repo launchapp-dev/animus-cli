@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::{Assignee, TaskStatus, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
-    default_slim_project_tick_driver, resolve_subject_dispatch, BudgetBreachEvent, CompletedProcess,
+    default_slim_project_tick_driver, resolve_subject_dispatch, BudgetBreachEvent, CodingScheduler, CompletedProcess,
     CompletedProcessReconciliation, DefaultProjectTickServices, DefaultSlimProjectTickDriver, DispatchNotice,
     DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot, SubjectPluginDispatch,
 };
@@ -17,11 +17,12 @@ use std::sync::Arc;
 
 pub(crate) struct CliProjectTickServices {
     logger: Arc<Logger>,
+    coding_scheduler: CodingScheduler,
 }
 
 impl CliProjectTickServices {
-    fn new(_args: &DaemonRuntimeOptions, logger: Arc<Logger>) -> Self {
-        Self { logger }
+    fn new(_args: &DaemonRuntimeOptions, logger: Arc<Logger>, coding_scheduler: CodingScheduler) -> Self {
+        Self { logger, coding_scheduler }
     }
 
     /// BU-4: spawn a fresh `workflow_runner` for up to `limit` in-flight runs
@@ -53,6 +54,18 @@ impl CliProjectTickServices {
         }
         let state_manager = WorkflowStateManager::new(root);
         let mut started = 0usize;
+        let scheduler_status = match self.coding_scheduler.status() {
+            Ok(status) => status,
+            Err(error) => {
+                self.logger
+                    .warn(
+                        "reconciliation",
+                        format!("journal-resume re-dispatch skipped: durable coding leases unavailable: {error}"),
+                    )
+                    .emit();
+                return 0;
+            }
+        };
         // Within-tick dedupe (codex P2): the candidate set is computed from a
         // single pre-loop `active_subject_ids` snapshot, so two Running records
         // for the SAME subject could both be returned. The ProcessManager only
@@ -62,6 +75,59 @@ impl CliProjectTickServices {
         for workflow in candidates {
             if started >= limit {
                 break;
+            }
+            // Journal resumability is not admission authority. A restart may
+            // only re-dispatch the exact workflow whose durable generation
+            // lease survived startup reconciliation. Requiring a fenced
+            // renewal also rejects expired/unknown leases: only reconcile()
+            // may recover those after TASK-793/TASK-933 proves liveness.
+            let Some(lease) = scheduler_status
+                .reservations
+                .iter()
+                .find(|lease| lease.resources.workflow_id == workflow.id)
+            else {
+                self.logger
+                    .warn(
+                        "reconciliation",
+                        format!(
+                            "journal-resume re-dispatch deferred: workflow {} has no durable coding lease",
+                            workflow.id
+                        ),
+                    )
+                    .emit();
+                continue;
+            };
+            if workflow
+                .subject
+                .as_ref()
+                .is_some_and(|subject| subject.id() != lease.task.task_id)
+            {
+                self.logger
+                    .warn(
+                        "reconciliation",
+                        format!(
+                            "journal-resume re-dispatch deferred: workflow {} lease belongs to task {}",
+                            workflow.id, lease.task.task_id
+                        ),
+                    )
+                    .emit();
+                continue;
+            }
+            if !matches!(
+                self.coding_scheduler
+                    .renew(&lease.task, lease.lease_generation, &lease.owner),
+                Ok(Some(_))
+            ) {
+                self.logger
+                    .warn(
+                        "reconciliation",
+                        format!(
+                            "journal-resume re-dispatch deferred: workflow {} lease is fenced or awaits recovery",
+                            workflow.id
+                        ),
+                    )
+                    .emit();
+                continue;
             }
             // Subjectless runs carry no subject to dedup on — each is distinct.
             if let Some(subject) = workflow.subject.as_ref() {
@@ -147,6 +213,26 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         root: &str,
         completed_processes: Vec<CompletedProcess>,
     ) -> Result<CompletedProcessReconciliation> {
+        // Terminal runner cleanup releases only the exact persisted generation.
+        // A stale completion can therefore never free a replacement run.
+        if let Ok(status) = self.coding_scheduler.status() {
+            for completed in completed_processes.iter().filter(|completed| {
+                matches!(
+                    completed.workflow_status,
+                    Some(WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled)
+                )
+            }) {
+                for lease in status.reservations.iter().filter(|lease| {
+                    completed.workflow_id.as_deref() == Some(lease.resources.workflow_id.as_str())
+                }) {
+                    let _ = self.coding_scheduler.reconcile(
+                        &lease.task,
+                        lease.lease_generation,
+                        orchestrator_daemon_runtime::RecoveryObservation::Terminal,
+                    );
+                }
+            }
+        }
         Ok(reconcile_completed_processes(hub, root, completed_processes).await)
     }
 
@@ -305,6 +391,17 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         let Some(process_manager) = process_manager else {
             return Ok(DispatchWorkflowStartSummary::default());
         };
+        // Heartbeat every currently owned runner lease. Expired leases are
+        // intentionally left untouched: status exposes them as
+        // recovery-needed and only the liveness reconciler may recover them.
+        let active = process_manager.active_workflow_ids();
+        if let Ok(status) = self.coding_scheduler.status() {
+            for lease in status.reservations {
+                if active.contains(&lease.resources.workflow_id) {
+                    let _ = self.coding_scheduler.renew(&lease.task, lease.lease_generation, &lease.owner);
+                }
+            }
+        }
         // Suppressed entirely while the pool is draining (`queue_drain_limit
         // == 0`): no resume re-dispatch, no queue lease.
         if queue_drain_limit == 0 {
@@ -332,7 +429,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         // enqueue`). Cron `schedules:` still dispatch via their own leg.
         let remaining = queue_drain_limit.saturating_sub(resumed);
         let summary = if remaining > 0 {
-            dispatch_queued_entries_via_runner(root, process_manager, remaining).await?
+            dispatch_queued_entries_via_runner(root, process_manager, &self.coding_scheduler, remaining).await?
         } else {
             DispatchWorkflowStartSummary::default()
         };
@@ -758,8 +855,9 @@ pub(crate) fn slim_project_tick_driver<'a>(
     args: &DaemonRuntimeOptions,
     process_manager: &'a mut ProcessManager,
     logger: Arc<Logger>,
+    coding_scheduler: CodingScheduler,
 ) -> SlimProjectTickDriver<'a> {
-    default_slim_project_tick_driver(CliProjectTickServices::new(args, logger), process_manager)
+    default_slim_project_tick_driver(CliProjectTickServices::new(args, logger, coding_scheduler), process_manager)
 }
 
 #[cfg(test)]

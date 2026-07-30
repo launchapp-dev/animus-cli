@@ -870,6 +870,11 @@ impl ProcessManager {
     pub fn active_subject_ids(&self) -> HashSet<String> {
         self.processes.iter().flat_map(|process| [process.subject_key.clone(), process.subject_id.clone()]).collect()
     }
+
+    /// Durable workflow identities for runners owned by this daemon.
+    pub fn active_workflow_ids(&self) -> HashSet<String> {
+        self.processes.iter().filter_map(|process| process.target_workflow_id.clone()).collect()
+    }
 }
 
 /// REQ-048: tear the run's shared ephemeral node down IFF the completed phase

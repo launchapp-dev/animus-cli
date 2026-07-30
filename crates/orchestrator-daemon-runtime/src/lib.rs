@@ -19,9 +19,11 @@ pub use audit::{
 pub use daemon::{
     current_scheduler_nudge, current_workflow_event_emitter, discover_installed_plugins,
     discover_installed_plugins_with_flavor_error, lock_drift_warnings, nudge_scheduler_local, queue_warnings,
-    run_daemon, run_plugin_preflight, workflow_runner_warnings, DaemonEventLog, DaemonEventsPollResponse,
-    DaemonRunEvent, DaemonRunGuard, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState, DiscoveredPluginSummary,
-    PreflightOutcome,
+    run_daemon, run_plugin_preflight, workflow_runner_warnings, CodingLease, CodingRunResources, CodingScheduler,
+    CodingSchedulerService, CodingSchedulerStatus, CollisionReason, DaemonEventLog, DaemonEventsPollResponse,
+    DaemonRunEvent, DaemonRunGuard, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState,
+    DiscoveredPluginSummary, PreflightOutcome, RecoveryObservation, RecoveryOutcome, ReservationOutcome,
+    TaskGeneration, CODING_SCHEDULER_CAPACITY,
 };
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan, build_runner_command,
