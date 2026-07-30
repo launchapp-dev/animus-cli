@@ -457,13 +457,15 @@ fn collision(
                 task: existing.task.clone(),
             });
         }
-        if let (Some(wanted), Some(held)) = (&resources.pull_request, &existing.resources.pull_request) {
-            if wanted == held {
-                return Some(CollisionReason::ResourceOwned {
-                    resource: "pull_request".to_string(),
-                    value: wanted.clone(),
-                    task: existing.task.clone(),
-                });
+        if same_repository(&existing.resources.repository, &resources.repository) {
+            if let (Some(wanted), Some(held)) = (&resources.pull_request, &existing.resources.pull_request) {
+                if wanted == held {
+                    return Some(CollisionReason::ResourceOwned {
+                        resource: "pull_request".to_string(),
+                        value: wanted.clone(),
+                        task: existing.task.clone(),
+                    });
+                }
             }
         }
     }
@@ -643,6 +645,32 @@ mod tests {
                 ReservationOutcome::Rejected { reason: CollisionReason::RepositoryRef { .. } }
             ));
         }
+    }
+
+    #[test]
+    fn pull_request_identity_is_scoped_to_its_repository() {
+        let temp = tempfile::tempdir().unwrap();
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
+        let mut held = resources(1);
+        held.pull_request = Some("42".into());
+        scheduler.reserve(task(1), held).unwrap();
+
+        let mut independent = resources(2);
+        independent.repository = "launchapp/another-repository".into();
+        independent.pull_request = Some("42".into());
+        assert!(matches!(
+            scheduler.reserve(task(2), independent).unwrap(),
+            ReservationOutcome::Reserved { .. }
+        ));
+
+        let mut colliding = resources(3);
+        colliding.pull_request = Some("42".into());
+        assert!(matches!(
+            scheduler.reserve(task(3), colliding).unwrap(),
+            ReservationOutcome::Rejected {
+                reason: CollisionReason::ResourceOwned { resource, value, .. }
+            } if resource == "pull_request" && value == "42"
+        ));
     }
 
     #[test]

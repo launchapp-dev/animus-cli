@@ -404,9 +404,9 @@ impl EnvironmentBroker {
             // Every phase gets its own checkpoint. Reusing an existing
             // workflow lease must bind the current Running phase too, or a
             // second restart after the phase boundary cannot prove ownership.
+            self.bind_coding_resources(run_id, environment_id, &handle, &spec)?;
             bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
                 .with_context(|| format!("persisting reused phase environment binding for run {run_id}"))?;
-            self.bind_coding_resources(run_id, environment_id, &handle, &spec)?;
             return Ok((handle.workspace_root.clone(), handle.id.clone()));
         }
 
@@ -461,26 +461,10 @@ impl EnvironmentBroker {
                         )
                     });
                 }
-                if let Err(error) =
-                    bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
-                {
-                    // The lease record is sufficient for cold reaping, but
-                    // restart resume and liveness reconciliation use the phase
-                    // checkpoint as their recovery oracle. Never let the
-                    // runner execute until that binding is durable too.
-                    let cleanup = client.teardown(&handle).err();
-                    if cleanup.is_none() {
-                        self.delete_record(run_id);
-                    }
-                    return Err(error).with_context(|| {
-                        format!(
-                            "persisting phase environment binding for run {run_id}; prepared node cleanup: {}",
-                            cleanup
-                                .map(|error| format!("failed: {error:#}"))
-                                .unwrap_or_else(|| "succeeded".to_string())
-                        )
-                    });
-                }
+                // Fence the exact provider allocation before publishing it in
+                // the Running checkpoint. Startup treats that checkpoint as a
+                // resume claim, so making it visible first could crash with a
+                // live node that the scheduler cannot prove it owns.
                 if let Err(error) =
                     self.bind_coding_resources(run_id, environment_id, &handle, &allocated_resources)
                 {
@@ -491,6 +475,27 @@ impl EnvironmentBroker {
                     return Err(error).with_context(|| {
                         format!(
                             "binding prepared node to coding lease for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
+                if let Err(error) =
+                    bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
+                {
+                    // The lease record and fenced scheduler allocation are
+                    // sufficient for cold reaping, but restart resume and
+                    // liveness reconciliation use the phase checkpoint as
+                    // their recovery oracle. Never let the runner execute
+                    // until that binding is durable too.
+                    let cleanup = client.teardown(&handle).err();
+                    if cleanup.is_none() {
+                        self.delete_record(run_id);
+                    }
+                    return Err(error).with_context(|| {
+                        format!(
+                            "persisting phase environment binding for run {run_id}; prepared node cleanup: {}",
                             cleanup
                                 .map(|error| format!("failed: {error:#}"))
                                 .unwrap_or_else(|| "succeeded".to_string())
@@ -1434,7 +1439,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn restart_adopts_exact_lease_reuses_it_for_next_phase_and_tears_down_once() {
+    async fn crash_after_running_checkpoint_adopts_exact_lease_without_a_second_prepare() {
         use animus_runtime_shared::phase_session::{
             read_checkpoint, update_session_completed, update_session_running, write_session_pending,
         };
@@ -1499,9 +1504,31 @@ mod tests {
         assert_eq!(first_handle, "node-h1");
         assert_eq!(fake.prepares.load(Ordering::SeqCst), 1);
 
-        // Simulate daemon replacement without terminal cleanup: the durable
-        // Ready record + Running checkpoint remain, while the old broker socket
-        // disappears with its process.
+        // This is the acquire crash boundary: once the Running checkpoint is
+        // visible, the scheduler must already fence the exact provider handle.
+        let first_checkpoint = read_checkpoint(&scoped_root, "wf-restart", "code-implement")
+            .expect("read first checkpoint")
+            .expect("first checkpoint exists");
+        assert_eq!(
+            first_checkpoint.environment.expect("visible running binding").handle,
+            fake.handle
+        );
+        let fenced = scheduler
+            .status()
+            .expect("scheduler status")
+            .reservations
+            .into_iter()
+            .find(|lease| lease.resources.workflow_id == "wf-restart")
+            .expect("workflow reservation");
+        assert_eq!(fenced.resources.environment_id.as_deref(), Some("railway:node-h1"));
+        assert_eq!(
+            fenced.resources.workspace_id.as_deref(),
+            Some("railway:node-h1:/workspace")
+        );
+
+        // Crash immediately after observing that checkpoint, without terminal
+        // cleanup. The durable Ready record, fenced allocation, and checkpoint
+        // remain while the old broker process disappears.
         first.stop_acceptor_for_restart_test();
         drop(first);
         let replacement =
