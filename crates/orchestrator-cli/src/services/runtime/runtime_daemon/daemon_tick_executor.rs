@@ -18,11 +18,17 @@ use std::sync::Arc;
 pub(crate) struct CliProjectTickServices {
     logger: Arc<Logger>,
     coding_scheduler: CodingScheduler,
+    owner_id: String,
 }
 
 impl CliProjectTickServices {
-    fn new(_args: &DaemonRuntimeOptions, logger: Arc<Logger>, coding_scheduler: CodingScheduler) -> Self {
-        Self { logger, coding_scheduler }
+    fn new(
+        _args: &DaemonRuntimeOptions,
+        logger: Arc<Logger>,
+        coding_scheduler: CodingScheduler,
+        owner_id: String,
+    ) -> Self {
+        Self { logger, coding_scheduler, owner_id }
     }
 
     /// BU-4: spawn a fresh `workflow_runner` for up to `limit` in-flight runs
@@ -81,10 +87,8 @@ impl CliProjectTickServices {
             // lease survived startup reconciliation. Requiring a fenced
             // renewal also rejects expired/unknown leases: only reconcile()
             // may recover those after TASK-793/TASK-933 proves liveness.
-            let Some(lease) = scheduler_status
-                .reservations
-                .iter()
-                .find(|lease| lease.resources.workflow_id == workflow.id)
+            let Some(lease) =
+                scheduler_status.reservations.iter().find(|lease| lease.resources.workflow_id == workflow.id)
             else {
                 self.logger
                     .warn(
@@ -97,11 +101,7 @@ impl CliProjectTickServices {
                     .emit();
                 continue;
             };
-            if workflow
-                .subject
-                .as_ref()
-                .is_some_and(|subject| subject.id() != lease.task.task_id)
-            {
+            if workflow.subject.as_ref().is_some_and(|subject| !task_ids_match(subject.id(), &lease.task.task_id)) {
                 self.logger
                     .warn(
                         "reconciliation",
@@ -113,22 +113,65 @@ impl CliProjectTickServices {
                     .emit();
                 continue;
             }
-            if !matches!(
-                self.coding_scheduler
-                    .renew(&lease.task, lease.lease_generation, &lease.owner),
-                Ok(Some(_))
-            ) {
+            let queue = lease.execution.queue_lease.as_ref().expect("tracked coding fence has queue lease");
+            let execution = if queue.owner_id == self.owner_id {
+                if queue.expires_at <= chrono::Utc::now() {
+                    self.logger
+                        .warn(
+                            "reconciliation",
+                            format!(
+                                "journal-resume re-dispatch deferred: workflow {} lease owned by this daemon expired before renewal",
+                                workflow.id
+                            ),
+                        )
+                        .emit();
+                    continue;
+                }
+                match renew_execution_lease(std::path::Path::new(root), &self.coding_scheduler, &lease.execution).await
+                {
+                    Ok(execution) => execution,
+                    Err(error) => {
+                        self.logger
+                            .warn(
+                                "reconciliation",
+                                format!("journal-resume renewal of workflow {} failed: {error}", workflow.id),
+                            )
+                            .emit();
+                        continue;
+                    }
+                }
+            } else if queue.expires_at <= chrono::Utc::now() {
+                match recover_execution_lease(
+                    std::path::Path::new(root),
+                    &self.coding_scheduler,
+                    &lease.execution,
+                    &self.owner_id,
+                )
+                .await
+                {
+                    Ok(execution) => execution,
+                    Err(error) => {
+                        self.logger
+                            .warn(
+                                "reconciliation",
+                                format!("journal-resume recovery of workflow {} failed: {error}", workflow.id),
+                            )
+                            .emit();
+                        continue;
+                    }
+                }
+            } else {
                 self.logger
                     .warn(
                         "reconciliation",
                         format!(
-                            "journal-resume re-dispatch deferred: workflow {} lease is fenced or awaits recovery",
-                            workflow.id
+                            "journal-resume re-dispatch deferred: workflow {} remains leased to prior daemon {} until {}",
+                            workflow.id, queue.owner_id, queue.expires_at
                         ),
                     )
                     .emit();
                 continue;
-            }
+            };
             // Subjectless runs carry no subject to dedup on — each is distinct.
             if let Some(subject) = workflow.subject.as_ref() {
                 if !dispatched_subjects.insert(subject.id().to_string()) {
@@ -159,7 +202,7 @@ impl CliProjectTickServices {
             // Target the EXISTING persisted run by id so the runner continues
             // it from `current_phase` (phase-boundary resume) instead of
             // starting a duplicate workflow for the subject.
-            match process_manager.spawn_workflow_runner_resume(&dispatch, root, &workflow.id) {
+            match process_manager.spawn_workflow_runner_resume_with_fence(&dispatch, root, &workflow.id, &execution) {
                 Ok(()) => {
                     started += 1;
                     self.logger
@@ -213,23 +256,38 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         root: &str,
         completed_processes: Vec<CompletedProcess>,
     ) -> Result<CompletedProcessReconciliation> {
-        // Terminal runner cleanup releases only the exact persisted generation.
-        // A stale completion can therefore never free a replacement run.
-        if let Ok(status) = self.coding_scheduler.status() {
-            for completed in completed_processes.iter().filter(|completed| {
-                matches!(
-                    completed.workflow_status,
-                    Some(WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled)
+        // Complete queue-backed runs only with the exact fence copied into the
+        // process at spawn and refreshed after every renewal. Never resolve a
+        // completion by workflow id: that could target a recovered generation.
+        for completed in &completed_processes {
+            let (Some(execution), Some(status)) = (completed.execution_fence.as_ref(), completed.workflow_status)
+            else {
+                continue;
+            };
+            let queue_status = match status {
+                WorkflowStatus::Completed => Some(animus_queue_protocol::completion_status::COMPLETED),
+                WorkflowStatus::Cancelled => Some(animus_queue_protocol::completion_status::CANCELLED),
+                WorkflowStatus::Failed | WorkflowStatus::Escalated => {
+                    Some(animus_queue_protocol::completion_status::FAILED)
+                }
+                WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Paused => None,
+            };
+            if let Some(queue_status) = queue_status {
+                if let Err(error) = complete_execution(
+                    std::path::Path::new(root),
+                    &self.coding_scheduler,
+                    execution,
+                    queue_status,
+                    completed.workflow_ref.as_deref(),
                 )
-            }) {
-                for lease in status.reservations.iter().filter(|lease| {
-                    completed.workflow_id.as_deref() == Some(lease.resources.workflow_id.as_str())
-                }) {
-                    let _ = self.coding_scheduler.reconcile(
-                        &lease.task,
-                        lease.lease_generation,
-                        orchestrator_daemon_runtime::RecoveryObservation::Terminal,
-                    );
+                .await
+                {
+                    self.logger
+                        .warn(
+                            "queue.completion",
+                            format!("exact queue completion for workflow {} failed: {error}", execution.workflow_id),
+                        )
+                        .emit();
                 }
             }
         }
@@ -397,8 +455,35 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         let active = process_manager.active_workflow_ids();
         if let Ok(status) = self.coding_scheduler.status() {
             for lease in status.reservations {
-                if active.contains(&lease.resources.workflow_id) {
-                    let _ = self.coding_scheduler.renew(&lease.task, lease.lease_generation, &lease.owner);
+                let queue = lease.execution.queue_lease.as_ref().expect("tracked coding fence has queue lease");
+                if active.contains(&lease.resources.workflow_id)
+                    && queue.owner_id == self.owner_id
+                    && queue.expires_at > chrono::Utc::now()
+                {
+                    match renew_execution_lease(std::path::Path::new(root), &self.coding_scheduler, &lease.execution)
+                        .await
+                    {
+                        Ok(current) => {
+                            if !process_manager.update_execution_fence(&lease.execution, &current) {
+                                self.logger
+                                    .warn(
+                                        "queue.renew",
+                                        format!(
+                                            "workflow {} renewed but its live process did not hold the previous exact fence",
+                                            lease.resources.workflow_id
+                                        ),
+                                    )
+                                    .emit();
+                            }
+                        }
+                        Err(error) => self
+                            .logger
+                            .warn(
+                                "queue.renew",
+                                format!("workflow {} lease renewal failed: {error}", lease.resources.workflow_id),
+                            )
+                            .emit(),
+                    }
                 }
             }
         }
@@ -429,7 +514,8 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         // enqueue`). Cron `schedules:` still dispatch via their own leg.
         let remaining = queue_drain_limit.saturating_sub(resumed);
         let summary = if remaining > 0 {
-            dispatch_queued_entries_via_runner(root, process_manager, &self.coding_scheduler, remaining).await?
+            dispatch_queued_entries_via_runner(root, process_manager, &self.coding_scheduler, &self.owner_id, remaining)
+                .await?
         } else {
             DispatchWorkflowStartSummary::default()
         };
@@ -856,8 +942,12 @@ pub(crate) fn slim_project_tick_driver<'a>(
     process_manager: &'a mut ProcessManager,
     logger: Arc<Logger>,
     coding_scheduler: CodingScheduler,
+    owner_id: String,
 ) -> SlimProjectTickDriver<'a> {
-    default_slim_project_tick_driver(CliProjectTickServices::new(args, logger, coding_scheduler), process_manager)
+    default_slim_project_tick_driver(
+        CliProjectTickServices::new(args, logger, coding_scheduler, owner_id),
+        process_manager,
+    )
 }
 
 #[cfg(test)]
@@ -870,6 +960,7 @@ mod tests {
         services::ServiceHub, FileServiceHub, Priority, TaskCreateInput, TaskStatus, TaskType, WorkflowRunInput,
         WorkflowStatus,
     };
+    use orchestrator_daemon_runtime::CodingScheduler;
     use protocol::test_utils::EnvVarGuard;
     use std::collections::HashSet;
     use std::process::Command as ProcessCommand;
@@ -942,7 +1033,11 @@ mod tests {
 
         let hub: Arc<dyn ServiceHub> = Arc::new(orchestrator_core::InMemoryServiceHub::new());
         let logger = Arc::new(orchestrator_logging::Logger::for_project(&project_root));
-        let mut services = CliProjectTickServices { logger };
+        let mut services = CliProjectTickServices {
+            logger,
+            coding_scheduler: CodingScheduler::with_state_path(temp.path().join("coding-leases.json")),
+            owner_id: "test-daemon".to_string(),
+        };
 
         let _off = EnvVarGuard::set(DISABLE_BUDGET_ENFORCEMENT_ENV, Some("1"));
         let events = services.enforce_budget_caps(hub, &root).await.expect("leg should not error");

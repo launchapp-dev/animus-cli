@@ -163,7 +163,13 @@ impl AoMcpServer {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn run_input(project_root: &std::path::Path) -> super::super::AgentRunInput {
         super::super::AgentRunInput {
@@ -197,6 +203,7 @@ mod tests {
 
     #[test]
     fn agent_list_and_get_return_typed_in_process_profiles() {
+        let _env_lock = lock_env();
         let (root, _guard) = configured_project();
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
 
@@ -214,6 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_run_uses_typed_validation_and_provider_errors() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
 
@@ -238,6 +246,7 @@ mod tests {
 
     #[test]
     fn agent_control_and_status_return_typed_application_errors() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
 
@@ -270,6 +279,7 @@ mod tests {
 
     #[test]
     fn agent_memory_mutations_share_the_typed_application_store() {
+        let _env_lock = lock_env();
         let (root, _guard) = configured_project();
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
 
@@ -297,6 +307,7 @@ mod tests {
 
     #[test]
     fn agent_message_validation_returns_a_typed_not_found_error() {
+        let _env_lock = lock_env();
         let (root, _guard) = configured_project();
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
         let result = server.agent_message_send_inproc(super::super::AgentMessageSendInput {
@@ -318,6 +329,7 @@ mod tests {
     fn actor_bound_agent_rosters_are_loaded_from_each_users_partition() {
         use orchestrator_config::workflow_config::config_source_client::test_seam;
 
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let animus = root.path().join(".animus");
         std::fs::create_dir_all(&animus).expect("animus dir");

@@ -88,6 +88,7 @@ mod tests {
         let manager = orchestrator_core::WorkflowStateManager::new(&project_root);
         let workflow = protocol::orchestrator::OrchestratorWorkflow {
             id: workflow_id.to_string(),
+            execution_fence: None,
             task_id: "TASK-971".to_string(),
             workflow_ref: Some("standard".to_string()),
             subject: None,

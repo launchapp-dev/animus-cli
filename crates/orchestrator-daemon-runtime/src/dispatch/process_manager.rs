@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
+use animus_execution_protocol::ExecutionFence;
 use anyhow::{Context, Result};
 use protocol::orchestrator::WorkflowStatus;
 use protocol::SubjectDispatch;
@@ -37,6 +38,7 @@ fn set_session_id_on_spawn(cmd: &mut Command) {
 }
 
 pub const ANIMUS_AGENT_RUN_ID_ENV: &str = "ANIMUS_AGENT_RUN_ID";
+pub const ANIMUS_EXECUTION_FENCE_JSON_ENV: &str = "ANIMUS_EXECUTION_FENCE_JSON";
 
 /// Env-var allowlist consulted by the workflow-runner subprocess for
 /// keychain-backed secret injection. The runner is not a plugin and
@@ -68,6 +70,7 @@ pub const RUNNER_SECRET_ALLOWLIST_ENV: &str = "ANIMUS_RUNNER_SECRET_ALLOWLIST";
 /// matching key. (codex round-5 P2.)
 const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] = &[
     ANIMUS_AGENT_RUN_ID_ENV,
+    ANIMUS_EXECUTION_FENCE_JSON_ENV,
     "ANIMUS_WORKFLOW_REATTACH_SOCKET",
     "ANIMUS_WORKFLOW_EVENT_PIPE",
     animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV,
@@ -179,6 +182,9 @@ struct WorkflowProcess {
     /// a non-local environment and a broker is wired. The daemon tears the run's
     /// shared node down by this id once the workflow reaches a terminal state.
     environment_run_id: Option<String>,
+    /// Exact authority this process received at spawn. Completion projection
+    /// uses this copy so an old process cannot terminalize a recovered lease.
+    execution_fence: Option<ExecutionFence>,
 }
 
 pub struct ProcessManager {
@@ -301,7 +307,7 @@ impl ProcessManager {
     }
 
     pub fn spawn_workflow_runner(&mut self, dispatch: &SubjectDispatch, project_root: &str) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, None, None)
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, None, None)
     }
 
     /// Start a fresh queue-backed workflow using the kernel-selected durable id.
@@ -312,7 +318,17 @@ impl ProcessManager {
         project_root: &str,
         workflow_id: &str,
     ) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, Some(workflow_id), None)
+        self.spawn_workflow_runner_inner(dispatch, project_root, Some(workflow_id), None, None)
+    }
+
+    pub fn spawn_workflow_runner_with_id_and_fence(
+        &mut self,
+        dispatch: &SubjectDispatch,
+        project_root: &str,
+        workflow_id: &str,
+        execution_fence: Option<&ExecutionFence>,
+    ) -> Result<()> {
+        self.spawn_workflow_runner_inner(dispatch, project_root, Some(workflow_id), None, execution_fence)
     }
 
     /// BU-4 journal-resume re-dispatch: spawn a runner that CONTINUES the
@@ -326,7 +342,17 @@ impl ProcessManager {
         project_root: &str,
         resume_workflow_id: &str,
     ) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, None, Some(resume_workflow_id))
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, Some(resume_workflow_id), None)
+    }
+
+    pub fn spawn_workflow_runner_resume_with_fence(
+        &mut self,
+        dispatch: &SubjectDispatch,
+        project_root: &str,
+        resume_workflow_id: &str,
+        execution_fence: &ExecutionFence,
+    ) -> Result<()> {
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, Some(resume_workflow_id), Some(execution_fence))
     }
 
     fn spawn_workflow_runner_inner(
@@ -335,6 +361,7 @@ impl ProcessManager {
         project_root: &str,
         new_workflow_id: Option<&str>,
         resume_workflow_id: Option<&str>,
+        execution_fence: Option<&ExecutionFence>,
     ) -> Result<()> {
         if let Some(cap) = self.workflow_concurrency_max {
             if self.processes.len() >= cap {
@@ -344,6 +371,13 @@ impl ProcessManager {
 
         debug_assert!(new_workflow_id.is_none() || resume_workflow_id.is_none());
         let target_workflow_id = new_workflow_id.or(resume_workflow_id);
+        if let Some(execution) = execution_fence {
+            execution.validate().map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                target_workflow_id == Some(execution.workflow_id.as_str()),
+                "runner workflow id does not match execution fence"
+            );
+        }
         let std_cmd = match new_workflow_id {
             Some(workflow_id) => build_runner_command_with_id(
                 dispatch,
@@ -365,6 +399,10 @@ impl ProcessManager {
             .collect();
         let mut command = Command::from(std_cmd);
         command.stdout(Stdio::null()).stderr(Stdio::piped());
+        command.env_remove(ANIMUS_EXECUTION_FENCE_JSON_ENV);
+        if let Some(execution) = execution_fence {
+            command.env(ANIMUS_EXECUTION_FENCE_JSON_ENV, serde_json::to_string(execution)?);
+        }
 
         // v0.5.1 P2 #6.2: pre-allocate the agent session id BEFORE spawn so
         // we can wire the reattach-socket path the runner will bind into
@@ -555,7 +593,11 @@ impl ProcessManager {
             project_root: Some(project_root_path),
             target_workflow_id: target_workflow_id.map(String::from),
             environment_run_id,
+            execution_fence: execution_fence.cloned(),
         });
+        if let (Some(broker), Some(execution)) = (self.environment_broker.as_ref(), execution_fence) {
+            broker.mark_coding_runner_active(execution, true);
+        }
 
         Ok(())
     }
@@ -700,12 +742,18 @@ impl ProcessManager {
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
                     cleanup_agent_record(&process);
+                    if let (Some(broker), Some(execution)) =
+                        (environment_broker.as_ref(), process.execution_fence.as_ref())
+                    {
+                        broker.mark_coding_runner_active(execution, false);
+                    }
                     // Timeout kill is a terminal Failed outcome: dispose the
                     // run's shared node (if brokered) before reaping the record.
                     teardown_environment_if_terminal(
                         &environment_broker,
                         process.environment_run_id.take(),
                         Some(WorkflowStatus::Failed),
+                        process.execution_fence.as_ref(),
                     )
                     .await;
                     completed.push(CompletedProcess {
@@ -715,6 +763,7 @@ impl ProcessManager {
                         workflow_id: process.target_workflow_id.take(),
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status: Some(WorkflowStatus::Failed),
+                        execution_fence: process.execution_fence.take(),
                         schedule_id: process.schedule_id,
                         exit_code: None,
                         success: false,
@@ -731,6 +780,11 @@ impl ProcessManager {
                         #[cfg(unix)]
                         drain_event_pipe(&mut process.event_pipe).await;
                         cleanup_agent_record(&process);
+                        if let (Some(broker), Some(execution)) =
+                            (environment_broker.as_ref(), process.execution_fence.as_ref())
+                        {
+                            broker.mark_coding_runner_active(execution, false);
+                        }
                         completed.push(CompletedProcess {
                             subject_id: process.subject_key,
                             subject_kind: Some(process.subject_kind),
@@ -738,6 +792,7 @@ impl ProcessManager {
                             workflow_id: process.target_workflow_id.take(),
                             workflow_ref: Some(process.workflow_ref),
                             workflow_status: None,
+                            execution_fence: process.execution_fence.take(),
                             schedule_id: process.schedule_id,
                             exit_code: None,
                             success: false,
@@ -762,6 +817,11 @@ impl ProcessManager {
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
                     cleanup_agent_record(&process);
+                    if let (Some(broker), Some(execution)) =
+                        (environment_broker.as_ref(), process.execution_fence.as_ref())
+                    {
+                        broker.mark_coding_runner_active(execution, false);
+                    }
                     let exit_code = status.code();
                     let events = parse_runner_events(&process.stderr_lines);
                     let workflow_target = process.target_workflow_id.take();
@@ -820,6 +880,7 @@ impl ProcessManager {
                         &environment_broker,
                         process.environment_run_id.take(),
                         workflow_status,
+                        process.execution_fence.as_ref(),
                     )
                     .await;
 
@@ -830,6 +891,7 @@ impl ProcessManager {
                         workflow_id,
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status,
+                        execution_fence: process.execution_fence.take(),
                         schedule_id: process.schedule_id,
                         exit_code,
                         success,
@@ -842,6 +904,11 @@ impl ProcessManager {
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
                     cleanup_agent_record(&process);
+                    if let (Some(broker), Some(execution)) =
+                        (environment_broker.as_ref(), process.execution_fence.as_ref())
+                    {
+                        broker.mark_coding_runner_active(execution, false);
+                    }
                     completed.push(CompletedProcess {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
@@ -849,6 +916,7 @@ impl ProcessManager {
                         workflow_id: process.target_workflow_id.take(),
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status: None,
+                        execution_fence: process.execution_fence.take(),
                         schedule_id: process.schedule_id,
                         exit_code: None,
                         success: false,
@@ -875,6 +943,20 @@ impl ProcessManager {
     pub fn active_workflow_ids(&self) -> HashSet<String> {
         self.processes.iter().filter_map(|process| process.target_workflow_id.clone()).collect()
     }
+
+    /// Replace the exact fence held by a live process after a successful queue
+    /// renew/recover CAS. Completion then carries the current backend fence;
+    /// an old process copy cannot complete or clean up a newer generation.
+    pub fn update_execution_fence(&mut self, previous: &ExecutionFence, current: &ExecutionFence) -> bool {
+        let Some(process) = self.processes.iter_mut().find(|process| {
+            process.target_workflow_id.as_deref() == Some(previous.workflow_id.as_str())
+                && process.execution_fence.as_ref() == Some(previous)
+        }) else {
+            return false;
+        };
+        process.execution_fence = Some(current.clone());
+        true
+    }
 }
 
 /// REQ-048: tear the run's shared ephemeral node down IFF the completed phase
@@ -886,11 +968,14 @@ async fn teardown_environment_if_terminal(
     broker: &Option<EnvironmentBroker>,
     run_id: Option<String>,
     status: Option<WorkflowStatus>,
+    execution_fence: Option<&ExecutionFence>,
 ) {
     let (Some(broker), Some(run_id)) = (broker.as_ref(), run_id) else {
         return;
     };
-    if is_terminal_workflow_status(status) {
+    if is_terminal_workflow_status(status)
+        && execution_fence.is_none_or(|execution| broker.owns_coding_execution(&run_id, execution))
+    {
         broker.teardown(&run_id).await;
     }
 }

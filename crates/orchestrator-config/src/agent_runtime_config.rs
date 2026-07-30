@@ -2646,6 +2646,7 @@ cli_tools:
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 

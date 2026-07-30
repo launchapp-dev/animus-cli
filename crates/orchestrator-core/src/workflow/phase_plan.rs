@@ -198,6 +198,7 @@ mod tests {
                 budget: None,
                 environment: None,
                 workspace: None,
+                publication: None,
             },
             WorkflowDefinition {
                 id: UI_UX_WORKFLOW_REF.to_string(),
@@ -209,6 +210,7 @@ mod tests {
                 budget: None,
                 environment: None,
                 workspace: None,
+                publication: None,
             },
         ];
         config
@@ -501,6 +503,7 @@ workflows:
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
 
         // Pass the resolver's source gate (has_yaml_workflows) by writing a config

@@ -12,7 +12,7 @@ mod scheduler_nudge;
 
 pub use coding_scheduler::{
     CodingLease, CodingRunResources, CodingScheduler, CodingSchedulerService, CodingSchedulerStatus, CollisionReason,
-    RecoveryObservation, RecoveryOutcome, ReservationOutcome, TaskGeneration, CODING_SCHEDULER_CAPACITY,
+    ReservationOutcome, TaskGeneration, CODING_SCHEDULER_CAPACITY,
 };
 pub use daemon_event_log::DaemonEventLog;
 pub use daemon_events_poll_response::DaemonEventsPollResponse;

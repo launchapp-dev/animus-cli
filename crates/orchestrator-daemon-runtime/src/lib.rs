@@ -21,9 +21,8 @@ pub use daemon::{
     discover_installed_plugins_with_flavor_error, lock_drift_warnings, nudge_scheduler_local, queue_warnings,
     run_daemon, run_plugin_preflight, workflow_runner_warnings, CodingLease, CodingRunResources, CodingScheduler,
     CodingSchedulerService, CodingSchedulerStatus, CollisionReason, DaemonEventLog, DaemonEventsPollResponse,
-    DaemonRunEvent, DaemonRunGuard, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState,
-    DiscoveredPluginSummary, PreflightOutcome, RecoveryObservation, RecoveryOutcome, ReservationOutcome,
-    TaskGeneration, CODING_SCHEDULER_CAPACITY,
+    DaemonRunEvent, DaemonRunGuard, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState, DiscoveredPluginSummary,
+    PreflightOutcome, ReservationOutcome, TaskGeneration, CODING_SCHEDULER_CAPACITY,
 };
 pub use dispatch::{
     active_workflow_subject_ids, active_workflow_task_ids, build_completion_reconciliation_plan, build_runner_command,
@@ -34,6 +33,7 @@ pub use dispatch::{
     DispatchWorkflowStartSummary, EnvironmentBroker, PlannedDispatchStart, ProcessManager, TickBudget,
     WorkflowConcurrencyCapReached, WorkflowFailureEvent, ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
     ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV,
+    ANIMUS_EXECUTION_FENCE_JSON_ENV,
 };
 /// v0.5.1 P2 #6.2 round-3: daemon-side reattach client surface, exposed for
 /// integration tests and out-of-tree daemons that want to call

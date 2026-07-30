@@ -26,6 +26,7 @@ orchestrator-plugin-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
 animus-config-protocol = { workspace = true }
 animus-control-protocol = { workspace = true }
+animus-execution-protocol = { workspace = true }
 animus-log-storage-protocol = { workspace = true }
 animus-actor = { workspace = true }
 # Subject / SubjectChangedEvent share the control protocol's source revision so

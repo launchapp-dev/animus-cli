@@ -460,6 +460,9 @@ async fn invoke_surface(
         method_names::METHOD_DAEMON_AGENTS => {
             surface.daemon_agents().await.map(|r| Some(serialize_result(r))).map_err(rpc_from_control)
         }
+        method_names::METHOD_FLEET_STATUS => {
+            surface.fleet_status().await.map(|r| Some(serialize_result(r))).map_err(rpc_from_control)
+        }
         method_names::METHOD_DAEMON_EVENTS => {
             let req: DaemonEventsRequest = parse_params(params)?;
             let stream = surface.daemon_events(req).await.map_err(rpc_from_control)?;

@@ -202,6 +202,23 @@ impl RouterSubjectProbe {
             "legacy-v1"
         }
     }
+
+    /// Fetch the full subject record after kind resolution. Queue-v2 enqueue
+    /// uses the record's explicit git fields to allocate an immutable
+    /// repository/head reservation before any daemon can lease the entry.
+    pub(crate) async fn subject_record(&self, subject: &SubjectRef) -> Result<Value> {
+        let kind = subject.kind();
+        let qualified_id = crate::qualify_subject_id(subject.id(), kind);
+        let method = format!("{kind}/get");
+        let params = Some(json!({ "id": qualified_id }));
+        let result = match self.actor.as_ref() {
+            Some(actor) => self.dispatch.route_actor_call(&method, params, actor).await,
+            None => self.dispatch.route_call(&method, params).await,
+        };
+        result.map_err(|error| {
+            anyhow!("subject backend failed to fetch '{}:{}' ({}): {}", kind, subject.id(), error.code, error.message)
+        })
+    }
 }
 
 /// `true` when a `<kind>/get` response carries a subject object (top-level or

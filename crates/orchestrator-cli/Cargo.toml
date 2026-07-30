@@ -52,6 +52,7 @@ animus-application-protocol = { workspace = true }
 # HarnessCommand / ExecStream) for the agent-run env-exec seam in
 # `services::runtime::runtime_agent::environment_exec`.
 animus-environment-protocol = { workspace = true }
+animus-execution-protocol = { workspace = true }
 animus-control-protocol = { workspace = true }
 animus-log-storage-protocol = { workspace = true }
 animus-subject-protocol-wire = { workspace = true }

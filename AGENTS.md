@@ -28,7 +28,7 @@ web stack (transport + UI) lives in external plugins under
 [`launchapp-dev`](https://github.com/launchapp-dev). The workspace also depends
 on external protocol crates from that repo. The authoritative pins live in
 `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds pin the
-`animus-protocol` family to the unified `v0.1.26` tag so `protocol`,
+`animus-protocol` family to the unified `v0.7.0-rc.14` tag so `protocol`,
 `animus-config-protocol`, `animus-subject-protocol`, `animus-provider-protocol`,
 `animus-session-backend`, `animus-journal-protocol`, and `animus-actor` resolve
 from the same source.

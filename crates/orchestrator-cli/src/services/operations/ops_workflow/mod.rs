@@ -1389,6 +1389,7 @@ mod tests {
         let manager = orchestrator_core::WorkflowStateManager::new(temp.path());
         let workflow = protocol::orchestrator::OrchestratorWorkflow {
             id: "wf-owned".to_string(),
+            execution_fence: None,
             task_id: "TASK-970".to_string(),
             workflow_ref: Some("standard".to_string()),
             subject: None,

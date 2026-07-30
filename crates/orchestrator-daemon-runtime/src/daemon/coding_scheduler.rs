@@ -1,32 +1,31 @@
-//! Durable admission control for daemon-owned coding runs.
+//! Durable local projection of queue-owned fleet execution fences.
 //!
-//! This is deliberately only the ownership authority.  Runner reattachment and
-//! retained-environment probing remain in `agent_record` and the CLI daemon
-//! reconciler (TASK-793/TASK-933); callers feed their result to
-//! [`CodingScheduler::reconcile`].
+//! The queue backend is the sole lease and generation authority. This module
+//! never allocates an owner or generation and never extends an expiry. It
+//! persists the exact [`ExecutionFence`] returned by `queue/v2/*`, attaches
+//! daemon-local environment identities to it, and prevents a stale process from
+//! preparing or releasing resources owned by a newer queue lease.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use animus_execution_protocol::{ExecutionFence, QueueLeaseFence};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 pub const CODING_SCHEDULER_CAPACITY: usize = 5;
-const STATE_VERSION: u32 = 1;
+const STATE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TaskGeneration {
     pub task_id: String,
-    /// Stable producer-owned generation identity. Queue-backed work uses the
-    /// durable queue entry id; this must never be synthesized by the daemon.
     pub generation: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodingRunResources {
     pub repository: String,
     pub git_ref: Option<String>,
@@ -39,19 +38,49 @@ pub struct CodingRunResources {
     pub pull_request: Option<String>,
 }
 
+impl CodingRunResources {
+    pub fn from_execution(execution: &ExecutionFence) -> Result<Self> {
+        validate_fleet_execution(execution)?;
+        let queue = execution.queue_lease.as_ref().context("fleet execution is missing queue lease")?;
+        let (repository, git_ref, branch) = execution.repository.as_ref().map_or_else(
+            || (String::new(), None, None),
+            |repository| {
+                let branch =
+                    repository.head_ref.strip_prefix("refs/heads/").unwrap_or(&repository.head_ref).to_string();
+                (repository.repository.clone(), Some(repository.head_ref.clone()), Some(branch))
+            },
+        );
+        Ok(Self {
+            repository,
+            git_ref,
+            queue_item_id: queue.entry_id.clone(),
+            workflow_id: execution.workflow_id.clone(),
+            workspace_id: None,
+            environment_id: None,
+            branch,
+            pull_request: None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodingLease {
+    /// Exact queue-owned execution authority. This is the canonical identity.
+    pub execution: ExecutionFence,
+    /// Display/index fields derived from `execution`; never independently minted.
     pub task: TaskGeneration,
-    /// Monotonically increasing fencing token.  Every mutation must present it.
     pub lease_generation: u64,
-    /// Unforgeable ownership token, persisted so a restarted daemon can adopt
-    /// the exact lease rather than preparing another node.
     pub owner: String,
     pub resources: CodingRunResources,
     pub acquired_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     #[serde(default)]
     pub recovered: bool,
+    /// Live-process projection only. Queue authority remains in `execution`;
+    /// startup reconciliation resets this from observed runner liveness.
+    #[serde(default)]
+    pub runner_active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,12 +92,14 @@ pub enum CollisionReason {
     LeaseExpired { task: TaskGeneration, lease_generation: u64 },
     ResourceOwned { resource: String, value: String, task: TaskGeneration },
     RepositoryRef { repository: String, git_ref: String, task: TaskGeneration },
+    StaleFence { task: TaskGeneration, current_generation: u64 },
+    InvalidFence { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ReservationOutcome {
-    Reserved { lease: CodingLease },
+    Reserved { lease: Box<CodingLease> },
     Rejected { reason: CollisionReason },
 }
 
@@ -76,44 +107,23 @@ pub enum ReservationOutcome {
 pub struct CodingSchedulerStatus {
     pub capacity: usize,
     pub available: usize,
+    /// Stable identity of the daemon process currently renewing/recovering
+    /// queue leases. This is descriptive only; the queue fence remains the
+    /// authority for every mutation.
+    pub owner_id: Option<String>,
     pub reservations: Vec<CodingLease>,
-    /// Leases which may no longer be renewed and require liveness
-    /// reconciliation before their resources can be admitted again.
     #[serde(default)]
     pub recovery_needed: Vec<CodingLease>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_collision: Option<CollisionReason>,
 }
 
-/// The liveness classification is supplied by the existing runner/node restart
-/// reconciliation.  In particular, `RetainedLiveNode` preserves the lease and
-/// prevents preparation of a duplicate environment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RecoveryObservation {
-    LiveRunner,
-    RetainedLiveNode,
-    DeadNode,
-    Terminal,
-    /// State could not be proven live or dead. Preserve the fence without
-    /// extending its expiry so typed status reports recovery is required.
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum RecoveryOutcome {
-    Preserved { lease: CodingLease },
-    Recovered { lease: CodingLease },
-    Released { task: TaskGeneration, lease_generation: u64 },
-    Missing,
-    Fenced { current_generation: u64 },
-}
-
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SchedulerState {
     version: u32,
-    next_lease_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owner_id: Option<String>,
     #[serde(default)]
     leases: Vec<CodingLease>,
     #[serde(default)]
@@ -122,37 +132,24 @@ struct SchedulerState {
 
 impl Default for SchedulerState {
     fn default() -> Self {
-        Self { version: STATE_VERSION, next_lease_generation: 1, leases: Vec::new(), last_collision: None }
+        Self { version: STATE_VERSION, owner_id: None, leases: Vec::new(), last_collision: None }
     }
 }
 
-/// File-backed, process-safe coding scheduler.
 #[derive(Debug, Clone)]
 pub struct CodingScheduler {
     state_path: PathBuf,
-    lease_ttl: Duration,
 }
 
-/// Typed service surface used by daemon admission, health and recovery.
-/// Keeping callers on this contract prevents them from interpreting the
-/// durable JSON file or bypassing generation fencing.
 pub trait CodingSchedulerService: Send + Sync {
-    fn reserve(&self, task: TaskGeneration, resources: CodingRunResources) -> Result<ReservationOutcome>;
-    fn renew(&self, task: &TaskGeneration, lease_generation: u64, owner: &str) -> Result<Option<CodingLease>>;
-    fn release(&self, task: &TaskGeneration, lease_generation: u64, owner: &str) -> Result<bool>;
-    fn bind_resources(
-        &self,
-        task: &TaskGeneration,
-        lease_generation: u64,
-        owner: &str,
-        resources: CodingRunResources,
-    ) -> Result<ReservationOutcome>;
-    fn reconcile(
-        &self,
-        task: &TaskGeneration,
-        lease_generation: u64,
-        observation: RecoveryObservation,
-    ) -> Result<RecoveryOutcome>;
+    fn set_owner_id(&self, owner_id: &str) -> Result<()>;
+    fn owns(&self, execution: &ExecutionFence) -> Result<bool>;
+    fn mark_runner_active(&self, execution: &ExecutionFence, active: bool) -> Result<bool>;
+    fn track(&self, execution: ExecutionFence, resources: CodingRunResources) -> Result<ReservationOutcome>;
+    fn update_execution(&self, previous: &ExecutionFence, current: ExecutionFence) -> Result<ReservationOutcome>;
+    fn release(&self, execution: &ExecutionFence) -> Result<bool>;
+    fn bind_resources(&self, execution: &ExecutionFence, resources: CodingRunResources) -> Result<ReservationOutcome>;
+    fn clear_environment(&self, execution: &ExecutionFence) -> Result<Option<CodingLease>>;
     fn status(&self) -> Result<CodingSchedulerStatus>;
 }
 
@@ -164,195 +161,212 @@ impl CodingScheduler {
     }
 
     pub fn with_state_path(state_path: PathBuf) -> Self {
-        Self { state_path, lease_ttl: Duration::minutes(5) }
+        Self { state_path }
     }
 
-    pub fn with_lease_ttl(mut self, lease_ttl: Duration) -> Self {
-        self.lease_ttl = lease_ttl;
-        self
-    }
-
-    pub fn reserve(&self, task: TaskGeneration, resources: CodingRunResources) -> Result<ReservationOutcome> {
-        validate(&task, &resources)?;
+    /// Record the daemon instance that owns future queue lease operations.
+    /// This never grants authority; queue responses still carry and validate
+    /// the exact owner/generation used by every mutation.
+    pub fn set_owner_id(&self, owner_id: &str) -> Result<()> {
+        let owner_id = owner_id.trim();
+        anyhow::ensure!(!owner_id.is_empty(), "coding scheduler owner id must not be empty");
         self.mutate(|state| {
-            let collision = collision(state, &task, &resources);
-            if let Some(reason) = collision {
+            state.owner_id = Some(owner_id.to_string());
+        })
+    }
+
+    /// Whether the durable local projection still names this exact queue
+    /// fence, including its latest backend-issued expiry. Used to keep stale
+    /// runner cleanup from touching a recovered environment.
+    pub fn owns(&self, execution: &ExecutionFence) -> Result<bool> {
+        self.with_state(false, |state| state.leases.iter().any(|lease| lease.execution == *execution))
+    }
+
+    pub fn mark_runner_active(&self, execution: &ExecutionFence, active: bool) -> Result<bool> {
+        self.mutate(|state| {
+            let Some(lease) = state.leases.iter_mut().find(|lease| lease.execution == *execution) else {
+                return false;
+            };
+            lease.runner_active = active;
+            lease.updated_at = Utc::now();
+            true
+        })
+    }
+
+    /// Persist a fence already allocated by the queue. This method cannot mint
+    /// or recover authority; it only projects an externally validated lease.
+    pub fn track(&self, execution: ExecutionFence, resources: CodingRunResources) -> Result<ReservationOutcome> {
+        let lease = lease_from_execution(execution, resources)?;
+        self.mutate(|state| {
+            if let Some(existing) =
+                state.leases.iter_mut().find(|existing| existing.execution.same_execution_generation(&lease.execution))
+            {
+                if same_queue_authority(&existing.execution, &lease.execution) {
+                    existing.execution = lease.execution.clone();
+                    existing.lease_generation = lease.lease_generation;
+                    existing.owner.clone_from(&lease.owner);
+                    existing.expires_at = lease.expires_at;
+                    existing.updated_at = Utc::now();
+                    return ReservationOutcome::Reserved { lease: Box::new(existing.clone()) };
+                }
+                let reason = CollisionReason::StaleFence {
+                    task: existing.task.clone(),
+                    current_generation: existing.lease_generation,
+                };
                 state.last_collision = Some(reason.clone());
                 return ReservationOutcome::Rejected { reason };
             }
-            let lease_generation = state.next_lease_generation;
-            state.next_lease_generation = state.next_lease_generation.saturating_add(1);
-            let now = Utc::now();
-            let lease = CodingLease {
-                task,
-                lease_generation,
-                owner: Uuid::new_v4().to_string(),
-                resources,
-                acquired_at: now,
-                expires_at: now + self.lease_ttl,
-                recovered: false,
-            };
+            if let Some(reason) = collision(state, &lease) {
+                state.last_collision = Some(reason.clone());
+                return ReservationOutcome::Rejected { reason };
+            }
             state.leases.push(lease.clone());
             state.last_collision = None;
-            ReservationOutcome::Reserved { lease }
+            ReservationOutcome::Reserved { lease: Box::new(lease) }
         })
     }
 
-    /// Renew only if both fencing credentials still identify the current owner.
-    pub fn renew(&self, task: &TaskGeneration, lease_generation: u64, owner: &str) -> Result<Option<CodingLease>> {
+    /// Replace only the queue-owned mutable lease portion after an applied
+    /// renew or recover response. Workflow/subject/repository generations must
+    /// remain identical and the queue ownership transition must be monotonic.
+    pub fn update_execution(&self, previous: &ExecutionFence, current: ExecutionFence) -> Result<ReservationOutcome> {
+        validate_fleet_execution(&current)?;
+        anyhow::ensure!(
+            previous.same_execution_generation(&current) && previous.repository == current.repository,
+            "queue mutation changed immutable execution identity"
+        );
+        validate_queue_transition(previous, &current)?;
         self.mutate(|state| {
-            let now = Utc::now();
-            let Some(lease) = state.leases.iter_mut().find(|lease| &lease.task == task) else {
-                return None;
+            let Some(existing) =
+                state.leases.iter_mut().find(|lease| lease.execution.same_execution_generation(previous))
+            else {
+                let reason = invalid_fence_reason(previous, "execution is not tracked");
+                state.last_collision = Some(reason.clone());
+                return ReservationOutcome::Rejected { reason };
             };
-            if lease.lease_generation != lease_generation || lease.owner != owner {
-                return None;
+            if !same_queue_authority(&existing.execution, previous) {
+                let reason = CollisionReason::StaleFence {
+                    task: existing.task.clone(),
+                    current_generation: existing.lease_generation,
+                };
+                state.last_collision = Some(reason.clone());
+                return ReservationOutcome::Rejected { reason };
             }
-            // Expiry is a fencing boundary.  Only reconcile(), after consulting
-            // the existing runner/node liveness machinery, may recover it.
-            if lease.expires_at <= now {
-                return None;
-            }
-            lease.expires_at = now + self.lease_ttl;
-            Some(lease.clone())
+            let queue = current.queue_lease.as_ref().expect("validated fleet fence");
+            let queue_generation = queue.generation;
+            let queue_owner = queue.owner_id.clone();
+            let queue_expires_at = queue.expires_at;
+            existing.execution = current;
+            existing.lease_generation = queue_generation;
+            existing.owner = queue_owner;
+            existing.expires_at = queue_expires_at;
+            existing.recovered = existing.recovered || queue_generation > previous_queue(previous).generation;
+            existing.updated_at = Utc::now();
+            state.last_collision = None;
+            ReservationOutcome::Reserved { lease: Box::new(existing.clone()) }
         })
     }
 
-    pub fn release(&self, task: &TaskGeneration, lease_generation: u64, owner: &str) -> Result<bool> {
+    pub fn release(&self, execution: &ExecutionFence) -> Result<bool> {
         self.mutate(|state| {
             let before = state.leases.len();
             state.leases.retain(|lease| {
-                !(&lease.task == task && lease.lease_generation == lease_generation && lease.owner == owner)
+                !(lease.execution.same_execution_generation(execution)
+                    && same_queue_authority(&lease.execution, execution))
             });
             state.leases.len() != before
         })
     }
 
-    /// Attach identities allocated after admission (workspace, environment,
-    /// branch or PR) to the exact lease. This is fenced and collision checked,
-    /// so late phase preparation cannot steal another run's resource.
     pub fn bind_resources(
         &self,
-        task: &TaskGeneration,
-        lease_generation: u64,
-        owner: &str,
+        execution: &ExecutionFence,
         resources: CodingRunResources,
     ) -> Result<ReservationOutcome> {
-        validate(task, &resources)?;
+        validate_projection(execution, &resources)?;
         self.mutate(|state| {
-            let Some(index) = state.leases.iter().position(|lease| &lease.task == task) else {
-                return ReservationOutcome::Rejected {
-                    reason: CollisionReason::DuplicateTaskGeneration { task: task.clone() },
-                };
+            let Some(index) =
+                state.leases.iter().position(|lease| lease.execution.same_execution_generation(execution))
+            else {
+                let reason = invalid_fence_reason(execution, "execution is not tracked");
+                state.last_collision = Some(reason.clone());
+                return ReservationOutcome::Rejected { reason };
             };
-            if state.leases[index].lease_generation != lease_generation || state.leases[index].owner != owner {
-                return ReservationOutcome::Rejected {
-                    reason: CollisionReason::TaskAlreadyActive {
-                        task_id: task.task_id.clone(),
-                        generation: state.leases[index].task.generation.clone(),
-                    },
+            if !same_queue_authority(&state.leases[index].execution, execution) {
+                let reason = CollisionReason::StaleFence {
+                    task: state.leases[index].task.clone(),
+                    current_generation: state.leases[index].lease_generation,
                 };
+                state.last_collision = Some(reason.clone());
+                return ReservationOutcome::Rejected { reason };
             }
-            // Expiry fences every allocation mutation, not only heartbeats.
-            // Otherwise a daemon holding stale persisted credentials could
-            // prepare and bind a second node while restart reconciliation is
-            // still deciding whether the original runner/node survived.
             if state.leases[index].expires_at <= Utc::now() {
                 let reason = CollisionReason::LeaseExpired {
-                    task: task.clone(),
-                    lease_generation,
+                    task: state.leases[index].task.clone(),
+                    lease_generation: state.leases[index].lease_generation,
                 };
                 state.last_collision = Some(reason.clone());
                 return ReservationOutcome::Rejected { reason };
             }
-            let lease = state.leases.remove(index);
-            if let Some(reason) = collision(state, task, &resources) {
-                state.leases.insert(index, lease);
+            let mut candidate = state.leases[index].clone();
+            candidate.resources = resources;
+            if let Some(reason) = resource_collision(state, index, &candidate) {
                 state.last_collision = Some(reason.clone());
                 return ReservationOutcome::Rejected { reason };
             }
-            let mut lease = lease;
-            lease.resources = resources;
-            state.leases.insert(index, lease.clone());
+            state.leases[index] = candidate.clone();
+            state.leases[index].updated_at = Utc::now();
+            candidate.updated_at = state.leases[index].updated_at;
             state.last_collision = None;
-            ReservationOutcome::Reserved { lease }
+            ReservationOutcome::Reserved { lease: Box::new(candidate) }
         })
     }
 
-    /// Apply the TASK-793/TASK-933 liveness result to an exact fenced lease.
-    pub fn reconcile(
-        &self,
-        task: &TaskGeneration,
-        lease_generation: u64,
-        observation: RecoveryObservation,
-    ) -> Result<RecoveryOutcome> {
+    pub fn clear_environment(&self, execution: &ExecutionFence) -> Result<Option<CodingLease>> {
         self.mutate(|state| {
-            let Some(index) = state.leases.iter().position(|lease| &lease.task == task) else {
-                return RecoveryOutcome::Missing;
-            };
-            if state.leases[index].lease_generation != lease_generation {
-                return RecoveryOutcome::Fenced { current_generation: state.leases[index].lease_generation };
-            }
-            match observation {
-                RecoveryObservation::LiveRunner => {
-                    state.leases[index].expires_at = Utc::now() + self.lease_ttl;
-                    RecoveryOutcome::Preserved { lease: state.leases[index].clone() }
-                }
-                RecoveryObservation::RetainedLiveNode => {
-                    state.leases[index].recovered = true;
-                    state.leases[index].expires_at = Utc::now() + self.lease_ttl;
-                    RecoveryOutcome::Recovered { lease: state.leases[index].clone() }
-                }
-                RecoveryObservation::DeadNode => {
-                    // The journal/workflow still owns this generation and will
-                    // redispatch it. Drop only identities belonging to the dead
-                    // allocation so the replacement can be bound to the same
-                    // fence; retaining the lease prevents queue admission from
-                    // preparing a second replacement concurrently.
-                    state.leases[index].resources.workspace_id = None;
-                    state.leases[index].resources.environment_id = None;
-                    state.leases[index].recovered = true;
-                    state.leases[index].expires_at = Utc::now() + self.lease_ttl;
-                    RecoveryOutcome::Recovered { lease: state.leases[index].clone() }
-                }
-                RecoveryObservation::Terminal => {
-                    let lease = state.leases.remove(index);
-                    RecoveryOutcome::Released {
-                        task: lease.task,
-                        lease_generation: lease.lease_generation,
-                    }
-                }
-                RecoveryObservation::Unknown => RecoveryOutcome::Preserved { lease: state.leases[index].clone() },
-            }
+            let lease = state.leases.iter_mut().find(|lease| {
+                lease.execution.same_execution_generation(execution)
+                    && same_queue_authority(&lease.execution, execution)
+            })?;
+            lease.resources.workspace_id = None;
+            lease.resources.environment_id = None;
+            lease.updated_at = Utc::now();
+            Some(lease.clone())
         })
     }
 
     pub fn status(&self) -> Result<CodingSchedulerStatus> {
-        self.read(|state| {
+        self.with_state(false, |state| {
             let now = Utc::now();
+            let recovery_needed = state.leases.iter().filter(|lease| lease.expires_at <= now).cloned().collect();
             CodingSchedulerStatus {
                 capacity: CODING_SCHEDULER_CAPACITY,
                 available: CODING_SCHEDULER_CAPACITY.saturating_sub(state.leases.len()),
+                owner_id: state.owner_id.clone(),
                 reservations: state.leases.clone(),
-                recovery_needed: state.leases.iter().filter(|lease| lease.expires_at <= now).cloned().collect(),
+                recovery_needed,
                 last_collision: state.last_collision.clone(),
             }
         })
     }
 
-    fn read<T>(&self, f: impl FnOnce(&SchedulerState) -> T) -> Result<T> {
-        self.with_lock(false, |state| Ok(f(state)))
-    }
-
     fn mutate<T>(&self, f: impl FnOnce(&mut SchedulerState) -> T) -> Result<T> {
-        self.with_lock(true, |state| {
-            let value = f(state);
-            persist(&self.state_path, state)?;
-            Ok(value)
-        })
+        if let Some(parent) = self.state_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let lock_path = self.state_path.with_extension("lock");
+        let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(lock_path)?;
+        lock.lock_exclusive()?;
+        let mut state = load(&self.state_path)?;
+        let value = f(&mut state);
+        // Persist before the exclusive lock is dropped. Releasing the lock
+        // between read/mutate and rename lets two daemon paths overwrite one
+        // another from the same stale snapshot.
+        persist(&self.state_path, &state)?;
+        Ok(value)
     }
 
-    fn with_lock<T>(&self, exclusive: bool, f: impl FnOnce(&mut SchedulerState) -> Result<T>) -> Result<T> {
+    fn with_state<T>(&self, exclusive: bool, f: impl FnOnce(&mut SchedulerState) -> T) -> Result<T> {
         if let Some(parent) = self.state_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -364,126 +378,235 @@ impl CodingScheduler {
             FileExt::lock_shared(&lock)?;
         }
         let mut state = load(&self.state_path)?;
-        f(&mut state)
+        Ok(f(&mut state))
+    }
+}
+
+impl Clone for SchedulerState {
+    fn clone(&self) -> Self {
+        Self {
+            version: self.version,
+            owner_id: self.owner_id.clone(),
+            leases: self.leases.clone(),
+            last_collision: self.last_collision.clone(),
+        }
     }
 }
 
 impl CodingSchedulerService for CodingScheduler {
-    fn reserve(&self, task: TaskGeneration, resources: CodingRunResources) -> Result<ReservationOutcome> {
-        CodingScheduler::reserve(self, task, resources)
+    fn set_owner_id(&self, owner_id: &str) -> Result<()> {
+        Self::set_owner_id(self, owner_id)
     }
 
-    fn renew(&self, task: &TaskGeneration, lease_generation: u64, owner: &str) -> Result<Option<CodingLease>> {
-        CodingScheduler::renew(self, task, lease_generation, owner)
+    fn owns(&self, execution: &ExecutionFence) -> Result<bool> {
+        Self::owns(self, execution)
     }
 
-    fn release(&self, task: &TaskGeneration, lease_generation: u64, owner: &str) -> Result<bool> {
-        CodingScheduler::release(self, task, lease_generation, owner)
+    fn mark_runner_active(&self, execution: &ExecutionFence, active: bool) -> Result<bool> {
+        Self::mark_runner_active(self, execution, active)
     }
 
-    fn bind_resources(
-        &self,
-        task: &TaskGeneration,
-        lease_generation: u64,
-        owner: &str,
-        resources: CodingRunResources,
-    ) -> Result<ReservationOutcome> {
-        CodingScheduler::bind_resources(self, task, lease_generation, owner, resources)
+    fn track(&self, execution: ExecutionFence, resources: CodingRunResources) -> Result<ReservationOutcome> {
+        Self::track(self, execution, resources)
     }
 
-    fn reconcile(
-        &self,
-        task: &TaskGeneration,
-        lease_generation: u64,
-        observation: RecoveryObservation,
-    ) -> Result<RecoveryOutcome> {
-        CodingScheduler::reconcile(self, task, lease_generation, observation)
+    fn update_execution(&self, previous: &ExecutionFence, current: ExecutionFence) -> Result<ReservationOutcome> {
+        Self::update_execution(self, previous, current)
+    }
+
+    fn release(&self, execution: &ExecutionFence) -> Result<bool> {
+        Self::release(self, execution)
+    }
+
+    fn bind_resources(&self, execution: &ExecutionFence, resources: CodingRunResources) -> Result<ReservationOutcome> {
+        Self::bind_resources(self, execution, resources)
+    }
+
+    fn clear_environment(&self, execution: &ExecutionFence) -> Result<Option<CodingLease>> {
+        Self::clear_environment(self, execution)
     }
 
     fn status(&self) -> Result<CodingSchedulerStatus> {
-        CodingScheduler::status(self)
+        Self::status(self)
     }
 }
 
-fn collision(
-    state: &SchedulerState,
-    task: &TaskGeneration,
-    resources: &CodingRunResources,
-) -> Option<CollisionReason> {
-    if let Some(existing) = state.leases.iter().find(|lease| lease.task == *task) {
+fn lease_from_execution(execution: ExecutionFence, resources: CodingRunResources) -> Result<CodingLease> {
+    validate_projection(&execution, &resources)?;
+    let subject = execution.subject.as_ref().expect("validated fleet fence");
+    let queue = execution.queue_lease.as_ref().expect("validated fleet fence");
+    let now = Utc::now();
+    Ok(CodingLease {
+        task: TaskGeneration { task_id: subject.qualified_id.clone(), generation: subject.generation.to_string() },
+        lease_generation: queue.generation,
+        owner: queue.owner_id.clone(),
+        expires_at: queue.expires_at,
+        execution,
+        resources,
+        acquired_at: now,
+        updated_at: now,
+        recovered: false,
+        runner_active: false,
+    })
+}
+
+fn validate_projection(execution: &ExecutionFence, resources: &CodingRunResources) -> Result<()> {
+    validate_fleet_execution(execution)?;
+    let queue = execution.queue_lease.as_ref().expect("validated fleet fence");
+    anyhow::ensure!(resources.workflow_id == execution.workflow_id, "resource workflow id does not match fence");
+    anyhow::ensure!(resources.queue_item_id == queue.entry_id, "resource queue item does not match fence");
+    match execution.repository.as_ref() {
+        Some(repository) => {
+            anyhow::ensure!(
+                normalized_repository(&resources.repository) == normalized_repository(&repository.repository),
+                "resource repository does not match fence"
+            );
+            anyhow::ensure!(
+                resources.git_ref.as_deref().and_then(normalized_git_ref) == normalized_git_ref(&repository.head_ref),
+                "resource head ref does not match fence"
+            );
+        }
+        None => {
+            anyhow::ensure!(resources.repository.trim().is_empty(), "non-code fence cannot bind a repository");
+            anyhow::ensure!(resources.git_ref.is_none(), "non-code fence cannot bind a git ref");
+            anyhow::ensure!(resources.branch.is_none(), "non-code fence cannot bind a branch");
+            anyhow::ensure!(resources.pull_request.is_none(), "non-code fence cannot bind a pull request");
+        }
+    }
+    Ok(())
+}
+
+fn validate_fleet_execution(execution: &ExecutionFence) -> Result<()> {
+    execution.validate_queue_backed().map_err(anyhow::Error::msg)?;
+    let subject = execution.subject.as_ref().context("queue-backed fleet execution is missing subject generation")?;
+    anyhow::ensure!(!subject.qualified_id.trim().is_empty(), "fleet subject id must not be empty");
+    Ok(())
+}
+
+fn validate_queue_transition(previous: &ExecutionFence, current: &ExecutionFence) -> Result<()> {
+    let old = previous_queue(previous);
+    let new = previous_queue(current);
+    anyhow::ensure!(old.entry_id == new.entry_id, "queue mutation changed entry id");
+    if old.owner_id == new.owner_id {
+        anyhow::ensure!(old.generation == new.generation, "renew changed lease generation");
+        anyhow::ensure!(new.expires_at >= old.expires_at, "renew shortened lease expiry");
+    } else {
+        anyhow::ensure!(
+            new.generation == old.generation.saturating_add(1),
+            "recovery did not increment lease generation exactly once"
+        );
+    }
+    Ok(())
+}
+
+fn previous_queue(execution: &ExecutionFence) -> &QueueLeaseFence {
+    execution.queue_lease.as_ref().expect("validated queue-backed execution fence")
+}
+
+fn same_queue_authority(left: &ExecutionFence, right: &ExecutionFence) -> bool {
+    match (left.queue_lease.as_ref(), right.queue_lease.as_ref()) {
+        (Some(left), Some(right)) => {
+            left.entry_id == right.entry_id && left.owner_id == right.owner_id && left.generation == right.generation
+        }
+        _ => false,
+    }
+}
+
+fn collision(state: &SchedulerState, wanted: &CodingLease) -> Option<CollisionReason> {
+    if let Some(existing) = state.leases.iter().find(|lease| lease.task == wanted.task) {
         return Some(CollisionReason::DuplicateTaskGeneration { task: existing.task.clone() });
     }
-    if let Some(existing) = state.leases.iter().find(|lease| lease.task.task_id == task.task_id) {
+    if let Some(existing) = state.leases.iter().find(|lease| lease.task.task_id == wanted.task.task_id) {
         return Some(CollisionReason::TaskAlreadyActive {
             task_id: existing.task.task_id.clone(),
             generation: existing.task.generation.clone(),
         });
     }
-    for existing in &state.leases {
-        if same_repository(&existing.resources.repository, &resources.repository) {
-            if let (Some(held), Some(wanted)) = (
-                existing.resources.git_ref.as_deref().and_then(normalized_git_ref),
-                resources.git_ref.as_deref().and_then(normalized_git_ref),
-            ) {
-                if held == wanted {
-                    return Some(CollisionReason::RepositoryRef {
-                        repository: resources.repository.clone(),
-                        git_ref: resources.git_ref.clone().unwrap_or_default(),
-                        task: existing.task.clone(),
-                    });
-                }
-            }
+    if let Some(reason) = resource_collision(state, usize::MAX, wanted) {
+        return Some(reason);
+    }
+    (state.leases.len() >= CODING_SCHEDULER_CAPACITY)
+        .then_some(CollisionReason::Capacity { capacity: CODING_SCHEDULER_CAPACITY })
+}
+
+fn resource_collision(state: &SchedulerState, skip: usize, wanted: &CodingLease) -> Option<CollisionReason> {
+    for (index, existing) in state.leases.iter().enumerate() {
+        if index == skip {
+            continue;
         }
-        for (name, wanted, held) in [
-            ("queue_item", &resources.queue_item_id, &existing.resources.queue_item_id),
-            ("workflow", &resources.workflow_id, &existing.resources.workflow_id),
-        ] {
-            if !wanted.is_empty() && wanted == held {
-                return Some(CollisionReason::ResourceOwned {
-                    resource: name.to_string(),
-                    value: wanted.clone(),
+        if let (Some(held), Some(wanted_ref)) =
+            (existing.execution.repository.as_ref(), wanted.execution.repository.as_ref())
+        {
+            if held.collision_key() == wanted_ref.collision_key() {
+                return Some(CollisionReason::RepositoryRef {
+                    repository: wanted_ref.repository.clone(),
+                    git_ref: wanted_ref.head_ref.clone(),
                     task: existing.task.clone(),
                 });
             }
         }
-        for (name, wanted, held) in [
-            ("workspace", &resources.workspace_id, &existing.resources.workspace_id),
-            ("environment", &resources.environment_id, &existing.resources.environment_id),
+        for (name, wanted_value, held) in [
+            ("queue_item", &wanted.resources.queue_item_id, &existing.resources.queue_item_id),
+            ("workflow", &wanted.resources.workflow_id, &existing.resources.workflow_id),
         ] {
-            if let (Some(wanted), Some(held)) = (wanted, held) {
-                if wanted == held {
+            if !wanted_value.is_empty() && wanted_value == held {
+                return Some(CollisionReason::ResourceOwned {
+                    resource: name.to_string(),
+                    value: wanted_value.clone(),
+                    task: existing.task.clone(),
+                });
+            }
+        }
+        for (name, wanted_value, held) in [
+            ("workspace", &wanted.resources.workspace_id, &existing.resources.workspace_id),
+            ("environment", &wanted.resources.environment_id, &existing.resources.environment_id),
+        ] {
+            if let (Some(wanted_value), Some(held)) = (wanted_value, held) {
+                if wanted_value == held {
                     return Some(CollisionReason::ResourceOwned {
                         resource: name.to_string(),
-                        value: wanted.clone(),
+                        value: wanted_value.clone(),
                         task: existing.task.clone(),
                     });
                 }
             }
         }
-        if same_repository(&existing.resources.repository, &resources.repository)
-            && resources.branch.is_some()
-            && existing.resources.branch == resources.branch
+        if !wanted.resources.repository.trim().is_empty()
+            && same_repository(&existing.resources.repository, &wanted.resources.repository)
+            && wanted.resources.branch.is_some()
+            && existing.resources.branch == wanted.resources.branch
         {
             return Some(CollisionReason::ResourceOwned {
                 resource: "branch".to_string(),
-                value: resources.branch.clone().unwrap_or_default(),
+                value: wanted.resources.branch.clone().unwrap_or_default(),
                 task: existing.task.clone(),
             });
         }
-        if same_repository(&existing.resources.repository, &resources.repository) {
-            if let (Some(wanted), Some(held)) = (&resources.pull_request, &existing.resources.pull_request) {
-                if wanted == held {
+        if !wanted.resources.repository.trim().is_empty()
+            && same_repository(&existing.resources.repository, &wanted.resources.repository)
+        {
+            if let (Some(wanted_pr), Some(held)) = (&wanted.resources.pull_request, &existing.resources.pull_request) {
+                if wanted_pr == held {
                     return Some(CollisionReason::ResourceOwned {
                         resource: "pull_request".to_string(),
-                        value: wanted.clone(),
+                        value: wanted_pr.clone(),
                         task: existing.task.clone(),
                     });
                 }
             }
         }
     }
-    (state.leases.len() >= CODING_SCHEDULER_CAPACITY)
-        .then_some(CollisionReason::Capacity { capacity: CODING_SCHEDULER_CAPACITY })
+    None
+}
+
+fn invalid_fence_reason(execution: &ExecutionFence, reason: &str) -> CollisionReason {
+    let task = execution
+        .subject
+        .as_ref()
+        .map_or(TaskGeneration { task_id: "unknown".to_string(), generation: "0".to_string() }, |subject| {
+            TaskGeneration { task_id: subject.qualified_id.clone(), generation: subject.generation.to_string() }
+        });
+    CollisionReason::InvalidFence { reason: format!("{}: {reason}", task.task_id) }
 }
 
 fn same_repository(left: &str, right: &str) -> bool {
@@ -492,16 +615,11 @@ fn same_repository(left: &str, right: &str) -> bool {
 
 fn normalized_repository(value: &str) -> String {
     let value = value.trim();
-
     if let Some((_, remainder)) = value.split_once("://") {
         let (authority, path) = remainder.split_once('/').unwrap_or((remainder, ""));
         let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
         return repository_host_path(host, path);
     }
-
-    // Git's SCP-like syntax has no scheme: `git@host:owner/repository.git`.
-    // Require a slash after the colon so shorthand names and Windows paths do
-    // not accidentally become remote repository URLs.
     let first_slash = value.find('/');
     if let Some(colon) = value.find(':') {
         if first_slash.is_some_and(|slash| colon < slash) {
@@ -509,13 +627,12 @@ fn normalized_repository(value: &str) -> String {
             return repository_host_path(host, &value[colon + 1..]);
         }
     }
-
-    trim_repository_path(value).to_string()
+    trim_repository_path(value).to_ascii_lowercase()
 }
 
 fn repository_host_path(host: &str, path: &str) -> String {
     let host = host.trim().trim_end_matches('/').to_ascii_lowercase();
-    let path = trim_repository_path(path);
+    let path = trim_repository_path(path).to_ascii_lowercase();
     if path.is_empty() {
         host
     } else {
@@ -541,19 +658,6 @@ fn normalized_git_ref(value: &str) -> Option<&str> {
     )
 }
 
-fn validate(task: &TaskGeneration, resources: &CodingRunResources) -> Result<()> {
-    for (name, value) in [
-        ("task id", task.task_id.as_str()),
-        ("task generation", task.generation.as_str()),
-        ("repository", resources.repository.as_str()),
-        ("queue item id", resources.queue_item_id.as_str()),
-        ("workflow id", resources.workflow_id.as_str()),
-    ] {
-        anyhow::ensure!(!value.trim().is_empty(), "{name} must not be empty");
-    }
-    Ok(())
-}
-
 fn load(path: &Path) -> Result<SchedulerState> {
     match fs::read(path) {
         Ok(bytes) => {
@@ -567,7 +671,7 @@ fn load(path: &Path) -> Result<SchedulerState> {
 }
 
 fn persist(path: &Path, state: &SchedulerState) -> Result<()> {
-    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let tmp = path.with_extension(format!("json.{}.{}.tmp", std::process::id(), uuid::Uuid::new_v4().simple()));
     let bytes = serde_json::to_vec_pretty(state)?;
     let mut file = File::create(&tmp)?;
     file.write_all(&bytes)?;
@@ -584,254 +688,161 @@ fn persist(path: &Path, state: &SchedulerState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use animus_execution_protocol::{
+        QueueLeaseFence, RepositoryReservation, SubjectGeneration, EXECUTION_FENCE_SCHEMA_ID, EXECUTION_FENCE_VERSION,
+    };
+    use chrono::Duration;
 
-    fn resources(n: usize) -> CodingRunResources {
-        CodingRunResources {
-            repository: "launchapp/animus".into(),
-            git_ref: Some(format!("refs/heads/task-{n}")),
-            queue_item_id: format!("queue-{n}"),
+    fn execution(n: usize) -> ExecutionFence {
+        ExecutionFence {
+            schema: EXECUTION_FENCE_SCHEMA_ID.to_string(),
+            version: EXECUTION_FENCE_VERSION,
             workflow_id: format!("workflow-{n}"),
-            workspace_id: Some(format!("workspace-{n}")),
-            environment_id: Some(format!("environment-{n}")),
-            branch: Some(format!("task-{n}")),
-            pull_request: None,
+            workflow_generation: 1,
+            subject: Some(SubjectGeneration { qualified_id: format!("task:TASK-{n}"), generation: n as u64 + 1 }),
+            queue_lease: Some(QueueLeaseFence {
+                entry_id: format!("queue-{n}"),
+                owner_id: "daemon-a".to_string(),
+                generation: 1,
+                expires_at: Utc::now() + Duration::minutes(5),
+            }),
+            repository: Some(RepositoryReservation {
+                repository: "https://github.com/launchapp/animus.git".to_string(),
+                base_ref: "refs/heads/main".to_string(),
+                head_ref: format!("refs/heads/animus/TASK-{n}"),
+            }),
         }
     }
 
-    fn task(n: usize) -> TaskGeneration {
-        TaskGeneration { task_id: format!("TASK-{n}"), generation: format!("queue-{n}") }
+    fn resources(n: usize) -> CodingRunResources {
+        CodingRunResources::from_execution(&execution(n)).unwrap()
+    }
+
+    fn non_code_execution(n: usize) -> ExecutionFence {
+        let mut execution = execution(n);
+        execution.repository = None;
+        execution
     }
 
     #[test]
-    fn admits_five_independent_runs_and_persists_them() {
+    fn admits_five_independent_queue_fences_without_minting_authority() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("leases.json");
         let scheduler = CodingScheduler::with_state_path(path.clone());
+        let mut expected = Vec::new();
         for n in 0..CODING_SCHEDULER_CAPACITY {
-            assert!(matches!(scheduler.reserve(task(n), resources(n)).unwrap(), ReservationOutcome::Reserved { .. }));
+            let execution = execution(n);
+            let resources = CodingRunResources::from_execution(&execution).unwrap();
+            assert!(matches!(
+                scheduler.track(execution.clone(), resources).unwrap(),
+                ReservationOutcome::Reserved { .. }
+            ));
+            expected.push(execution);
         }
-        assert_eq!(CodingScheduler::with_state_path(path).status().unwrap().available, 0);
+        let status = CodingScheduler::with_state_path(path).status().unwrap();
+        assert_eq!(status.available, 0);
+        for (n, lease) in status.reservations.iter().enumerate() {
+            assert_eq!(lease.lease_generation, 1);
+            assert_eq!(lease.owner, "daemon-a");
+            assert_eq!(lease.execution, expected[n]);
+        }
         assert!(matches!(
-            scheduler.reserve(task(9), resources(9)).unwrap(),
+            scheduler.track(execution(9), resources(9)).unwrap(),
             ReservationOutcome::Rejected { reason: CollisionReason::Capacity { capacity: 5 } }
         ));
     }
 
     #[test]
-    fn rejects_duplicate_generation_and_repo_ref_collision() {
+    fn tracks_non_code_queue_execution_without_inventing_repository_ownership() {
         let temp = tempfile::tempdir().unwrap();
         let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
-        scheduler.reserve(task(1), resources(1)).unwrap();
+        let execution = non_code_execution(1);
+        let resources = CodingRunResources::from_execution(&execution).unwrap();
+        assert!(resources.repository.is_empty());
+        assert!(resources.git_ref.is_none());
+        assert!(resources.branch.is_none());
+        assert!(matches!(scheduler.track(execution.clone(), resources).unwrap(), ReservationOutcome::Reserved { .. }));
+
+        let mut invalid = scheduler.status().unwrap().reservations[0].resources.clone();
+        invalid.repository = "https://github.com/launchapp-dev/animus-cli.git".to_string();
+        assert!(scheduler.bind_resources(&execution, invalid).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_generation_and_repository_head_collision() {
+        let temp = tempfile::tempdir().unwrap();
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
+        scheduler.track(execution(1), resources(1)).unwrap();
+        assert!(matches!(scheduler.track(execution(1), resources(1)).unwrap(), ReservationOutcome::Reserved { .. }));
+
+        let mut colliding = execution(2);
+        colliding.repository.as_mut().unwrap().head_ref = "refs/heads/animus/TASK-1".to_string();
+        let colliding_resources = CodingRunResources::from_execution(&colliding).unwrap();
         assert!(matches!(
-            scheduler.reserve(task(1), resources(2)).unwrap(),
-            ReservationOutcome::Rejected { reason: CollisionReason::DuplicateTaskGeneration { .. } }
-        ));
-        let mut colliding = resources(3);
-        colliding.git_ref = resources(1).git_ref;
-        assert!(matches!(
-            scheduler.reserve(task(3), colliding).unwrap(),
+            scheduler.track(colliding, colliding_resources).unwrap(),
             ReservationOutcome::Rejected { reason: CollisionReason::RepositoryRef { .. } }
         ));
     }
 
     #[test]
-    fn rejects_equivalent_repository_and_ref_spellings() {
+    fn renew_and_recovery_only_replace_queue_authority_from_backend_response() {
         let temp = tempfile::tempdir().unwrap();
         let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
-        let mut held = resources(1);
-        held.repository = "https://GitHub.COM/launchapp/animus.git".into();
-        held.git_ref = Some("refs/heads/main".into());
-        held.branch = None;
-        scheduler.reserve(task(1), held).unwrap();
+        let first = execution(1);
+        scheduler.track(first.clone(), resources(1)).unwrap();
 
-        for (n, repository) in [
-            (2, "https://github.com/launchapp/animus/"),
-            (3, "ssh://git@github.com/launchapp/animus.git"),
-            (4, "git@github.com:launchapp/animus.git"),
-        ] {
-            let mut wanted = resources(n);
-            wanted.repository = repository.into();
-            wanted.git_ref = Some("origin/main".into());
-            wanted.branch = None;
-            assert!(matches!(
-                scheduler.reserve(task(n), wanted).unwrap(),
-                ReservationOutcome::Rejected { reason: CollisionReason::RepositoryRef { .. } }
-            ));
-        }
+        let mut renewed = first.clone();
+        renewed.queue_lease.as_mut().unwrap().expires_at += Duration::minutes(5);
+        scheduler.update_execution(&first, renewed.clone()).unwrap();
+
+        let mut recovered = renewed.clone();
+        let queue = recovered.queue_lease.as_mut().unwrap();
+        queue.owner_id = "daemon-b".to_string();
+        queue.generation += 1;
+        queue.expires_at += Duration::minutes(5);
+        scheduler.update_execution(&renewed, recovered.clone()).unwrap();
+
+        let lease = scheduler.status().unwrap().reservations.pop().unwrap();
+        assert_eq!(lease.execution, recovered);
+        assert_eq!(lease.owner, "daemon-b");
+        assert_eq!(lease.lease_generation, 2);
+        assert!(lease.recovered);
+        assert!(!scheduler.release(&first).unwrap(), "stale owner must not release recovered lease");
+        assert!(scheduler.release(&lease.execution).unwrap());
     }
 
     #[test]
-    fn pull_request_identity_is_scoped_to_its_repository() {
+    fn expired_fence_cannot_bind_environment_before_queue_recovery() {
         let temp = tempfile::tempdir().unwrap();
         let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
-        let mut held = resources(1);
-        held.pull_request = Some("42".into());
-        scheduler.reserve(task(1), held).unwrap();
-
-        let mut independent = resources(2);
-        independent.repository = "launchapp/another-repository".into();
-        independent.pull_request = Some("42".into());
+        let mut expired = execution(1);
+        expired.queue_lease.as_mut().unwrap().expires_at = Utc::now() - Duration::seconds(1);
+        let resources = CodingRunResources::from_execution(&expired).unwrap();
+        scheduler.track(expired.clone(), resources.clone()).unwrap();
+        let mut allocated = resources;
+        allocated.environment_id = Some("railway:node-1".to_string());
+        allocated.workspace_id = Some("railway:node-1:/workspace".to_string());
         assert!(matches!(
-            scheduler.reserve(task(2), independent).unwrap(),
-            ReservationOutcome::Reserved { .. }
+            scheduler.bind_resources(&expired, allocated).unwrap(),
+            ReservationOutcome::Rejected { reason: CollisionReason::LeaseExpired { .. } }
         ));
-
-        let mut colliding = resources(3);
-        colliding.pull_request = Some("42".into());
-        assert!(matches!(
-            scheduler.reserve(task(3), colliding).unwrap(),
-            ReservationOutcome::Rejected {
-                reason: CollisionReason::ResourceOwned { resource, value, .. }
-            } if resource == "pull_request" && value == "42"
-        ));
-    }
-
-    #[test]
-    fn retained_node_is_adopted_and_stale_owner_is_fenced() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("leases.json");
-        let scheduler = CodingScheduler::with_state_path(path.clone());
-        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
-            panic!("reservation rejected");
-        };
-        let restarted = CodingScheduler::with_state_path(path);
-        let recovered = restarted
-            .reconcile(&lease.task, lease.lease_generation, RecoveryObservation::RetainedLiveNode)
-            .unwrap();
-        assert!(matches!(recovered, RecoveryOutcome::Recovered { lease: CodingLease { recovered: true, .. } }));
-        assert!(!restarted.release(&lease.task, lease.lease_generation + 1, &lease.owner).unwrap());
-    }
-
-    #[test]
-    fn late_resource_binding_is_generation_fenced_and_persisted() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("leases.json");
-        let scheduler = CodingScheduler::with_state_path(path.clone());
-        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
-            panic!("reservation rejected");
-        };
-        let mut bound = lease.resources.clone();
-        bound.workspace_id = Some("/workspace/allocated".into());
-        bound.environment_id = Some("railway:node-123".into());
-        assert!(matches!(
-            scheduler
-                .bind_resources(&lease.task, lease.lease_generation, &lease.owner, bound.clone())
-                .unwrap(),
-            ReservationOutcome::Reserved { .. }
-        ));
-        assert!(matches!(
-            scheduler
-                .bind_resources(&lease.task, lease.lease_generation + 1, &lease.owner, bound.clone())
-                .unwrap(),
-            ReservationOutcome::Rejected { .. }
-        ));
-        assert_eq!(CodingScheduler::with_state_path(path).status().unwrap().reservations[0].resources, bound);
-    }
-
-    #[test]
-    fn dead_node_restart_preserves_fence_for_exactly_one_replacement() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("leases.json");
-        let scheduler = CodingScheduler::with_state_path(path.clone());
-        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
-            panic!("reservation rejected");
-        };
-
-        let restarted = CodingScheduler::with_state_path(path.clone());
-        let RecoveryOutcome::Recovered { lease: recovered } = restarted
-            .reconcile(&lease.task, lease.lease_generation, RecoveryObservation::DeadNode)
-            .unwrap()
-        else {
-            panic!("dead node was not recovered");
-        };
-        assert_eq!(recovered.lease_generation, lease.lease_generation);
-        assert_eq!(recovered.owner, lease.owner);
-        assert_eq!(recovered.resources.workflow_id, lease.resources.workflow_id);
-        assert!(recovered.resources.workspace_id.is_none());
-        assert!(recovered.resources.environment_id.is_none());
-        assert!(matches!(
-            restarted.reserve(lease.task.clone(), lease.resources.clone()).unwrap(),
-            ReservationOutcome::Rejected { reason: CollisionReason::DuplicateTaskGeneration { .. } }
-        ));
-
-        let mut replacement = recovered.resources.clone();
-        replacement.workspace_id = Some("replacement-workspace".into());
-        replacement.environment_id = Some("replacement-environment".into());
-        assert!(matches!(
-            restarted
-                .bind_resources(
-                    &recovered.task,
-                    recovered.lease_generation,
-                    &recovered.owner,
-                    replacement.clone(),
-                )
-                .unwrap(),
-            ReservationOutcome::Reserved { .. }
-        ));
-
-        let persisted = CodingScheduler::with_state_path(path).status().unwrap();
-        assert_eq!(persisted.reservations.len(), 1);
-        assert_eq!(persisted.reservations[0].lease_generation, lease.lease_generation);
-        assert_eq!(persisted.reservations[0].resources, replacement);
-    }
-
-    #[test]
-    fn terminal_observation_releases_capacity() {
-        let temp = tempfile::tempdir().unwrap();
-        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
-        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
-            panic!("reservation rejected");
-        };
-        assert!(matches!(
-            scheduler.reconcile(&lease.task, lease.lease_generation, RecoveryObservation::Terminal).unwrap(),
-            RecoveryOutcome::Released { .. }
-        ));
-        assert_eq!(scheduler.status().unwrap().available, CODING_SCHEDULER_CAPACITY);
-    }
-
-    #[test]
-    fn expired_lease_cannot_be_revived_by_renewal_and_requires_reconciliation() {
-        let temp = tempfile::tempdir().unwrap();
-        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"))
-            .with_lease_ttl(Duration::milliseconds(-1));
-        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
-            panic!("reservation rejected");
-        };
-        assert!(scheduler.renew(&lease.task, lease.lease_generation, &lease.owner).unwrap().is_none());
         assert_eq!(scheduler.status().unwrap().recovery_needed.len(), 1);
-        assert!(matches!(
-            scheduler.reconcile(&lease.task, lease.lease_generation, RecoveryObservation::RetainedLiveNode).unwrap(),
-            RecoveryOutcome::Recovered { .. }
-        ));
-        assert!(scheduler.status().unwrap().recovery_needed.is_empty());
     }
 
     #[test]
-    fn expired_lease_cannot_bind_a_replacement_before_reconciliation() {
+    fn dead_node_cleanup_preserves_execution_and_branch_identity() {
         let temp = tempfile::tempdir().unwrap();
-        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"))
-            .with_lease_ttl(Duration::milliseconds(-1));
-        let ReservationOutcome::Reserved { lease } = scheduler.reserve(task(1), resources(1)).unwrap() else {
-            panic!("reservation rejected");
-        };
-        let mut replacement = lease.resources.clone();
-        replacement.workspace_id = Some("replacement-workspace".into());
-        replacement.environment_id = Some("replacement-environment".into());
-
-        assert!(matches!(
-            scheduler
-                .bind_resources(&lease.task, lease.lease_generation, &lease.owner, replacement)
-                .unwrap(),
-            ReservationOutcome::Rejected {
-                reason: CollisionReason::LeaseExpired { lease_generation, .. }
-            } if lease_generation == lease.lease_generation
-        ));
-        let status = scheduler.status().unwrap();
-        assert_eq!(status.recovery_needed.len(), 1);
-        assert!(matches!(
-            status.last_collision,
-            Some(CollisionReason::LeaseExpired { lease_generation, .. })
-                if lease_generation == lease.lease_generation
-        ));
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("leases.json"));
+        let execution = execution(1);
+        let mut resources = resources(1);
+        resources.environment_id = Some("railway:node-1".to_string());
+        resources.workspace_id = Some("railway:node-1:/workspace".to_string());
+        resources.pull_request = Some("https://github.com/launchapp/animus/pull/1".to_string());
+        scheduler.track(execution.clone(), resources).unwrap();
+        let cleared = scheduler.clear_environment(&execution).unwrap().unwrap();
+        assert!(cleared.resources.environment_id.is_none());
+        assert!(cleared.resources.workspace_id.is_none());
+        assert_eq!(cleared.resources.branch.as_deref(), Some("animus/TASK-1"));
+        assert!(cleared.resources.pull_request.is_some());
     }
 }

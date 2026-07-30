@@ -952,6 +952,7 @@ mod tests {
     fn sample_workflow(id: &str) -> OrchestratorWorkflow {
         OrchestratorWorkflow {
             id: id.to_string(),
+            execution_fence: None,
             task_id: "TASK-1".to_string(),
             workflow_ref: Some("task-default".to_string()),
             subject: Some(SubjectRef::task("TASK-1".to_string())),

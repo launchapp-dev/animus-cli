@@ -656,6 +656,7 @@ mod tests {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
         config.schedules.push(orchestrator_core::WorkflowSchedule {
             id: "nightly".to_string(),
@@ -903,6 +904,7 @@ mod tests {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
         let workflow_ref = config.default_workflow_ref.clone();
         config.schedules.push(orchestrator_core::WorkflowSchedule {

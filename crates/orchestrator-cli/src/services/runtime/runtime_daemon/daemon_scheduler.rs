@@ -4,7 +4,9 @@ use orchestrator_daemon_runtime::DaemonRuntimeOptions;
 #[path = "daemon_scheduler_project_tick.rs"]
 mod project_tick_ops;
 
-pub(crate) use project_tick_ops::{slim_project_tick_driver, SlimProjectTickDriver};
+pub(crate) use project_tick_ops::{
+    complete_execution, recover_execution_lease, slim_project_tick_driver, SlimProjectTickDriver,
+};
 
 pub(super) fn runtime_options_from_cli(args: &DaemonRunArgs, project_root: &str) -> DaemonRuntimeOptions {
     let project_path = std::path::Path::new(project_root);

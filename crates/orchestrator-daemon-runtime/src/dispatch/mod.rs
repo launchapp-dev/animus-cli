@@ -53,5 +53,5 @@ pub use environment_broker::{
 #[cfg(unix)]
 #[allow(unused_imports)]
 pub use event_pipe::SubprocessEventPipe;
-pub use process_manager::{ProcessManager, WorkflowConcurrencyCapReached};
+pub use process_manager::{ProcessManager, WorkflowConcurrencyCapReached, ANIMUS_EXECUTION_FENCE_JSON_ENV};
 pub use ready_dispatch_plan::PlannedDispatchStart;

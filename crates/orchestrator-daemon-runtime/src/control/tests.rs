@@ -23,18 +23,18 @@ use std::time::Duration;
 use animus_control_protocol::{
     control_trait::{ControlSurface, DaemonEventStream, DaemonLogStream, SubjectWatchStream},
     types::{
-        AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, DaemonAgentsResponse,
-        DaemonEventsRequest, DaemonHealthResponse, DaemonHealthStatus, DaemonLogsRequest, DaemonStatusResponse,
-        PluginBrowseRequest, PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest,
-        PluginInstallRequest, PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest,
-        PluginPingResponse, PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest, PluginUpdateRequest,
-        PluginUpdateResponse, ProjectInfo, ProjectInitRequest, ProjectSetupRequest, ProjectStatusResponse,
-        QueueDropRequest, QueueEnqueueRequest, QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse,
-        QueueReleaseRequest, QueueReorderRequest, QueueStats, SubjectCreateRequest, SubjectGetRequest,
-        SubjectListRequest, SubjectListResponse, SubjectNextRequest, SubjectNextResponse, SubjectStatusRequest,
-        SubjectUpdateRequest, SubjectWatchRequest, Unit, WorkflowCancelRequest, WorkflowExecuteRequest,
-        WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest, WorkflowResumeRequest,
-        WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
+        AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest,
+        CodingFleetStatusResponse, DaemonAgentsResponse, DaemonEventsRequest, DaemonHealthResponse, DaemonHealthStatus,
+        DaemonLogsRequest, DaemonStatusResponse, PluginBrowseRequest, PluginCallRequest, PluginCallResponse,
+        PluginInfo, PluginInfoRequest, PluginInstallRequest, PluginInstallResponse, PluginListRequest,
+        PluginListResponse, PluginPingRequest, PluginPingResponse, PluginSearchRequest, PluginSearchResponse,
+        PluginUninstallRequest, PluginUpdateRequest, PluginUpdateResponse, ProjectInfo, ProjectInitRequest,
+        ProjectSetupRequest, ProjectStatusResponse, QueueDropRequest, QueueEnqueueRequest, QueueEntry,
+        QueueHoldRequest, QueueListRequest, QueueListResponse, QueueReleaseRequest, QueueReorderRequest, QueueStats,
+        SubjectCreateRequest, SubjectGetRequest, SubjectListRequest, SubjectListResponse, SubjectNextRequest,
+        SubjectNextResponse, SubjectStatusRequest, SubjectUpdateRequest, SubjectWatchRequest, Unit,
+        WorkflowCancelRequest, WorkflowExecuteRequest, WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse,
+        WorkflowPauseRequest, WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
     },
     ControlError,
 };
@@ -207,6 +207,17 @@ impl ControlSurface for TestSurface {
 
     async fn daemon_agents(&self) -> Result<DaemonAgentsResponse, ControlError> {
         Ok(DaemonAgentsResponse { agents: Vec::new() })
+    }
+
+    async fn fleet_status(&self) -> Result<CodingFleetStatusResponse, ControlError> {
+        self.record("fleet/status").await;
+        Ok(CodingFleetStatusResponse {
+            capacity: 5,
+            active: 0,
+            available: 5,
+            owner_id: "test-daemon".to_string(),
+            reservations: Vec::new(),
+        })
     }
 
     async fn daemon_events(&self, _request: DaemonEventsRequest) -> Result<DaemonEventStream, ControlError> {

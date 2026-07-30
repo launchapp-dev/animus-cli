@@ -342,7 +342,13 @@ impl AoMcpServer {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn actor(user_id: &str, tenant_id: &str) -> animus_actor::Actor {
         animus_actor::Actor { user_id: user_id.to_string(), claims: Vec::new(), tenant_id: Some(tenant_id.to_string()) }
@@ -368,6 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_pause_dry_run_is_owner_scoped_and_does_not_mutate() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(root.path());
@@ -400,6 +407,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_pause_mutates_an_owner_scoped_workflow_after_confirmation() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(root.path());
@@ -433,6 +441,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_controls_conceal_cross_actor_workflows_before_mutation() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(root.path());
@@ -464,6 +473,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_phase_controls_conceal_cross_actor_workflows_before_phase_validation() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(root.path());
@@ -492,6 +502,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_list_validation_is_a_typed_in_process_error() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
         let result = server
@@ -517,6 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_config_get_returns_structured_data_without_cli_exec() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
         let result = server.workflow_config_get_inproc(None).await.expect("tool transport succeeds");
@@ -544,6 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_config_set_rejects_conflicting_sources_before_file_access() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
         let result = server
@@ -569,6 +582,7 @@ mod tests {
 
     #[tokio::test]
     async fn workflow_config_agent_set_rejects_structured_and_compat_payloads() {
+        let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
         let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
         let result = server

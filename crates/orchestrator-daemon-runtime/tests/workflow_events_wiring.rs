@@ -22,17 +22,18 @@ use std::time::Duration;
 use animus_control_protocol::client::ControlClient as UpstreamControlClient;
 use animus_control_protocol::control_trait::{ControlSurface, DaemonEventStream, DaemonLogStream, SubjectWatchStream};
 use animus_control_protocol::types::{
-    AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, DaemonAgentsResponse,
-    DaemonEventsRequest, DaemonHealthResponse, DaemonHealthStatus, DaemonLogsRequest, DaemonStatusResponse,
-    PluginBrowseRequest, PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest, PluginInstallRequest,
-    PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest, PluginPingResponse,
-    PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest, PluginUpdateRequest, PluginUpdateResponse,
-    ProjectInfo, ProjectInitRequest, ProjectSetupRequest, ProjectStatusResponse, QueueDropRequest, QueueEnqueueRequest,
-    QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse, QueueReleaseRequest, QueueReorderRequest,
-    QueueStats, SubjectCreateRequest, SubjectGetRequest, SubjectListRequest, SubjectListResponse, SubjectNextRequest,
-    SubjectNextResponse, SubjectStatusRequest, SubjectUpdateRequest, SubjectWatchRequest, Unit, WorkflowCancelRequest,
-    WorkflowEventsRequest, WorkflowExecuteRequest, WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse,
-    WorkflowPauseRequest, WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
+    AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, CodingFleetStatusResponse,
+    DaemonAgentsResponse, DaemonEventsRequest, DaemonHealthResponse, DaemonHealthStatus, DaemonLogsRequest,
+    DaemonStatusResponse, PluginBrowseRequest, PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest,
+    PluginInstallRequest, PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest,
+    PluginPingResponse, PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest, PluginUpdateRequest,
+    PluginUpdateResponse, ProjectInfo, ProjectInitRequest, ProjectSetupRequest, ProjectStatusResponse,
+    QueueDropRequest, QueueEnqueueRequest, QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse,
+    QueueReleaseRequest, QueueReorderRequest, QueueStats, SubjectCreateRequest, SubjectGetRequest, SubjectListRequest,
+    SubjectListResponse, SubjectNextRequest, SubjectNextResponse, SubjectStatusRequest, SubjectUpdateRequest,
+    SubjectWatchRequest, Unit, WorkflowCancelRequest, WorkflowEventsRequest, WorkflowExecuteRequest,
+    WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest, WorkflowResumeRequest,
+    WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
 };
 use animus_control_protocol::ControlError;
 use animus_runtime_shared::workflow_event_emitter::{
@@ -130,6 +131,15 @@ impl ControlSurface for StubSurface {
     }
     async fn daemon_agents(&self) -> Result<DaemonAgentsResponse, ControlError> {
         Ok(DaemonAgentsResponse { agents: vec![] })
+    }
+    async fn fleet_status(&self) -> Result<CodingFleetStatusResponse, ControlError> {
+        Ok(CodingFleetStatusResponse {
+            capacity: 5,
+            active: 0,
+            available: 5,
+            owner_id: "stub".to_string(),
+            reservations: vec![],
+        })
     }
     async fn daemon_events(&self, _request: DaemonEventsRequest) -> Result<DaemonEventStream, ControlError> {
         Ok(Box::pin(stream::empty()))

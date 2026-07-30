@@ -6,19 +6,19 @@ use crate::services::runtime::runtime_daemon::build_daemon_ops_routing;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
     journal_resume_enabled, recover_orphaned_running_workflows,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use orchestrator_core::services::DaemonStartConfig;
-use orchestrator_core::{DaemonStatus, WorkflowStatus};
 use orchestrator_core::FileServiceHub;
 use orchestrator_core::ServiceHub;
 use orchestrator_core::{
     load_daemon_project_config, write_daemon_project_config, InstalledPluginSummary, PluginInstaller,
 };
+use orchestrator_core::{DaemonStatus, WorkflowStatus};
 use orchestrator_daemon_runtime::control::{DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
 use orchestrator_daemon_runtime::{
     discover_installed_plugins, run_daemon, CodingScheduler, DaemonRunEvent, DaemonRunHooks, EnvironmentBroker,
-    ProcessManager, RecoveryObservation,
+    ProcessManager,
 };
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -26,7 +26,10 @@ use std::time::SystemTime;
 #[cfg(test)]
 use super::canonicalize_lossy;
 use super::daemon_run_host::DefaultDaemonRunHost;
-use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver};
+use super::daemon_scheduler::{
+    complete_execution, recover_execution_lease, runtime_options_from_cli, slim_project_tick_driver,
+    SlimProjectTickDriver,
+};
 use animus_runtime_shared::persist_resumed_phase_completion;
 use animus_runtime_shared::phase_session::{
     list_running_checkpoints, mark_environment_torn_down, update_session_blocked, update_session_completed,
@@ -38,39 +41,49 @@ use orchestrator_plugin_host::session::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-fn restart_recovery_observation(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestartRecoveryEvidence {
+    Terminal,
+    LiveRunner,
+    RetainedLiveNode,
+    DeadNode,
+    ResumableWorkflow,
+    Unknown,
+}
+
+struct RestartRecoveryObservation {
     terminal: bool,
     live_runner: bool,
     checkpoint_present: bool,
     checkpoint_node: Option<super::daemon_reconciliation::DelegateLiveness>,
     active_workflow: bool,
-) -> RecoveryObservation {
-    if terminal {
-        RecoveryObservation::Terminal
-    } else if live_runner {
+}
+
+fn restart_recovery_evidence(observation: RestartRecoveryObservation) -> RestartRecoveryEvidence {
+    if observation.terminal {
+        RestartRecoveryEvidence::Terminal
+    } else if observation.live_runner {
         // The runner owns the workflow lease even if its checkpoint describes
         // a node which died independently. Releasing here would admit a
         // duplicate generation while the original runner is still live.
-        RecoveryObservation::LiveRunner
-    } else if let Some(node) = checkpoint_node {
+        RestartRecoveryEvidence::LiveRunner
+    } else if let Some(node) = observation.checkpoint_node {
         match node {
-            super::daemon_reconciliation::DelegateLiveness::Alive => RecoveryObservation::RetainedLiveNode,
-            super::daemon_reconciliation::DelegateLiveness::Dead => RecoveryObservation::DeadNode,
-            super::daemon_reconciliation::DelegateLiveness::Unknown => RecoveryObservation::Unknown,
+            super::daemon_reconciliation::DelegateLiveness::Alive => RestartRecoveryEvidence::RetainedLiveNode,
+            super::daemon_reconciliation::DelegateLiveness::Dead => RestartRecoveryEvidence::DeadNode,
+            super::daemon_reconciliation::DelegateLiveness::Unknown => RestartRecoveryEvidence::Unknown,
         }
-    } else if checkpoint_present {
-        RecoveryObservation::Unknown
-    } else if active_workflow {
+    } else if observation.checkpoint_present {
+        RestartRecoveryEvidence::Unknown
+    } else if observation.active_workflow {
         // TASK-793 phase-boundary restart.
-        RecoveryObservation::LiveRunner
+        RestartRecoveryEvidence::ResumableWorkflow
     } else {
-        RecoveryObservation::Unknown
+        RestartRecoveryEvidence::Unknown
     }
 }
 
-fn require_scheduler_broker(
-    result: std::io::Result<EnvironmentBroker>,
-) -> Result<EnvironmentBroker> {
+fn require_scheduler_broker(result: std::io::Result<EnvironmentBroker>) -> Result<EnvironmentBroker> {
     result.map_err(|error| anyhow::anyhow!("failed to start scheduler-fenced environment broker: {error}"))
 }
 
@@ -939,6 +952,18 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     orchestrator_daemon_runtime::install_runtime_quotas(orchestrator_daemon_runtime::RuntimeQuotas::from_env());
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     let coding_scheduler = CodingScheduler::for_project(std::path::Path::new(project_root))?;
+    if !runtime_options.skip_plugin_preflight {
+        crate::services::plugin_clients::require_generation_fenced_queue_backend(std::path::Path::new(project_root))
+            .await
+            .context("plugin preflight failed: generation-fenced queue backend unavailable")?;
+        crate::services::plugin_clients::require_execution_fenced_workflow_runner_backend(std::path::Path::new(
+            project_root,
+        ))
+        .await
+        .context("plugin preflight failed: execution-fenced workflow runner unavailable")?;
+    }
+    let owner_id = format!("animus-daemon-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple());
+    coding_scheduler.set_owner_id(&owner_id)?;
     // Restart reconciliation deliberately reuses the durable session
     // checkpoints from TASK-793/TASK-933. An exact running checkpoint keeps
     // its reservation (and retained environment) fenced. A dead retained node
@@ -964,17 +989,14 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let recovery_hub = orchestrator_core::FileServiceHub::new(project_root)?;
     for lease in coding_scheduler.status()?.reservations {
         let workflow = recovery_hub.workflows().get(&lease.resources.workflow_id).await;
-        let checkpoint = running_checkpoints
-            .iter()
-            .find(|(_, checkpoint)| checkpoint.workflow_id == lease.resources.workflow_id);
+        let checkpoint =
+            running_checkpoints.iter().find(|(_, checkpoint)| checkpoint.workflow_id == lease.resources.workflow_id);
         let terminal = matches!(
             workflow.as_ref().map(|workflow| workflow.status),
-            Ok(
-                WorkflowStatus::Completed
-                    | WorkflowStatus::Failed
-                    | WorkflowStatus::Escalated
-                    | WorkflowStatus::Cancelled
-            )
+            Ok(WorkflowStatus::Completed
+                | WorkflowStatus::Failed
+                | WorkflowStatus::Escalated
+                | WorkflowStatus::Cancelled)
         );
         // Runner ownership must be checked before node liveness. A dead
         // checkpoint node is not proof that the workflow runner is dead.
@@ -986,14 +1008,92 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
                 .and_then(|(_, checkpoint)| checkpoint.environment.as_ref())
                 .map(|binding| super::daemon_reconciliation::probe_delegate(project_root, binding))
         };
-        let observation = restart_recovery_observation(
+        let evidence = restart_recovery_evidence(RestartRecoveryObservation {
             terminal,
             live_runner,
-            checkpoint.is_some(),
+            checkpoint_present: checkpoint.is_some(),
             checkpoint_node,
-            workflow.is_ok(),
-        );
-        coding_scheduler.reconcile(&lease.task, lease.lease_generation, observation)?;
+            active_workflow: workflow.is_ok(),
+        });
+        let _ = coding_scheduler
+            .mark_runner_active(&lease.execution, matches!(evidence, RestartRecoveryEvidence::LiveRunner))?;
+        match evidence {
+            RestartRecoveryEvidence::Terminal => {
+                let status = match workflow.as_ref().map(|workflow| workflow.status) {
+                    Ok(WorkflowStatus::Completed) => animus_queue_protocol::completion_status::COMPLETED,
+                    Ok(WorkflowStatus::Cancelled) => animus_queue_protocol::completion_status::CANCELLED,
+                    _ => animus_queue_protocol::completion_status::FAILED,
+                };
+                let workflow_ref = workflow.as_ref().ok().and_then(|workflow| workflow.workflow_ref.as_deref());
+                if let Err(error) = complete_execution(
+                    std::path::Path::new(project_root),
+                    &coding_scheduler,
+                    &lease.execution,
+                    status,
+                    workflow_ref,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        workflow_id = %lease.resources.workflow_id,
+                        %error,
+                        "startup terminal queue reconciliation failed; retaining exact reservation"
+                    );
+                }
+            }
+            RestartRecoveryEvidence::DeadNode => {
+                let queue = lease.execution.queue_lease.as_ref().expect("tracked coding fence has queue lease");
+                let current = if queue.expires_at <= chrono::Utc::now() && queue.owner_id != owner_id {
+                    match recover_execution_lease(
+                        std::path::Path::new(project_root),
+                        &coding_scheduler,
+                        &lease.execution,
+                        &owner_id,
+                    )
+                    .await
+                    {
+                        Ok(current) => current,
+                        Err(error) => {
+                            tracing::warn!(
+                                workflow_id = %lease.resources.workflow_id,
+                                %error,
+                                "startup dead-node lease recovery failed; retaining exact reservation"
+                            );
+                            lease.execution.clone()
+                        }
+                    }
+                } else {
+                    lease.execution.clone()
+                };
+                // The delegate was positively proven dead. Clearing only the
+                // local allocation identity prevents broker adoption; subject,
+                // workflow and repository reservations remain fenced in queue.
+                let _ = coding_scheduler.clear_environment(&current)?;
+            }
+            RestartRecoveryEvidence::RetainedLiveNode | RestartRecoveryEvidence::ResumableWorkflow => {
+                let queue = lease.execution.queue_lease.as_ref().expect("tracked coding fence has queue lease");
+                if queue.expires_at <= chrono::Utc::now() && queue.owner_id != owner_id {
+                    if let Err(error) = recover_execution_lease(
+                        std::path::Path::new(project_root),
+                        &coding_scheduler,
+                        &lease.execution,
+                        &owner_id,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            workflow_id = %lease.resources.workflow_id,
+                            %error,
+                            "startup resumable lease recovery failed; retaining exact reservation"
+                        );
+                    }
+                }
+            }
+            RestartRecoveryEvidence::LiveRunner | RestartRecoveryEvidence::Unknown => {
+                // A live prior runner keeps its exact fence until completion;
+                // unknown liveness stays reserved and visible for retry.
+            }
+        }
     }
     process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
@@ -1027,7 +1127,7 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut host = CliDaemonRunHost::new(project_root, json, start_config, environment_broker);
     let logger = host.logger();
     let mut driver: SlimProjectTickDriver<'_> =
-        slim_project_tick_driver(&runtime_options, &mut process_manager, logger, coding_scheduler);
+        slim_project_tick_driver(&runtime_options, &mut process_manager, logger, coding_scheduler, owner_id);
 
     crate::services::metrics::record_event(
         std::path::Path::new(project_root),
@@ -1063,29 +1163,27 @@ mod tests {
 
     #[test]
     fn live_runner_preserves_lease_when_checkpoint_node_is_dead() {
-        let observation = restart_recovery_observation(
-            false,
-            true,
-            true,
-            Some(super::super::daemon_reconciliation::DelegateLiveness::Dead),
-            true,
-        );
+        let observation = restart_recovery_evidence(RestartRecoveryObservation {
+            terminal: false,
+            live_runner: true,
+            checkpoint_present: true,
+            checkpoint_node: Some(super::super::daemon_reconciliation::DelegateLiveness::Dead),
+            active_workflow: true,
+        });
 
         assert_eq!(
             observation,
-            RecoveryObservation::LiveRunner,
+            RestartRecoveryEvidence::LiveRunner,
             "a conflicting dead-node observation must not release a live runner's generation fence"
         );
     }
 
     #[test]
     fn scheduler_broker_failure_aborts_startup_before_unfenced_preparation() {
-        let error = require_scheduler_broker(Err(std::io::Error::new(
-            std::io::ErrorKind::AddrInUse,
-            "broker unavailable",
-        )))
-        .err()
-        .expect("scheduler-aware broker failure must be fatal");
+        let error =
+            require_scheduler_broker(Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "broker unavailable")))
+                .err()
+                .expect("scheduler-aware broker failure must be fatal");
 
         assert!(
             error.to_string().contains("scheduler-fenced environment broker"),
@@ -1140,7 +1238,10 @@ mod tests {
 
         let args = DaemonRunArgs {
             scheduler: DaemonSchedulerArgs {
-                pool_size: None,
+                // This test exercises daemon lifecycle/event persistence, not
+                // queue dispatch. A zero-sized pool keeps the tick in
+                // housekeeping-only mode without requiring a queue plugin.
+                pool_size: Some(0),
                 interval_secs: Some(1),
                 startup_cleanup: true,
                 reconcile_stale: false,
@@ -1249,7 +1350,10 @@ mod tests {
 
         let args = DaemonRunArgs {
             scheduler: DaemonSchedulerArgs {
-                pool_size: None,
+                // Reconciliation must remain testable without granting an
+                // unfenced dispatch path. Disable dispatch capacity for this
+                // housekeeping-only tick instead of bypassing queue-v2.
+                pool_size: Some(0),
                 interval_secs: Some(1),
                 startup_cleanup: false,
                 reconcile_stale: true,

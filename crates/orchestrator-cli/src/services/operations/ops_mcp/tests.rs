@@ -73,6 +73,7 @@ fn save_workflow(
     manager
         .save(&OrchestratorWorkflow {
             id: workflow_id.to_string(),
+            execution_fence: None,
             task_id: task_id.to_string(),
             workflow_ref: None,
             input: None,
