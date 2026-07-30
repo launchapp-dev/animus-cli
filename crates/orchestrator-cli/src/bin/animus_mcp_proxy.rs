@@ -71,8 +71,17 @@ impl animus_mcp_oauth::proxy::BearerTokenSource for BrokerBearerSource {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let worker_threads = animus_runtime_shared::cgroup_threads::tokio_worker_threads();
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime")
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let args = Args::parse();
     let project_root = args
         .project_root

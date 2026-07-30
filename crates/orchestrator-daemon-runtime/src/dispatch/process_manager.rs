@@ -426,9 +426,11 @@ impl ProcessManager {
         // Bound the workflow-runner's tokio pool for the same reason we cap plugins
         // (orchestrator-plugin-host host.rs): a bare `#[tokio::main]` otherwise sizes
         // the worker pool to all CPU cores, compounding the PID/thread pressure. This
-        // path inherits the daemon env, so only impose the default when unset.
+        // path inherits the daemon env, so only impose the default when unset, using
+        // the cgroup-aware count rather than a hard-coded value.
         if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
-            command.env("TOKIO_WORKER_THREADS", "2");
+            command
+                .env("TOKIO_WORKER_THREADS", animus_runtime_shared::cgroup_threads::tokio_worker_threads().to_string());
         }
         // Phase skills pass-down: resolve the union of phase-level `skills:`
         // and the executing agent profile's `skills:` daemon-side (scoped

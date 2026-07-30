@@ -1,0 +1,7 @@
+[package]
+name = "animus-runtime-utils"
+version = "0.1.0"
+edition = "2021"
+license = "Elastic-2.0"
+description = "Dependency-light runtime helpers shared by Animus binaries"
+repository = "https://github.com/launchapp-dev/animus-cli"

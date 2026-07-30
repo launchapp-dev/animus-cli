@@ -770,20 +770,13 @@ impl PluginHost {
         }
 
         // Bound each plugin's tokio runtime. A bare `#[tokio::main]` (every Animus
-        // stdio plugin) sizes its multi-thread worker pool to
-        // `available_parallelism()` — all CPU cores. With v0.6's resident-plugin
-        // fleet (config_source + subject backends + queue + workflow_runner +
-        // providers + transport) that is hundreds of threads on a many-core host,
-        // exhausting the PID/thread budget so new forks — including the provider CLI
-        // an agent phase spawns — fail with EAGAIN and the run hangs. Plugins are
-        // I/O-bound stdio RPC servers, so a tiny pool is sufficient. `env_clear()`
-        // above dropped any inherited value (TOKIO_WORKER_THREADS is not in the base
-        // allowlist), so set it explicitly here, honoring an operator override on the
-        // daemon env so a deploy can still tune it up or down.
-        command.env(
-            "TOKIO_WORKER_THREADS",
-            std::env::var_os("TOKIO_WORKER_THREADS").unwrap_or_else(|| std::ffi::OsString::from("2")),
-        );
+        // stdio plugin) sizes its multi-thread worker pool to the host CPU count.
+        // With v0.6's resident-plugin fleet that is hundreds of threads on a many-core
+        // host, exhausting the PID/thread budget. Use the cgroup CPU quota instead.
+        // `env_clear()` above dropped any inherited value (TOKIO_WORKER_THREADS is
+        // not in the base allowlist), so set it explicitly here, honoring an operator
+        // override on the daemon env so a deploy can still tune it up or down.
+        command.env("TOKIO_WORKER_THREADS", animus_runtime_utils::cgroup_threads::tokio_worker_threads().to_string());
 
         for missing in &options.missing_required_env {
             // Suppress the warning when the keychain already satisfied

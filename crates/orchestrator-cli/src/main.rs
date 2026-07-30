@@ -12,8 +12,21 @@ mod shared;
 pub(crate) use cli_types::*;
 pub(crate) use shared::*;
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Use a cgroup-aware worker thread count so the daemon doesn't default to
+    // the host CPU count (e.g. 48 on Railway) inside a resource-capped
+    // container, exhausting the cgroup PID limit with ~480 Tokio threads.
+    // `TOKIO_WORKER_THREADS` still overrides (operator escape hatch).
+    let worker_threads = animus_runtime_shared::cgroup_threads::tokio_worker_threads();
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime")
+        .block_on(async_main());
+}
+
+async fn async_main() {
     // Pre-scan argv for `--json` so that clap argparse failures (unknown
     // subcommands, bad flag values) still emit the `animus.cli.v1` error
     // envelope when the caller asked for machine-readable output. `Cli::parse`
