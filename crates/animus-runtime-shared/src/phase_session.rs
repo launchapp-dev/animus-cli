@@ -776,6 +776,31 @@ mod tests {
         assert!(!second_checkpoint.environment.expect("second binding").torn_down);
     }
 
+    #[test]
+    fn workflow_handle_cleanup_includes_environment_plugin_identity() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        let binding = sample_binding();
+        write_session_pending(scoped_root, "wf-plugin", "phase-a", "claude", "run-plugin", None).expect("pending");
+        update_session_environment(scoped_root, "wf-plugin", "phase-a", binding.clone()).expect("binding");
+
+        assert_eq!(
+            mark_workflow_environment_torn_down(
+                scoped_root,
+                "wf-plugin",
+                "different-environment-plugin",
+                &binding.handle,
+            )
+            .expect("ignore a handle owned by another plugin"),
+            0
+        );
+        let checkpoint = read_checkpoint(scoped_root, "wf-plugin", "phase-a").expect("read").expect("checkpoint");
+        assert!(
+            !checkpoint.environment.expect("binding").torn_down,
+            "an opaque handle is scoped to its environment plugin"
+        );
+    }
+
     // TASK-811: terminalizing a dead delegation must not discard the durable
     // handle or its cleanup state. Reconciliation can fail the checkpoint
     // after teardown, and operators still need the retained binding for audit

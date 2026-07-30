@@ -1369,7 +1369,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn restart_adopts_exact_lease_reuses_it_for_next_phase_and_tears_down_once() {
+    async fn local_first_delegated_second_restart_resumes_exact_lease_without_second_prepare() {
         use animus_runtime_shared::phase_session::{
             read_checkpoint, update_session_completed, update_session_running, write_session_pending,
         };
@@ -1378,9 +1378,16 @@ mod tests {
         let project_root = temp.path().to_string_lossy().into_owned();
         let scoped_root =
             protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        // The workflow begins locally, so no environment has been prepared
+        // when its first phase completes. Its second phase delegates and is
+        // the one interrupted by the daemon restart.
+        write_session_pending(&scoped_root, "wf-restart", "plan", "claude", "agent-local", None)
+            .expect("local pending checkpoint");
+        update_session_running(&scoped_root, "wf-restart", "plan").expect("local running checkpoint");
+        update_session_completed(&scoped_root, "wf-restart", "plan").expect("complete local phase");
         write_session_pending(&scoped_root, "wf-restart", "code-implement", "claude", "agent-1", None)
-            .expect("first pending checkpoint");
-        update_session_running(&scoped_root, "wf-restart", "code-implement").expect("first running checkpoint");
+            .expect("delegated pending checkpoint");
+        update_session_running(&scoped_root, "wf-restart", "code-implement").expect("delegated running checkpoint");
 
         let fake = Arc::new(FakeLeaseClient {
             handle: EnvironmentHandle {
@@ -1411,7 +1418,7 @@ mod tests {
         };
         let (_, first_handle) = first.acquire("wf-restart", "railway", spec.clone()).await.expect("first acquire");
         assert_eq!(first_handle, "node-h1");
-        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1, "only the delegated phase prepares a node");
 
         // Simulate daemon replacement without terminal cleanup: the durable
         // Ready record + Running checkpoint remain, while the old broker socket
@@ -1441,6 +1448,7 @@ mod tests {
             )
             .expect("resume non-terminal phase on adopted lease");
         assert_eq!(fake.execs.load(Ordering::SeqCst), 1);
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1, "restart resume must skip prepare and reuse H1");
         assert_eq!(fake.teardowns.load(Ordering::SeqCst), 0, "resumed phase must not teardown workflow lease");
 
         // The resumed phase completes and the workflow advances. The next

@@ -962,6 +962,51 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
         .iter()
         .filter_map(|workflow| workflow.environment.as_ref().map(|env| (workflow.id.to_ascii_lowercase(), env.clone())))
         .collect();
+    process_manager.workflow_initial_phases = workflow_config
+        .config
+        .workflows
+        .iter()
+        .filter_map(|workflow| {
+            workflow
+                .phases
+                .first()
+                .map(|phase| (workflow.id.to_ascii_lowercase(), phase.phase_id().to_ascii_lowercase()))
+        })
+        .collect();
+    process_manager.workflow_phases = workflow_config
+        .config
+        .workflows
+        .iter()
+        .map(|workflow| {
+            (
+                workflow.id.to_ascii_lowercase(),
+                workflow
+                    .phases
+                    .iter()
+                    .map(|phase| phase.phase_id().to_ascii_lowercase())
+                    .collect(),
+            )
+        })
+        .collect();
+    process_manager.workflow_phase_environments = workflow_config
+        .config
+        .workflows
+        .iter()
+        .filter_map(|workflow| {
+            let phases = workflow
+                .phases
+                .iter()
+                .filter_map(|phase| match phase {
+                    animus_config_protocol::workflow_types::WorkflowPhaseEntry::Rich(config) => config
+                        .environment
+                        .as_ref()
+                        .map(|environment| (config.id.to_ascii_lowercase(), environment.clone())),
+                    _ => None,
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            (!phases.is_empty()).then(|| (workflow.id.to_ascii_lowercase(), phases))
+        })
+        .collect();
     let environment_broker = match orchestrator_daemon_runtime::EnvironmentBroker::start(project_root).await {
         Ok(broker) => {
             process_manager = process_manager.with_environment_broker(broker.clone());

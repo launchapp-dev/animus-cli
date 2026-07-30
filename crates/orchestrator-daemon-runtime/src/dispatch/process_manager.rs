@@ -130,6 +130,18 @@ fn runner_secret_allowlist() -> Vec<String> {
     out
 }
 
+fn persisted_workflow_environment(project_root: &str, workflow_id: &str) -> Option<String> {
+    let scoped_root = protocol::repository_scope::scoped_state_root(std::path::Path::new(project_root))?;
+    animus_runtime_shared::phase_session::list_running_checkpoints(&scoped_root)
+        .ok()?
+        .into_iter()
+        .map(|(_, checkpoint)| checkpoint)
+        .find(|checkpoint| checkpoint.workflow_id == workflow_id)
+        .and_then(|checkpoint| checkpoint.environment)
+        .filter(|binding| !binding.torn_down)
+        .map(|binding| binding.environment_id)
+}
+
 /// Recoverable spawn rejection: the workflow concurrency cap is reached.
 /// Callers must NOT treat the dispatch as poisoned — leave the entry queued
 /// (or release it back to pending) so the next tick retries it.
@@ -211,6 +223,15 @@ pub struct ProcessManager {
     /// on many deployments) was invisible to the daemon, so the broker never
     /// engaged and each phase prepared its OWN node. See TASK-431 / REQ-051.
     pub workflow_environments: std::collections::HashMap<String, String>,
+    /// Per-workflow phase environment overrides, keyed by lowercased workflow
+    /// id and phase id. Resume dispatches pass their persisted current phase;
+    /// fresh dispatch also scans the ordered phase list below.
+    pub workflow_phase_environments: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    pub workflow_initial_phases: std::collections::HashMap<String, String>,
+    /// Ordered phase ids for each workflow, including phases without an
+    /// explicit environment override. Needed to detect later phases delegated
+    /// solely by kind/default routing.
+    pub workflow_phases: std::collections::HashMap<String, Vec<String>>,
     /// REQ-048: the cross-phase ephemeral-environment broker. When wired AND the
     /// dispatch routes to a non-local environment, the daemon sets the four
     /// `ANIMUS_ENVIRONMENT_BROKER_*` env vars on the runner so it acquires the
@@ -252,6 +273,9 @@ impl ProcessManager {
             workflow_concurrency_max,
             environment_routing: None,
             workflow_environments: std::collections::HashMap::new(),
+            workflow_phase_environments: std::collections::HashMap::new(),
+            workflow_initial_phases: std::collections::HashMap::new(),
+            workflow_phases: std::collections::HashMap::new(),
             environment_broker: None,
         }
     }
@@ -301,7 +325,7 @@ impl ProcessManager {
     }
 
     pub fn spawn_workflow_runner(&mut self, dispatch: &SubjectDispatch, project_root: &str) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, None, None)
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, None, None)
     }
 
     /// Start a fresh queue-backed workflow using the kernel-selected durable id.
@@ -312,7 +336,7 @@ impl ProcessManager {
         project_root: &str,
         workflow_id: &str,
     ) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, Some(workflow_id), None)
+        self.spawn_workflow_runner_inner(dispatch, project_root, Some(workflow_id), None, None)
     }
 
     /// BU-4 journal-resume re-dispatch: spawn a runner that CONTINUES the
@@ -325,8 +349,9 @@ impl ProcessManager {
         dispatch: &SubjectDispatch,
         project_root: &str,
         resume_workflow_id: &str,
+        current_phase_id: Option<&str>,
     ) -> Result<()> {
-        self.spawn_workflow_runner_inner(dispatch, project_root, None, Some(resume_workflow_id))
+        self.spawn_workflow_runner_inner(dispatch, project_root, None, Some(resume_workflow_id), current_phase_id)
     }
 
     fn spawn_workflow_runner_inner(
@@ -335,6 +360,7 @@ impl ProcessManager {
         project_root: &str,
         new_workflow_id: Option<&str>,
         resume_workflow_id: Option<&str>,
+        current_phase_id: Option<&str>,
     ) -> Result<()> {
         if let Some(cap) = self.workflow_concurrency_max {
             if self.processes.len() >= cap {
@@ -468,8 +494,13 @@ impl ProcessManager {
         // the four `ANIMUS_ENVIRONMENT_BROKER_*` env vars so the runner acquires
         // the run's SHARED node from the daemon instead of preparing its own.
         // Returns the broker run_id so the completion path can tear it down.
-        let environment_run_id =
-            self.configure_environment_broker(dispatch, project_root, target_workflow_id, &mut command);
+        let environment_run_id = self.configure_environment_broker(
+            dispatch,
+            project_root,
+            target_workflow_id,
+            current_phase_id,
+            &mut command,
+        );
 
         // Bind the subprocess workflow_events back-channel before fork so the
         // env var we set on the child points to a listener that's already
@@ -574,30 +605,18 @@ impl ProcessManager {
         dispatch: &SubjectDispatch,
         project_root: &str,
         target_workflow_id: Option<&str>,
+        current_phase_id: Option<&str>,
         command: &mut Command,
     ) -> Option<String> {
         let broker = self.environment_broker.as_ref()?;
-        // The daemon dispatches per phase and cannot know a PHASE-level
-        // `environment:` override here, but the node is per-RUN anyway, so a
-        // single run-level environment is the correct granularity. Feed the
-        // dispatch's WORKFLOW-level `environment:` as `workflow_env` (the runner
-        // does the same when it resolves each phase) so a workflow-level
-        // environment engages the broker even with no kind-level routing rule —
-        // otherwise the broker never fired and every phase owned its own node.
-        // See TASK-431 / REQ-051.
-        let workflow_ref = dispatch.workflow_ref.trim();
-        let workflow_env = if workflow_ref.is_empty() {
-            None
-        } else {
-            self.workflow_environments.get(&workflow_ref.to_ascii_lowercase()).map(String::as_str)
-        };
-        let environment_id = orchestrator_config::workflow_config::resolve_environment(
-            dispatch.subject_kind(),
-            None,
-            None,
-            workflow_env,
-            self.environment_routing.as_ref(),
-        )?;
+        // A restarted runner must be wired back to the environment that the
+        // previous daemon adopted, even if the workflow currently points at a
+        // local phase (or its configuration changed while the daemon was
+        // down). The checkpoint is the runner-owned recovery oracle.
+        let persisted_environment = target_workflow_id
+            .and_then(|workflow_id| persisted_workflow_environment(project_root, workflow_id));
+        let environment_id = persisted_environment
+            .or_else(|| self.resolve_dispatch_environment(dispatch, current_phase_id))?;
         if is_local_environment(&environment_id) {
             return None;
         }
@@ -613,6 +632,62 @@ impl ProcessManager {
         command.env(ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, &run_id);
         command.env(ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV, &environment_id);
         Some(run_id)
+    }
+
+    fn resolve_dispatch_environment(
+        &self,
+        dispatch: &SubjectDispatch,
+        current_phase_id: Option<&str>,
+    ) -> Option<String> {
+        let workflow_ref = dispatch.workflow_ref.trim();
+        let workflow_key = workflow_ref.to_ascii_lowercase();
+        let workflow_env = if workflow_ref.is_empty() {
+            None
+        } else {
+            self.workflow_environments.get(&workflow_key).map(String::as_str)
+        };
+        let phase_id = current_phase_id.or_else(|| self.workflow_initial_phases.get(&workflow_key).map(String::as_str));
+        let phase_env = phase_id.and_then(|phase_id| {
+            self.workflow_phase_environments
+                .get(&workflow_key)
+                .and_then(|phases| phases.get(&phase_id.to_ascii_lowercase()))
+                .map(String::as_str)
+        });
+        let selected = orchestrator_config::workflow_config::resolve_environment(
+            dispatch.subject_kind(),
+            None,
+            phase_env,
+            workflow_env,
+            self.environment_routing.as_ref(),
+        );
+        if selected.as_deref().is_some_and(|environment| !is_local_environment(environment)) {
+            return selected;
+        }
+
+        // Broker credentials belong to the whole workflow run, not just the
+        // phase executing at spawn time. A local-first workflow therefore
+        // still needs the broker when any later phase delegates; otherwise
+        // that phase falls back to runner-owned prepare and cannot be adopted
+        // after a daemon restart.
+        self.workflow_phases
+            .get(&workflow_key)
+            .into_iter()
+            .flat_map(|phases| phases.iter())
+            .find_map(|phase_id| {
+                let phase_environment = self
+                    .workflow_phase_environments
+                    .get(&workflow_key)
+                    .and_then(|phases| phases.get(phase_id))
+                    .map(String::as_str);
+                orchestrator_config::workflow_config::resolve_environment(
+                    dispatch.subject_kind(),
+                    None,
+                    phase_environment,
+                    workflow_env,
+                    self.environment_routing.as_ref(),
+                )
+                .filter(|environment| !is_local_environment(environment))
+            })
     }
 
     /// Bind a fresh per-spawn event pipe and attach the
@@ -1115,6 +1190,71 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn local_first_delegated_second_workflow_selects_broker_environment() {
+        let mut manager = ProcessManager::new();
+        manager.workflow_initial_phases.insert("delegated".to_string(), "plan".to_string());
+        manager
+            .workflow_phases
+            .insert("delegated".to_string(), vec!["plan".to_string(), "code".to_string()]);
+        manager.workflow_phase_environments.insert(
+            "delegated".to_string(),
+            std::collections::HashMap::from([
+                ("plan".to_string(), "local".to_string()),
+                ("code".to_string(), "railway".to_string()),
+            ]),
+        );
+        let dispatch = SubjectDispatch::for_task("TASK-PHASE-ENV", "delegated");
+
+        assert_eq!(
+            manager.resolve_dispatch_environment(&dispatch, None).as_deref(),
+            Some("railway"),
+            "a later delegated phase must engage broker injection on a fresh local-first run"
+        );
+        assert_eq!(
+            manager.resolve_dispatch_environment(&dispatch, Some("code")).as_deref(),
+            Some("railway"),
+            "a resumed run must resolve its persisted current phase override"
+        );
+    }
+
+    #[test]
+    fn persisted_runner_binding_wins_over_current_local_phase() {
+        use animus_runtime_shared::phase_session::{
+            update_session_environment, update_session_running, write_session_pending, EnvironmentBinding,
+        };
+        use animus_environment_protocol::EnvironmentHandle;
+
+        let temp = TempDir::new().expect("tempdir");
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(&scoped_root, "wf-bound", "code", "claude", "agent-1", None)
+            .expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-bound", "code").expect("running checkpoint");
+        update_session_environment(
+            &scoped_root,
+            "wf-bound",
+            "code",
+            EnvironmentBinding {
+                environment_id: "railway".to_string(),
+                handle: EnvironmentHandle {
+                    id: "node-h1".to_string(),
+                    workspace_root: "/workspace".to_string(),
+                    metadata: serde_json::Value::Null,
+                },
+                bound_at: "2026-01-01T00:00:00Z".to_string(),
+                torn_down: false,
+            },
+        )
+        .expect("environment binding");
+
+        assert_eq!(
+            persisted_workflow_environment(temp.path().to_string_lossy().as_ref(), "wf-bound").as_deref(),
+            Some("railway"),
+            "restart dispatch must adopt the runner-owned binding instead of routing from the local phase"
+        );
+    }
 
     #[test]
     fn runner_exit_line_formats_signal_and_pre_capped_tail() {

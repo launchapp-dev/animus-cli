@@ -93,7 +93,12 @@ impl CliProjectTickServices {
             // Target the EXISTING persisted run by id so the runner continues
             // it from `current_phase` (phase-boundary resume) instead of
             // starting a duplicate workflow for the subject.
-            match process_manager.spawn_workflow_runner_resume(&dispatch, root, &workflow.id) {
+            match process_manager.spawn_workflow_runner_resume(
+                &dispatch,
+                root,
+                &workflow.id,
+                orchestrator_daemon_runtime::workflow_current_phase_id(&workflow).as_deref(),
+            ) {
                 Ok(()) => {
                     started += 1;
                     self.logger
