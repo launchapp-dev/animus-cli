@@ -99,7 +99,9 @@ impl UserKeySource {
     /// Resolve from the env var first, then the configured key file.
     pub fn resolve(key_file: Option<&Path>) -> Result<Self> {
         if let Ok(raw) = std::env::var(ENV_USER_KEY) {
-            return Ok(Self { key: parse_raw_key(raw.trim())? });
+            if !raw.trim().is_empty() {
+                return Ok(Self { key: parse_raw_key(raw.trim())? });
+            }
         }
         if let Some(path) = key_file {
             let raw = std::fs::read_to_string(path)
@@ -335,13 +337,13 @@ fn resolve_auto(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<dyn KeySour
     // injection (e.g. Docker secrets via envFrom) takes precedence over a
     // file configured in the project/global config. If only key_file is set,
     // UserKeySource::resolve will still try the env first then the file.
-    if std::env::var(ENV_USER_KEY).is_ok() || config.key_file.is_some() {
+    if std::env::var(ENV_USER_KEY).is_ok_and(|raw| !raw.trim().is_empty()) || config.key_file.is_some() {
         return Ok(Box::new(UserKeySource::resolve(config.key_file.as_deref())?));
     }
     // An in-process or env-injected passphrase is also a headless-safe server
     // source. Prefer the in-process value when the caller supplied one, just
     // as explicit user-key material takes precedence over its fallback.
-    if config.passphrase.is_some() || std::env::var(ENV_PASSPHRASE).is_ok() {
+    if config.passphrase.is_some() || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty()) {
         return Ok(Box::new(PassphraseKeySource::resolve(
             config.passphrase.as_ref().map(|passphrase| passphrase.as_str()),
             salt,
@@ -457,6 +459,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn resolve_auto_ignores_empty_env_user_key_when_key_file_configured() {
+        let file_key = [0x78u8; KEY_LEN];
+        let tmp = tempfile::tempdir().unwrap();
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, hex::encode(file_key)).unwrap();
+        let _guard = env_lock().lock().unwrap();
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::set_var(ENV_USER_KEY, "   ");
+        let config = KeySourceConfig { kind_override: None, key_file: Some(key_file), passphrase: None };
+        let salt = [0u8; 16];
+        let result = resolve_auto(&config, &salt);
+        match &prev {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        let src = result.expect("empty ANIMUS_SECRET_KEY must not mask a configured key file");
+        assert_eq!(src.id(), "user-key");
+        assert_eq!(*src.key().unwrap(), file_key);
+    }
+
+    #[test]
     fn resolve_auto_uses_passphrase_when_passphrase_env_is_set() {
         let _guard = env_lock().lock().unwrap();
         let prev_key = std::env::var(ENV_USER_KEY).ok();
@@ -475,6 +498,27 @@ pub(crate) mod tests {
         }
         let src = result.expect("resolve_auto with ANIMUS_SECRET_PASSPHRASE set should succeed");
         assert_eq!(src.id(), "passphrase", "auto must resolve to passphrase when ANIMUS_SECRET_PASSPHRASE is set");
+    }
+
+    #[test]
+    fn resolve_auto_ignores_empty_passphrase_env() {
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::set_var(ENV_PASSPHRASE, "   ");
+        let salt = [0xACu8; 16];
+        let result = resolve_auto(&KeySourceConfig::default(), &salt);
+        match &prev_key {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match &prev_pass {
+            Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
+        let src = result.expect("empty ANIMUS_SECRET_PASSPHRASE must be treated as unset");
+        assert_eq!(src.id(), "device-id");
     }
 
     #[test]

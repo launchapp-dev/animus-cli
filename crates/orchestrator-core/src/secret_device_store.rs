@@ -430,8 +430,8 @@ fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
         .and_then(|source| KeySourceKind::parse(source).ok())
         .is_some_and(|source| matches!(source, KeySourceKind::UserKey | KeySourceKind::Passphrase))
         || cfg.key_file.is_some()
-        || std::env::var(ENV_USER_KEY).is_ok()
-        || std::env::var(ENV_PASSPHRASE).is_ok()
+        || std::env::var(ENV_USER_KEY).is_ok_and(|raw| !raw.trim().is_empty())
+        || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty())
 }
 
 /// Read the project-level `.animus/config.json` and return its `secrets` block.
@@ -650,6 +650,26 @@ mod tests {
             std::env::set_var(ENV_PASSPHRASE, v)
         }
         assert!(result, "key_file in secrets config must count as a server key source");
+    }
+
+    #[test]
+    fn empty_passphrase_env_is_not_a_server_key() {
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::set_var(ENV_PASSPHRASE, "   ");
+        let result = has_server_key_configured(&protocol::SecretsConfig::default());
+        match prev_key {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match prev_pass {
+            Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
+        assert!(!result, "empty ANIMUS_SECRET_PASSPHRASE must be treated as unset");
     }
 
     #[test]
