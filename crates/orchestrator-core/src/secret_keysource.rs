@@ -316,7 +316,8 @@ pub fn resolve_key_source(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<d
 ///
 /// 1. `ANIMUS_SECRET_KEY` env var → `user-key` (runtime-injected key; highest priority)
 /// 2. `key_file` from `config` → `user-key` (operator-configured file; headless-safe)
-/// 3. `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase` (Argon2id KDF; headless-safe)
+/// 3. configured passphrase or `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase`
+///    (Argon2id KDF; headless-safe)
 /// 4. `device-id` (fallback; interactive hosts only — binding, not on-device-secret-safe)
 ///
 /// Steps 1–3 let headless/server deployments work without setting
@@ -337,12 +338,14 @@ fn resolve_auto(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<dyn KeySour
     if std::env::var(ENV_USER_KEY).is_ok() || config.key_file.is_some() {
         return Ok(Box::new(UserKeySource::resolve(config.key_file.as_deref())?));
     }
-    // Passphrase env var: also a headless-safe server source. The backend
-    // selector (`has_server_key_configured`) already counts this as a
-    // "server key" and picks the device backend; resolve to the matching
-    // key source here so the two paths stay in sync.
-    if std::env::var(ENV_PASSPHRASE).is_ok() {
-        return Ok(Box::new(PassphraseKeySource::resolve(None, salt)?));
+    // An in-process or env-injected passphrase is also a headless-safe server
+    // source. Prefer the in-process value when the caller supplied one, just
+    // as explicit user-key material takes precedence over its fallback.
+    if config.passphrase.is_some() || std::env::var(ENV_PASSPHRASE).is_ok() {
+        return Ok(Box::new(PassphraseKeySource::resolve(
+            config.passphrase.as_ref().map(|passphrase| passphrase.as_str()),
+            salt,
+        )?));
     }
     Ok(Box::new(DeviceIdKeySource::resolve(salt)?))
 }
@@ -472,6 +475,32 @@ pub(crate) mod tests {
         }
         let src = result.expect("resolve_auto with ANIMUS_SECRET_PASSPHRASE set should succeed");
         assert_eq!(src.id(), "passphrase", "auto must resolve to passphrase when ANIMUS_SECRET_PASSPHRASE is set");
+    }
+
+    #[test]
+    fn resolve_auto_uses_configured_passphrase_without_env() {
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::remove_var(ENV_PASSPHRASE);
+        let config = KeySourceConfig {
+            kind_override: None,
+            key_file: None,
+            passphrase: Some(Zeroizing::new("configured-headless-passphrase".to_string())),
+        };
+        let salt = [0xABu8; 16];
+        let result = resolve_auto(&config, &salt);
+        match &prev_key {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match &prev_pass {
+            Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
+        let src = result.expect("resolve_auto with a configured passphrase should succeed");
+        assert_eq!(src.id(), "passphrase");
     }
 
     #[test]
