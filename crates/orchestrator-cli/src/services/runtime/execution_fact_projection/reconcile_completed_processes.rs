@@ -144,7 +144,7 @@ async fn project_runner_terminal_state(
             let reason = failure_reason
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("workflow runner exited with status {exit_code:?}"));
-            hub.workflows().fail_current_phase(workflow_id, reason).await?
+            hub.workflows().fail_external_execution(workflow_id, reason).await?
         }
         Some(TerminalProjection::Cancelled) => hub.workflows().cancel(workflow_id).await?,
         None => return Ok(None),
@@ -220,7 +220,9 @@ async fn finalize_plugin_queue_entry(root: &str, fact: &protocol::SubjectExecuti
 mod tests {
     use super::*;
 
-    use orchestrator_core::{services::FileServiceHub, WorkflowRunInput, WorkflowStatus};
+    use orchestrator_core::{
+        services::FileServiceHub, workflow::WorkflowStateManager, WorkflowRunInput, WorkflowStatus,
+    };
 
     #[test]
     fn failed_runner_exit_is_not_projected_as_operator_cancellation() {
@@ -242,6 +244,15 @@ mod tests {
             .run(WorkflowRunInput::for_task("TASK-failed".to_string(), Some("standard-workflow".to_string())), None)
             .await
             .expect("failed workflow fixture");
+        let manager = WorkflowStateManager::new(root.path());
+        let mut before = manager.load(&failed.id).expect("load workflow fixture");
+        before.phases[before.current_phase_index].attempt = 2;
+        before.rework_counts.insert("implementation".to_string(), 2);
+        before.total_reworks = 2;
+        manager.save(&before).expect("persist retry/rework fixture");
+        let attempts_before: Vec<_> = before.phases.iter().map(|phase| phase.attempt).collect();
+        let rework_counts_before = before.rework_counts.clone();
+        let total_reworks_before = before.total_reworks;
         let reason = "environment/prepare failed: Railway service cap reached";
         let projected = project_runner_terminal_state(hub.clone(), &failed.id, "failed", Some(reason), Some(1))
             .await
@@ -249,6 +260,9 @@ mod tests {
             .expect("non-terminal workflow should be projected");
         assert_eq!(projected.status, WorkflowStatus::Failed);
         assert_eq!(projected.failure_reason.as_deref(), Some(reason));
+        assert_eq!(projected.phases.iter().map(|phase| phase.attempt).collect::<Vec<_>>(), attempts_before);
+        assert_eq!(projected.rework_counts, rework_counts_before);
+        assert_eq!(projected.total_reworks, total_reworks_before);
 
         let cancelled = hub
             .workflows()

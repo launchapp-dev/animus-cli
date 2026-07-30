@@ -1147,6 +1147,35 @@ impl WorkflowLifecycleExecutor {
         Ok(())
     }
 
+    /// Record a terminal failure reported by the external workflow runner.
+    /// Unlike `mark_current_phase_failed`, this is not a phase transition: the
+    /// runner may have exited before the phase started, and daemon
+    /// reconciliation must not consume retry or rework accounting while
+    /// repairing the persisted workflow row.
+    pub fn mark_external_execution_failed(&self, workflow: &mut OrchestratorWorkflow, error: String) {
+        if matches!(
+            workflow.status,
+            WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled
+        ) {
+            return;
+        }
+
+        let phase_id = workflow.current_phase.clone().unwrap_or_else(|| "external-runner".to_string());
+        workflow.machine_state = WorkflowMachineState::Failed;
+        workflow.sync_status();
+        workflow.failure_reason = Some(error.clone());
+        workflow.completed_at = Some(Utc::now());
+        workflow.current_phase = None;
+        workflow.decision_history.push(self.decision_record(
+            phase_id,
+            WorkflowDecisionAction::Fail,
+            None,
+            error,
+            1.0,
+            WorkflowDecisionRisk::High,
+        ));
+    }
+
     pub fn mark_completed_failed(&self, workflow: &mut OrchestratorWorkflow, error: String) {
         if workflow.status != WorkflowStatus::Completed {
             return;

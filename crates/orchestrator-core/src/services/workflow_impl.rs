@@ -296,6 +296,13 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         Ok(workflow.clone())
     }
 
+    async fn fail_external_execution(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
+        let mut lock = self.state.write().await;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        WorkflowLifecycleExecutor::default().mark_external_execution_failed(workflow, error);
+        Ok(workflow.clone())
+    }
+
     async fn mark_completed_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
         let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
@@ -711,6 +718,17 @@ impl WorkflowServiceApi for FileServiceHub {
             state_machines,
         )
         .mark_current_phase_failed(&mut workflow, error)?;
+        manager.save(&workflow)?;
+        let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+
+        self.state.write().await.workflows.insert(id.to_string(), workflow.clone());
+        Ok(workflow)
+    }
+
+    async fn fail_external_execution(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
+        let manager = self.workflow_manager();
+        let mut workflow = manager.load(id)?;
+        WorkflowLifecycleExecutor::default().mark_external_execution_failed(&mut workflow, error);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
 
