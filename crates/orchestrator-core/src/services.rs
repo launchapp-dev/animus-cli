@@ -195,6 +195,10 @@ pub trait WorkflowServiceApi: Send + Sync {
         decision: Option<PhaseDecision>,
     ) -> Result<OrchestratorWorkflow>;
     async fn fail_current_phase(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
+    /// Terminalize a non-terminal workflow because its external runner exited
+    /// before it could record a phase outcome. This bypasses phase retry,
+    /// routing, and attempt accounting while preserving the exact reason.
+    async fn fail_external_execution(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn mark_completed_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow>;
