@@ -49,8 +49,8 @@ pub struct ServerResolution {
     pub broker_oauth: Option<OauthConfig>,
 }
 
-/// Build a keychain-backed [`SecretStore`] for `project_root`, mirroring the
-/// `animus secret` surface so OAuth tokens share the project's keychain
+/// Build the configured [`SecretStore`] for `project_root`, mirroring the
+/// `animus secret` surface so OAuth tokens share the project's secret-store
 /// scope.
 ///
 /// Consults both the global `~/.animus/config.json` and the project-level
@@ -231,7 +231,7 @@ mod tests {
         }
     }
 
-    fn assert_oauth_store_uses_project_key_file(key_source: &str) {
+    fn assert_oauth_store_uses_project_key_file(key_source: Option<&str>) {
         // Secret-key environment variables are process-global. Keep removal,
         // store construction, and restoration in one serialized window so
         // these tests cannot borrow or overwrite another test's key.
@@ -264,11 +264,16 @@ mod tests {
 
     #[test]
     fn oauth_secret_store_honors_project_user_key_without_env_key() {
-        assert_oauth_store_uses_project_key_file("user-key");
+        assert_oauth_store_uses_project_key_file(Some("user-key"));
     }
 
     #[test]
     fn oauth_secret_store_auto_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file("auto");
+        assert_oauth_store_uses_project_key_file(Some("auto"));
+    }
+
+    #[test]
+    fn oauth_secret_store_default_auto_uses_project_key_file_without_env_key() {
+        assert_oauth_store_uses_project_key_file(None);
     }
 }
