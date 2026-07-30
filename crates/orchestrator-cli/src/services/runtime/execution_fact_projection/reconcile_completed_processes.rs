@@ -53,16 +53,18 @@ pub(crate) async fn reconcile_completed_processes(
         project_schedule_execution_fact(root, fact);
     }
 
-    // BU-4: when durable journal resume is active, terminalize the persisted
-    // workflow row for any run that FAILED before the runner could write a
-    // terminal status itself (e.g. a resume re-dispatch that died on a bad
-    // `--workflow-id`, plugin/startup failure, or arg parse error). The
-    // task/queue projectors above do NOT update the workflow row, so without
-    // this the run stays `Running` and `resumable_orphans_for_redispatch`
-    // re-dispatches it every tick (livelock). Cancel is idempotent here — a run
-    // the runner already terminalized is skipped by the non-terminal guard.
+    // BU-4 / TASK-1174: when durable journal resume is active, terminalize the
+    // persisted workflow row for any run that exited before the runner could
+    // write its terminal state (e.g. environment preparation, plugin startup,
+    // argument parsing, or a resume failure). Preserve the runner's terminal
+    // vocabulary: an execution failure is `Failed` with the exact bounded
+    // reason, while only an explicit cancellation is `Cancelled`. The old
+    // blanket `cancel()` projection hid infrastructure/provider failures from
+    // the journal and Portal, and made a phase that never ran look like an
+    // operator cancellation.
+    //
     // Gated on `journal_resume_enabled` so the no-journal path is byte-identical
-    // (its stuck runs are still handled by the orphan-sweep cancel path).
+    // (its stuck runs are still handled by the orphan-sweep path).
     if crate::services::runtime::runtime_daemon::daemon_reconciliation::journal_resume_enabled(root) {
         for fact in &plan.execution_facts {
             let Some(workflow_id) = fact.workflow_id.as_deref() else {
@@ -71,36 +73,35 @@ pub(crate) async fn reconcile_completed_processes(
             if !matches!(fact.completion_status(), "failed" | "cancelled") {
                 continue;
             }
-            match hub.workflows().get(workflow_id).await {
-                Ok(workflow) if !orchestrator_core::is_terminal_workflow_run_status(workflow.status) => {
-                    // Use `cancel` (Running -> Cancelled): it is the only
-                    // service transition GUARANTEED to terminalize a Running
-                    // run here. `mark_completed_failed` no-ops unless the run is
-                    // already Completed, and `fail_current_phase` may apply the
-                    // phase RETRY policy and leave the run Running — both would
-                    // leave the livelock unbroken (codex P1). Cancelling a run
-                    // that died before doing any work is correct cleanup (live
-                    // runners / live agent records were already excluded from
-                    // re-dispatch), not a wrongful cancel; the operator can
-                    // re-enqueue. The original failure reason is preserved in
-                    // the execution fact / task projection above.
-                    if let Err(error) = hub.workflows().cancel(workflow_id).await {
-                        warn!(
-                            actor = protocol::ACTOR_DAEMON,
-                            workflow_id = %workflow_id,
-                            error = %error,
-                            "failed to terminalize failed resume target; it may be re-dispatched next tick"
-                        );
-                    } else {
-                        info!(
-                            actor = protocol::ACTOR_DAEMON,
-                            workflow_id = %workflow_id,
-                            status = %fact.completion_status(),
-                            "terminalized failed resume target (runner exited before persisting terminal status)"
-                        );
-                    }
-                }
-                _ => {}
+            match project_runner_terminal_state(
+                hub.clone(),
+                workflow_id,
+                fact.completion_status(),
+                fact.failure_reason.as_deref(),
+                fact.exit_code,
+            )
+            .await
+            {
+                Err(error) => warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow_id,
+                    error = %error,
+                    "failed to project runner terminal state; it may be reconciled next tick"
+                ),
+                Ok(Some(updated)) if orchestrator_core::is_terminal_workflow_run_status(updated.status) => info!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow_id,
+                    status = %fact.completion_status(),
+                    "projected runner terminal state after exit"
+                ),
+                Ok(Some(updated)) => warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %workflow_id,
+                    status = ?updated.status,
+                    expected = %fact.completion_status(),
+                    "runner terminal projection remained non-terminal; preserving row for investigation"
+                ),
+                Ok(None) => {}
             }
         }
     }
@@ -110,6 +111,45 @@ pub(crate) async fn reconcile_completed_processes(
         failed_workflow_phases: plan.failed_workflow_phases,
         workflow_failures: plan.workflow_failures,
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalProjection {
+    Failed,
+    Cancelled,
+}
+
+fn terminal_projection(completion_status: &str) -> Option<TerminalProjection> {
+    match completion_status {
+        "failed" => Some(TerminalProjection::Failed),
+        "cancelled" => Some(TerminalProjection::Cancelled),
+        _ => None,
+    }
+}
+
+async fn project_runner_terminal_state(
+    hub: Arc<dyn ServiceHub>,
+    workflow_id: &str,
+    completion_status: &str,
+    failure_reason: Option<&str>,
+    exit_code: Option<i32>,
+) -> anyhow::Result<Option<protocol::orchestrator::OrchestratorWorkflow>> {
+    let workflow = hub.workflows().get(workflow_id).await?;
+    if orchestrator_core::is_terminal_workflow_run_status(workflow.status) {
+        return Ok(None);
+    }
+
+    let updated = match terminal_projection(completion_status) {
+        Some(TerminalProjection::Failed) => {
+            let reason = failure_reason
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("workflow runner exited with status {exit_code:?}"));
+            hub.workflows().fail_current_phase(workflow_id, reason).await?
+        }
+        Some(TerminalProjection::Cancelled) => hub.workflows().cancel(workflow_id).await?,
+        None => return Ok(None),
+    };
+    Ok(Some(updated))
 }
 
 async fn finalize_plugin_queue_entry(root: &str, fact: &protocol::SubjectExecutionFact) {
@@ -173,5 +213,59 @@ async fn finalize_plugin_queue_entry(root: &str, fact: &protocol::SubjectExecuti
                 "queue plugin queue/completion call failed; entry may remain assigned"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use orchestrator_core::{services::FileServiceHub, WorkflowRunInput, WorkflowStatus};
+
+    #[test]
+    fn failed_runner_exit_is_not_projected_as_operator_cancellation() {
+        assert_eq!(terminal_projection("failed"), Some(TerminalProjection::Failed));
+        assert_eq!(terminal_projection("cancelled"), Some(TerminalProjection::Cancelled));
+        assert_eq!(terminal_projection("completed"), None);
+        assert_eq!(terminal_projection("running"), None);
+    }
+
+    #[tokio::test]
+    async fn runner_failure_projection_preserves_reason_and_cancel_remains_distinct() {
+        let root = tempfile::tempdir().expect("project root");
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root.path()).expect("file service hub"));
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(root.path());
+
+        let failed = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task("TASK-failed".to_string(), Some("standard-workflow".to_string())), None)
+            .await
+            .expect("failed workflow fixture");
+        let reason = "environment/prepare failed: Railway service cap reached";
+        let projected = project_runner_terminal_state(hub.clone(), &failed.id, "failed", Some(reason), Some(1))
+            .await
+            .expect("failure projection")
+            .expect("non-terminal workflow should be projected");
+        assert_eq!(projected.status, WorkflowStatus::Failed);
+        assert_eq!(projected.failure_reason.as_deref(), Some(reason));
+
+        let cancelled = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task("TASK-cancelled".to_string(), Some("standard-workflow".to_string())), None)
+            .await
+            .expect("cancelled workflow fixture");
+        let projected = project_runner_terminal_state(
+            hub.clone(),
+            &cancelled.id,
+            "cancelled",
+            Some("must not become a failure reason"),
+            None,
+        )
+        .await
+        .expect("cancellation projection")
+        .expect("non-terminal workflow should be projected");
+        assert_eq!(projected.status, WorkflowStatus::Cancelled);
+        assert_eq!(projected.failure_reason, None);
     }
 }
