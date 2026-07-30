@@ -183,6 +183,7 @@ mod tests {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         }
     }
 

@@ -1,206 +1,307 @@
 use super::*;
+use animus_execution_protocol::ExecutionFence;
+use animus_queue_protocol::{self as queue_proto, QueueLeaseMutationOutcome};
+use anyhow::Context;
 use orchestrator_daemon_runtime::{
-    execute_dispatch_plan_via_runner, DispatchNoticeSink, DispatchSelectionSource, PlannedDispatchStart,
+    execute_dispatch_plan_via_runner, CodingRunResources, CodingScheduler, DispatchNoticeSink, DispatchSelectionSource,
+    PlannedDispatchStart, ReservationOutcome, CODING_SCHEDULER_CAPACITY,
 };
 pub use orchestrator_daemon_runtime::{DispatchNotice, DispatchWorkflowStartSummary};
 use tracing::warn;
 
 use crate::services::plugin_clients;
-use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueLeaseRequest};
-use animus_subject_protocol_wire::SubjectId as QueueSubjectId;
 
 pub async fn dispatch_queued_entries_via_runner(
     root: &str,
     process_manager: &mut ProcessManager,
+    coding_scheduler: &CodingScheduler,
+    owner_id: &str,
     limit: usize,
 ) -> anyhow::Result<DispatchWorkflowStartSummary> {
-    let active_subject_ids = process_manager.active_subject_ids();
-
-    let mut planned_starts: Vec<PlannedDispatchStart> = Vec::new();
-    let mut plugin_owned_subject_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut leased_entry_ids: Vec<String> = Vec::new();
-    let mut undecodable_entry_ids: Vec<String> = Vec::new();
-    let project_root_path = std::path::Path::new(root);
-
-    let exclude_subjects: Vec<QueueSubjectId> = active_subject_ids.iter().cloned().map(QueueSubjectId::new).collect();
-    // TASK-1072: mint the durable ids BEFORE the atomic lease. The queue stores
-    // these exact ids and the runner creates/loads the journal rows with them,
-    // eliminating the previous queue-UUID / runner-UUID split.
-    let workflow_ids: Vec<String> = (0..limit).map(|_| uuid::Uuid::new_v4().to_string()).collect();
-    let lease_req = QueueLeaseRequest {
-        max: limit,
-        workflow_ids: Some(workflow_ids),
-        exclude_subjects: if exclude_subjects.is_empty() { None } else { Some(exclude_subjects) },
-    };
-    match plugin_clients::call_queue_lease(project_root_path, &lease_req).await {
-        Ok(Some(response)) => {
-            for entry in response.leased {
-                let dispatch_value = match serde_json::to_value(&entry.subject_dispatch) {
-                    Ok(v) => v,
-                    Err(error) => {
-                        warn!(actor = protocol::ACTOR_DAEMON, error = %error, "queue/lease returned undecodable subject_dispatch; closing entry as failed");
-                        undecodable_entry_ids.push(entry.entry_id.clone());
-                        continue;
-                    }
-                };
-                let dispatch: protocol::SubjectDispatch = match serde_json::from_value(dispatch_value) {
-                    Ok(d) => d,
-                    Err(error) => {
-                        warn!(actor = protocol::ACTOR_DAEMON, error = %error, "queue/lease subject_dispatch shape drift vs protocol::SubjectDispatch; closing entry as failed");
-                        undecodable_entry_ids.push(entry.entry_id.clone());
-                        continue;
-                    }
-                };
-                let Some(workflow_id) = entry.workflow_id.clone() else {
-                    warn!(
-                        actor = protocol::ACTOR_DAEMON,
-                        entry_id = %entry.entry_id,
-                        "queue/lease returned an assigned entry without workflow_id; closing it as failed"
-                    );
-                    undecodable_entry_ids.push(entry.entry_id.clone());
-                    continue;
-                };
-                // Within-batch dedupe: the queue's `exclude_subjects` filter
-                // honors the snapshot we sent at lease time, but multiple
-                // pending entries for the same subject (different
-                // workflow_refs) can still be returned in one batch. Release
-                // the duplicate back to Pending so it runs on a later tick
-                // after the first entry's workflow finishes. A subjectless
-                // dispatch has no subject_key and is never deduped — each
-                // subjectless run is its own entry.
-                if let Some(subject_key) = dispatch.subject_key() {
-                    if plugin_owned_subject_keys.contains(&subject_key) {
-                        warn!(
-                            actor = protocol::ACTOR_DAEMON,
-                            subject_key = %subject_key,
-                            entry_id = %entry.entry_id,
-                            "queue/lease returned duplicate subject within batch; releasing extra entry back to pending"
-                        );
-                        release_leased_entry_to_pending(
-                            project_root_path,
-                            &entry.entry_id,
-                            "within-batch-duplicate-subject",
-                        )
-                        .await;
-                        continue;
-                    }
-                    plugin_owned_subject_keys.insert(subject_key);
-                }
-                leased_entry_ids.push(entry.entry_id.clone());
-                planned_starts.push(PlannedDispatchStart {
-                    dispatch,
-                    workflow_id: Some(workflow_id),
-                    selection_source: DispatchSelectionSource::DispatchQueue,
-                });
-            }
-        }
-        Ok(None) => {
-            warn!(
-                actor = protocol::ACTOR_DAEMON,
-                "queue plugin not installed; deferring dispatch (install with `animus plugin install-defaults`)"
-            );
-            return Ok(DispatchWorkflowStartSummary::default());
-        }
-        Err(error) => {
-            warn!(actor = protocol::ACTOR_DAEMON, error = %error, "queue plugin queue/lease failed; deferring dispatch to next tick to avoid stranding claimed entries");
-            return Ok(DispatchWorkflowStartSummary::default());
-        }
+    let project_root = std::path::Path::new(root);
+    let scheduler_status = coding_scheduler.status()?;
+    let max = limit.min(scheduler_status.available).min(CODING_SCHEDULER_CAPACITY);
+    if max == 0 {
+        return Ok(DispatchWorkflowStartSummary::default());
     }
 
-    for entry_id in &undecodable_entry_ids {
-        let req = QueueCompletionRequest {
-            entry_id: entry_id.clone(),
-            status: queue_proto::completion_status::FAILED.to_string(),
-            workflow_ref: None,
-            workflow_id: None,
-        };
-        if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+    let workflow_ids = (0..max).map(|_| uuid::Uuid::new_v4().to_string()).collect();
+    let request = queue_proto::QueueLeaseV2Request {
+        max,
+        owner_id: owner_id.to_string(),
+        workflow_ids,
+        exclude: scheduler_status.reservations.iter().map(|lease| lease.execution.clone()).collect(),
+    };
+    request.validate().map_err(anyhow::Error::msg)?;
+
+    let Some(response) = plugin_clients::call_queue_lease_v2(project_root, &request).await? else {
+        anyhow::bail!("queue plugin not installed; generation-fenced dispatch cannot continue");
+    };
+
+    for block in &response.blocked {
+        warn!(
+            actor = protocol::ACTOR_DAEMON,
+            entry_id = %block.entry_id,
+            reason = ?block.reason,
+            conflict_workflow_id = block.conflicts_with.as_ref().map(|fence| fence.workflow_id.as_str()),
+            "queue/v2/lease left a candidate blocked without consuming a coding slot"
+        );
+    }
+
+    let mut planned_starts = Vec::new();
+    let mut leased = Vec::new();
+    for fenced in response.leased {
+        if let Err(error) = fenced.validate().and_then(|()| fenced.execution.validate_queue_backed()) {
             warn!(
                 actor = protocol::ACTOR_DAEMON,
-                entry_id = %entry_id,
+                entry_id = %fenced.entry.entry_id,
                 error = %error,
-                "queue plugin queue/completion (undecodable entry) failed"
+                "queue/v2/lease returned an invalid fleet fence; leaving it assigned for explicit recovery"
             );
+            continue;
         }
+        let queue = fenced.execution.queue_lease.as_ref().expect("validated queue-backed lease");
+        if queue.owner_id != owner_id {
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                entry_id = %fenced.entry.entry_id,
+                expected_owner = %owner_id,
+                actual_owner = %queue.owner_id,
+                "queue/v2/lease returned a different owner; leaving entry assigned and refusing spawn"
+            );
+            continue;
+        }
+
+        let dispatch_value = match serde_json::to_value(&fenced.entry.subject_dispatch) {
+            Ok(value) => value,
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    entry_id = %fenced.entry.entry_id,
+                    error = %error,
+                    "queue/v2/lease returned an undecodable dispatch"
+                );
+                complete_failed(project_root, coding_scheduler, &fenced.execution, None).await;
+                continue;
+            }
+        };
+        let dispatch: protocol::SubjectDispatch = match serde_json::from_value(dispatch_value) {
+            Ok(dispatch) => dispatch,
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    entry_id = %fenced.entry.entry_id,
+                    error = %error,
+                    "queue/v2/lease subject dispatch drifted from the kernel protocol"
+                );
+                complete_failed(project_root, coding_scheduler, &fenced.execution, None).await;
+                continue;
+            }
+        };
+
+        let mut resources = CodingRunResources::from_execution(&fenced.execution)?;
+        resources.pull_request = ["pull_request", "pull_request_url", "pr_url", "pr_number"]
+            .iter()
+            .find_map(|key| dispatch.vars.get(*key).cloned())
+            .filter(|value| !value.trim().is_empty());
+        match coding_scheduler.track(fenced.execution.clone(), resources)? {
+            ReservationOutcome::Reserved { .. } => {}
+            ReservationOutcome::Rejected { reason } => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    entry_id = %fenced.entry.entry_id,
+                    collision = ?reason,
+                    "local fleet projection rejected queue-owned lease; returning exact lease to pending"
+                );
+                release_to_pending(project_root, coding_scheduler, &fenced.execution, "local-fleet-collision").await;
+                continue;
+            }
+        }
+
+        planned_starts.push(PlannedDispatchStart {
+            dispatch,
+            workflow_id: Some(fenced.execution.workflow_id.clone()),
+            execution_fence: Some(fenced.execution.clone()),
+            selection_source: DispatchSelectionSource::DispatchQueue,
+        });
+        leased.push(fenced.execution);
     }
 
     let mut notice_sink = CliDispatchNoticeSink { outcomes: Vec::new() };
-    let summary = execute_dispatch_plan_via_runner(root, process_manager, &planned_starts, limit, &mut notice_sink);
+    let summary = execute_dispatch_plan_via_runner(root, process_manager, &planned_starts, max, &mut notice_sink);
 
-    // Reconcile each leased queue entry against its spawn outcome. Outcomes are
-    // recorded in dispatch order (one per processed entry), so they align by
-    // INDEX with `leased_entry_ids` / `planned_starts`. Correlating by position
-    // rather than subject id is what lets subjectless dispatches (which have no
-    // subject_key to key on) reconcile correctly.
-    for (idx, entry_id) in leased_entry_ids.iter().enumerate() {
-        match notice_sink.outcomes.get(idx) {
-            // Runner spawned: the entry is now Assigned to a live workflow.
-            Some(DispatchEntryOutcome::Started) => {}
-            // Recoverable defer (workflow concurrency cap) or never attempted
-            // (dispatch limit reached mid-batch): back to Pending for the next
-            // tick — closing them would permanently drop legitimate queued work.
-            Some(DispatchEntryOutcome::Deferred) | None => {
-                release_leased_entry_to_pending(project_root_path, entry_id, "spawn-deferred").await;
+    for (index, execution) in leased.iter().enumerate() {
+        match notice_sink.outcomes.get(index) {
+            Some(DispatchEntryOutcome::Started) => {
+                // A fresh backend-clock lease is already live. Heartbeats renew
+                // it; avoiding another RPC here leaves no spawn/renew ambiguity.
             }
-            // Hard spawn failure: close the entry as FAILED.
+            Some(DispatchEntryOutcome::Deferred) | None => {
+                release_to_pending(project_root, coding_scheduler, execution, "spawn-deferred").await;
+            }
             Some(DispatchEntryOutcome::Failed) => {
-                let req = QueueCompletionRequest {
-                    entry_id: entry_id.clone(),
-                    status: queue_proto::completion_status::FAILED.to_string(),
-                    workflow_ref: None,
-                    workflow_id: None,
-                };
-                if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
-                    warn!(
-                        actor = protocol::ACTOR_DAEMON,
-                        entry_id = %entry_id,
-                        error = %error,
-                        "queue plugin queue/completion (spawn-failed entry) failed"
-                    );
-                }
+                complete_failed(
+                    project_root,
+                    coding_scheduler,
+                    execution,
+                    planned_starts.get(index).map(|start| start.dispatch.workflow_ref.as_str()),
+                )
+                .await;
             }
         }
     }
     Ok(summary)
 }
 
-/// Release a leased queue entry back to Pending so a later tick can retry it.
-///
-/// Older queue plugins (pre-v0.2.0 of animus-queue-default) don't implement
-/// queue/release_pending — they'd return method-not-found and we'd strand the
-/// entry as Assigned forever. Fall back to completion(CANCELLED) so old
-/// plugins at least move the entry to a terminal state. This trades silently
-/// dropping legitimate queued work (the codex-v1 P1 we just fixed) for not
-/// stranding the queue on old plugins; preflight already requires queue
-/// v0.2.0+ for v0.5 so production should rarely hit this path.
-async fn release_leased_entry_to_pending(project_root_path: &std::path::Path, entry_id: &str, reason: &str) {
-    if let Err(error) = plugin_clients::call_queue_release_pending(project_root_path, entry_id, reason).await {
-        warn!(
-            actor = protocol::ACTOR_DAEMON,
-            entry_id = %entry_id,
-            error = %error,
-            "queue plugin queue/release_pending failed; falling back to completion(cancelled)"
-        );
-        let req = QueueCompletionRequest {
-            entry_id: entry_id.to_string(),
-            status: queue_proto::completion_status::CANCELLED.to_string(),
-            workflow_ref: None,
-            workflow_id: None,
-        };
-        if let Err(completion_error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
-            warn!(
-                actor = protocol::ACTOR_DAEMON,
-                entry_id = %entry_id,
-                error = %completion_error,
-                "queue plugin queue/completion fallback ({reason}) also failed; entry may be stranded as Assigned"
-            );
+pub(crate) async fn renew_execution_lease(
+    project_root: &std::path::Path,
+    coding_scheduler: &CodingScheduler,
+    execution: &ExecutionFence,
+) -> anyhow::Result<ExecutionFence> {
+    let request = queue_proto::QueueLeaseRenewRequest { execution: execution.clone(), ttl_secs: None };
+    request.validate().map_err(anyhow::Error::msg)?;
+    let response = plugin_clients::call_queue_lease_renew(project_root, &request)
+        .await?
+        .context("queue plugin disappeared during lease renewal")?;
+    match response.outcome {
+        QueueLeaseMutationOutcome::Applied | QueueLeaseMutationOutcome::AlreadyApplied => {
+            let current = response.execution.context("queue renewal succeeded without returning the current fence")?;
+            match coding_scheduler.update_execution(execution, current.clone())? {
+                ReservationOutcome::Reserved { .. } => Ok(current),
+                ReservationOutcome::Rejected { reason } => {
+                    anyhow::bail!("local fleet rejected renewed queue fence: {reason:?}")
+                }
+            }
         }
+        outcome => anyhow::bail!(
+            "queue lease renewal rejected with {outcome:?}: {}",
+            response.reason.unwrap_or_else(|| "no reason".to_string())
+        ),
     }
 }
 
-/// Spawn outcome for a single dispatched queue entry, recorded in dispatch
-/// order so the caller can reconcile leased entries by position (subjectless
-/// dispatches have no subject_key to correlate on).
+pub(crate) async fn recover_execution_lease(
+    project_root: &std::path::Path,
+    coding_scheduler: &CodingScheduler,
+    execution: &ExecutionFence,
+    new_owner_id: &str,
+) -> anyhow::Result<ExecutionFence> {
+    let request = queue_proto::QueueLeaseRecoverRequest {
+        execution: execution.clone(),
+        new_owner_id: new_owner_id.to_string(),
+        ttl_secs: None,
+    };
+    request.validate().map_err(anyhow::Error::msg)?;
+    let response = plugin_clients::call_queue_lease_recover(project_root, &request)
+        .await?
+        .context("queue plugin disappeared during lease recovery")?;
+    match response.outcome {
+        QueueLeaseMutationOutcome::Applied | QueueLeaseMutationOutcome::AlreadyApplied => {
+            let current = response.execution.context("queue recovery succeeded without returning the current fence")?;
+            match coding_scheduler.update_execution(execution, current.clone())? {
+                ReservationOutcome::Reserved { .. } => Ok(current),
+                ReservationOutcome::Rejected { reason } => {
+                    anyhow::bail!("local fleet rejected recovered queue fence: {reason:?}")
+                }
+            }
+        }
+        outcome => anyhow::bail!(
+            "queue lease recovery rejected with {outcome:?}: {}",
+            response.reason.unwrap_or_else(|| "no reason".to_string())
+        ),
+    }
+}
+
+async fn release_to_pending(
+    project_root: &std::path::Path,
+    coding_scheduler: &CodingScheduler,
+    execution: &ExecutionFence,
+    reason: &str,
+) {
+    let request =
+        queue_proto::QueueReleasePendingV2Request { execution: execution.clone(), reason: reason.to_string() };
+    match plugin_clients::call_queue_release_pending_v2(project_root, &request).await {
+        Ok(Some(response))
+            if matches!(
+                response.outcome,
+                QueueLeaseMutationOutcome::Applied | QueueLeaseMutationOutcome::AlreadyApplied
+            ) =>
+        {
+            let _ = coding_scheduler.release(execution);
+        }
+        Ok(Some(response)) => warn!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %execution.workflow_id,
+            outcome = ?response.outcome,
+            reason = response.reason.as_deref().unwrap_or("no reason"),
+            "queue/v2/release_pending rejected exact fence; retaining local reservation"
+        ),
+        Ok(None) => warn!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %execution.workflow_id,
+            "queue plugin disappeared during release_pending; retaining local reservation"
+        ),
+        Err(error) => warn!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %execution.workflow_id,
+            error = %error,
+            "queue/v2/release_pending failed; retaining local reservation"
+        ),
+    }
+}
+
+pub(crate) async fn complete_execution(
+    project_root: &std::path::Path,
+    coding_scheduler: &CodingScheduler,
+    execution: &ExecutionFence,
+    status: &str,
+    workflow_ref: Option<&str>,
+) -> anyhow::Result<()> {
+    let request = queue_proto::QueueCompletionV2Request {
+        execution: execution.clone(),
+        status: status.to_string(),
+        workflow_ref: workflow_ref.map(str::to_string),
+    };
+    request.validate().map_err(anyhow::Error::msg)?;
+    let response = plugin_clients::call_queue_completion_v2(project_root, &request)
+        .await?
+        .context("queue plugin disappeared during completion")?;
+    anyhow::ensure!(
+        matches!(response.outcome, QueueLeaseMutationOutcome::Applied | QueueLeaseMutationOutcome::AlreadyApplied),
+        "queue completion rejected with {:?}: {}",
+        response.outcome,
+        response.reason.unwrap_or_else(|| "no reason".to_string())
+    );
+    // Queue completion is the authority. Local projection cleanup is
+    // idempotent and may already have happened after a prior successful RPC.
+    let _ = coding_scheduler.release(execution)?;
+    Ok(())
+}
+
+async fn complete_failed(
+    project_root: &std::path::Path,
+    coding_scheduler: &CodingScheduler,
+    execution: &ExecutionFence,
+    workflow_ref: Option<&str>,
+) {
+    if let Err(error) = complete_execution(
+        project_root,
+        coding_scheduler,
+        execution,
+        queue_proto::completion_status::FAILED,
+        workflow_ref,
+    )
+    .await
+    {
+        warn!(
+            actor = protocol::ACTOR_DAEMON,
+            workflow_id = %execution.workflow_id,
+            error = %error,
+            "queue/v2/completion failed; retaining local reservation for recovery"
+        );
+    }
+}
+
 enum DispatchEntryOutcome {
     Started,
     Deferred,
@@ -229,7 +330,7 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
                     actor = protocol::ACTOR_DAEMON,
                     subject_id = %dispatch.subject_id().unwrap_or_default(),
                     reason = %reason,
-                    "workflow runner spawn deferred; entry returns to pending for next tick"
+                    "workflow runner spawn deferred; exact queue fence returns to pending"
                 );
                 self.outcomes.push(DispatchEntryOutcome::Deferred);
             }

@@ -96,6 +96,15 @@ pub(crate) async fn handle_workflow_execute(
         args.input_json.as_deref().map(serde_json::from_str).transpose()?;
     let plugin_request = if let Some(existing) = existing_workflow.as_ref() {
         let mut request = super::phases::workflow_execute_request_for_existing(existing);
+        if let Some(execution) = execution_fence_from_environment(Some(&existing.id))? {
+            if let Some(persisted) = request.execution_fence.as_ref() {
+                anyhow::ensure!(
+                    persisted == &execution,
+                    "persisted workflow execution fence does not match daemon spawn authority"
+                );
+            }
+            request.execution_fence = Some(execution);
+        }
         if args.workflow_ref.is_some() {
             request.workflow_ref = args.workflow_ref.clone();
         }
@@ -114,6 +123,7 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         workflow_proto::WorkflowExecuteRequest {
             workflow_id: None,
+            execution_fence: execution_fence_from_environment(None)?,
             subject_dispatch: args.subject_dispatch.clone(),
             subject_ref: None,
             // task/requirement are ordinary subjects now: a concrete-kind subject
@@ -197,4 +207,25 @@ pub(crate) async fn handle_workflow_execute(
         );
     }
     Ok(())
+}
+
+fn execution_fence_from_environment(
+    expected_workflow_id: Option<&str>,
+) -> Result<Option<animus_execution_protocol::ExecutionFence>> {
+    let Some(raw) = std::env::var_os(orchestrator_daemon_runtime::ANIMUS_EXECUTION_FENCE_JSON_ENV) else {
+        return Ok(None);
+    };
+    let execution: animus_execution_protocol::ExecutionFence =
+        serde_json::from_str(&raw.to_string_lossy()).map_err(|error| {
+            anyhow!("invalid {}: {error}", orchestrator_daemon_runtime::ANIMUS_EXECUTION_FENCE_JSON_ENV)
+        })?;
+    execution.validate().map_err(anyhow::Error::msg)?;
+    if let Some(expected) = expected_workflow_id {
+        anyhow::ensure!(
+            execution.workflow_id == expected,
+            "{} workflow id does not match requested workflow",
+            orchestrator_daemon_runtime::ANIMUS_EXECUTION_FENCE_JSON_ENV
+        );
+    }
+    Ok(Some(execution))
 }

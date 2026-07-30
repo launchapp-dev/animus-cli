@@ -34,6 +34,7 @@ use orchestrator_plugin_host::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use animus_plugin_protocol::InitializeResult;
 use animus_queue_protocol as queue_proto;
 use animus_workflow_runner_protocol as workflow_proto;
 
@@ -125,11 +126,16 @@ fn find_plugin_for_kind(project_root: &Path, plugin_kind: &str) -> Result<Option
 /// follow-up RPCs and either calling [`PluginHost::shutdown`] or dropping
 /// the host (which severs stdio). For demo-quality v0.5 we spawn-per-call
 /// and shut down at the end of each helper.
+struct InitializedPlugin {
+    host: PluginHost,
+    initialize: InitializeResult,
+}
+
 async fn spawn_with_project_binding(
     plugin: &DiscoveredPlugin,
     project_root: &Path,
     environment_scope: PluginEnvironmentScope,
-) -> Result<PluginHost> {
+) -> Result<InitializedPlugin> {
     let options = PluginSpawnOptions::for_manifest(
         plugin.name.clone(),
         &plugin.manifest.env_required,
@@ -175,15 +181,20 @@ async fn spawn_with_project_binding(
         "init_extensions": init_extensions,
     });
 
-    host.request_typed_with_timeout("initialize", Some(init_params), PLUGIN_CALL_TIMEOUT_SHORT)
+    let initialize_value = host
+        .request_typed_with_timeout("initialize", Some(init_params), PLUGIN_CALL_TIMEOUT_SHORT)
         .await
         .with_context(|| format!("plugin '{}' initialize failed", plugin.name))?;
+    let initialize: InitializeResult = serde_json::from_value(initialize_value)
+        .with_context(|| format!("plugin '{}' returned an invalid initialize result", plugin.name))?;
+    orchestrator_plugin_host::check_protocol_compat(&initialize.protocol_version)
+        .with_context(|| format!("plugin '{}' protocol is incompatible", plugin.name))?;
 
     host.notify("initialized", None)
         .await
         .with_context(|| format!("plugin '{}' initialized notification failed", plugin.name))?;
 
-    Ok(host)
+    Ok(InitializedPlugin { host, initialize })
 }
 
 async fn shutdown_quiet(host: PluginHost) {
@@ -193,6 +204,35 @@ async fn shutdown_quiet(host: PluginHost) {
 }
 
 // ----- Workflow runner -----
+
+fn require_execution_fenced_workflow_runner(initialize: &InitializeResult) -> Result<()> {
+    let declared = initialize
+        .kind_capabilities
+        .get(workflow_proto::KIND)
+        .context("workflow_runner plugin did not declare typed capabilities")?;
+    let capabilities: workflow_proto::WorkflowRunnerCapabilities = serde_json::from_value(declared.extra.clone())
+        .context("workflow_runner plugin returned malformed typed capabilities")?;
+    anyhow::ensure!(capabilities.execution_fence_v1, "workflow_runner plugin does not advertise execution_fence_v1");
+    for method in [workflow_proto::METHOD_WORKFLOW_EXECUTE, workflow_proto::METHOD_WORKFLOW_RUN_PHASE] {
+        anyhow::ensure!(
+            initialize.capabilities.methods.iter().any(|declared| declared == method),
+            "workflow_runner advertises execution_fence_v1 but omits required method {method}"
+        );
+    }
+    Ok(())
+}
+
+pub async fn require_execution_fenced_workflow_runner_backend(project_root: &Path) -> Result<()> {
+    let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_WORKFLOW_RUNNER)? else {
+        anyhow::bail!("workflow_runner plugin not installed");
+    };
+    let initialized =
+        spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
+    let result = require_execution_fenced_workflow_runner(&initialized.initialize)
+        .with_context(|| format!("workflow_runner plugin '{}' cannot execute fenced coding work", plugin.name));
+    shutdown_quiet(initialized.host).await;
+    result
+}
 
 /// Wrapper around the v0.5 `workflow/execute` RPC.
 ///
@@ -210,7 +250,16 @@ pub async fn call_workflow_execute(
     // required variables are not declared by the runner's own manifest. Forward
     // only those dependency manifests' declared keys plus runner controls; do
     // not expose unrelated daemon/web plugin or service configuration.
-    let host = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
+    let initialized =
+        spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
+    if request.execution_fence.is_some() {
+        if let Err(error) = require_execution_fenced_workflow_runner(&initialized.initialize) {
+            shutdown_quiet(initialized.host).await;
+            return Err(error)
+                .with_context(|| format!("workflow_runner plugin '{}' rejected fenced execution", plugin.name));
+        }
+    }
+    let host = initialized.host;
 
     let params = Some(serde_json::to_value(request).context("failed to encode WorkflowExecuteRequest")?);
     let value = host
@@ -240,7 +289,16 @@ pub async fn call_workflow_run_phase(
     let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_WORKFLOW_RUNNER)? else {
         return Ok(None);
     };
-    let host = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
+    let initialized =
+        spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::WorkflowDependencies).await?;
+    if request.execution_fence.is_some() {
+        if let Err(error) = require_execution_fenced_workflow_runner(&initialized.initialize) {
+            shutdown_quiet(initialized.host).await;
+            return Err(error)
+                .with_context(|| format!("workflow_runner plugin '{}' rejected fenced phase execution", plugin.name));
+        }
+    }
+    let host = initialized.host;
 
     let params = Some(serde_json::to_value(request).context("failed to encode WorkflowPhaseRunRequest")?);
     let value = host
@@ -273,7 +331,8 @@ async fn queue_call<T: for<'de> Deserialize<'de>>(
     };
     // Queue plugins do not execute workflow phases or spawn the workflow's
     // nested plugin graph, so retain the narrow generic plugin environment.
-    let host = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::Base).await?;
+    let initialized = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::Base).await?;
+    let host = initialized.host;
 
     let value = host
         .request_typed_with_timeout(method, params, PLUGIN_CALL_TIMEOUT_SHORT)
@@ -290,6 +349,131 @@ async fn queue_call<T: for<'de> Deserialize<'de>>(
 
     shutdown_quiet(host).await;
     Ok(Some(decoded))
+}
+
+fn require_generation_fenced_queue(initialize: &InitializeResult) -> Result<()> {
+    let declared = initialize
+        .kind_capabilities
+        .get(queue_proto::KIND)
+        .context("queue plugin did not declare typed queue capabilities")?;
+    let capabilities: queue_proto::QueueCapabilities = serde_json::from_value(declared.extra.clone())
+        .context("queue plugin returned malformed typed queue capabilities")?;
+    anyhow::ensure!(
+        capabilities.generation_fenced_leases_v1,
+        "queue plugin does not advertise generation_fenced_leases_v1"
+    );
+    anyhow::ensure!(
+        capabilities.max_lease_batch >= 5,
+        "queue plugin generation-fenced lease batch is {}, but the coding fleet requires 5",
+        capabilities.max_lease_batch
+    );
+    for method in [
+        queue_proto::METHOD_QUEUE_ENQUEUE_V2,
+        queue_proto::METHOD_QUEUE_LEASE_V2,
+        queue_proto::METHOD_QUEUE_LEASE_RENEW,
+        queue_proto::METHOD_QUEUE_LEASE_RECOVER,
+        queue_proto::METHOD_QUEUE_COMPLETION_V2,
+        queue_proto::METHOD_QUEUE_RELEASE_PENDING_V2,
+    ] {
+        anyhow::ensure!(
+            initialize.capabilities.methods.iter().any(|declared| declared == method),
+            "queue plugin advertises generation_fenced_leases_v1 but omits required method {method}"
+        );
+    }
+    Ok(())
+}
+
+async fn queue_call_v2<T: for<'de> Deserialize<'de>>(
+    project_root: &Path,
+    method: &str,
+    params: Option<Value>,
+) -> Result<Option<T>> {
+    let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_QUEUE)? else {
+        return Ok(None);
+    };
+    let initialized = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::Base).await?;
+    if let Err(error) = require_generation_fenced_queue(&initialized.initialize) {
+        shutdown_quiet(initialized.host).await;
+        return Err(error)
+            .with_context(|| format!("queue plugin '{}' cannot schedule fenced coding work", plugin.name));
+    }
+    let host = initialized.host;
+    let value = host
+        .request_typed_with_timeout(method, params, PLUGIN_CALL_TIMEOUT_SHORT)
+        .await
+        .with_context(|| format!("queue plugin '{}' {method} failed", plugin.name));
+    let decoded = match value {
+        Ok(value) => {
+            serde_json::from_value::<T>(value).with_context(|| format!("failed to decode {method} response"))?
+        }
+        Err(error) => {
+            shutdown_quiet(host).await;
+            return Err(error);
+        }
+    };
+    shutdown_quiet(host).await;
+    Ok(Some(decoded))
+}
+
+/// Fail-closed startup probe for the queue-v2 coding scheduler contract.
+pub async fn require_generation_fenced_queue_backend(project_root: &Path) -> Result<()> {
+    let Some(plugin) = find_plugin_for_kind(project_root, PLUGIN_KIND_QUEUE)? else {
+        anyhow::bail!("queue plugin not installed");
+    };
+    let initialized = spawn_with_project_binding(&plugin, project_root, PluginEnvironmentScope::Base).await?;
+    let result = require_generation_fenced_queue(&initialized.initialize)
+        .with_context(|| format!("queue plugin '{}' cannot schedule fenced coding work", plugin.name));
+    shutdown_quiet(initialized.host).await;
+    result
+}
+
+pub async fn call_queue_lease_v2(
+    project_root: &Path,
+    request: &queue_proto::QueueLeaseV2Request,
+) -> Result<Option<queue_proto::QueueLeaseV2Response>> {
+    let params = Some(serde_json::to_value(request).context("failed to encode QueueLeaseV2Request")?);
+    queue_call_v2(project_root, queue_proto::METHOD_QUEUE_LEASE_V2, params).await
+}
+
+pub async fn call_queue_enqueue_v2(
+    project_root: &Path,
+    request: &queue_proto::QueueEnqueueV2Request,
+) -> Result<Option<queue_proto::QueueEnqueueV2Response>> {
+    request.validate().map_err(anyhow::Error::msg)?;
+    let params = Some(serde_json::to_value(request).context("failed to encode QueueEnqueueV2Request")?);
+    queue_call_v2(project_root, queue_proto::METHOD_QUEUE_ENQUEUE_V2, params).await
+}
+
+pub async fn call_queue_lease_renew(
+    project_root: &Path,
+    request: &queue_proto::QueueLeaseRenewRequest,
+) -> Result<Option<queue_proto::QueueLeaseMutationResponse>> {
+    let params = Some(serde_json::to_value(request).context("failed to encode QueueLeaseRenewRequest")?);
+    queue_call_v2(project_root, queue_proto::METHOD_QUEUE_LEASE_RENEW, params).await
+}
+
+pub async fn call_queue_lease_recover(
+    project_root: &Path,
+    request: &queue_proto::QueueLeaseRecoverRequest,
+) -> Result<Option<queue_proto::QueueLeaseMutationResponse>> {
+    let params = Some(serde_json::to_value(request).context("failed to encode QueueLeaseRecoverRequest")?);
+    queue_call_v2(project_root, queue_proto::METHOD_QUEUE_LEASE_RECOVER, params).await
+}
+
+pub async fn call_queue_completion_v2(
+    project_root: &Path,
+    request: &queue_proto::QueueCompletionV2Request,
+) -> Result<Option<queue_proto::QueueLeaseMutationResponse>> {
+    let params = Some(serde_json::to_value(request).context("failed to encode QueueCompletionV2Request")?);
+    queue_call_v2(project_root, queue_proto::METHOD_QUEUE_COMPLETION_V2, params).await
+}
+
+pub async fn call_queue_release_pending_v2(
+    project_root: &Path,
+    request: &queue_proto::QueueReleasePendingV2Request,
+) -> Result<Option<queue_proto::QueueLeaseMutationResponse>> {
+    let params = Some(serde_json::to_value(request).context("failed to encode QueueReleasePendingV2Request")?);
+    queue_call_v2(project_root, queue_proto::METHOD_QUEUE_RELEASE_PENDING_V2, params).await
 }
 
 /// `queue/lease` — atomically claim up to `max` pending entries and transition

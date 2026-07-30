@@ -52,6 +52,7 @@ fn write_combined_config(
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     });
     config.workflows.push(orchestrator_core::WorkflowDefinition {
         id: "webhook-flow".to_string(),
@@ -63,6 +64,7 @@ fn write_combined_config(
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     });
 
     config.schedules.push(orchestrator_core::WorkflowSchedule {

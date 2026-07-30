@@ -38,6 +38,7 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         },
         WorkflowDefinition {
             id: "ui-ux-standard".to_string(),
@@ -57,6 +58,7 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         },
     ];
     config
@@ -785,6 +787,7 @@ fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinitio
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     }
 }
 
@@ -1025,6 +1028,7 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     });
 
     let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
@@ -1070,6 +1074,7 @@ fn validate_rejects_circular_sub_pipeline() {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         },
         WorkflowDefinition {
             id: "review".into(),
@@ -1081,6 +1086,7 @@ fn validate_rejects_circular_sub_pipeline() {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         },
     ];
 
@@ -2350,6 +2356,7 @@ fn pipeline_variables_not_serialized_when_empty() {
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     };
     let json = serde_json::to_value(&workflow).expect("serialize");
     let obj = json.as_object().expect("json object");
@@ -2924,6 +2931,7 @@ fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     });
     config.secrets.insert(
         "linear".to_string(),
@@ -3137,6 +3145,7 @@ fn validation_surfaces_malformed_trigger_configs() {
         budget: None,
         environment: None,
         workspace: None,
+        publication: None,
     });
     config.triggers.push(WorkflowTrigger {
         id: "bad-webhook".to_string(),
@@ -3249,6 +3258,7 @@ fn workflow_with_budget(id: &str, budget: BudgetConfig) -> WorkflowDefinition {
         budget: Some(budget),
         environment: None,
         workspace: None,
+        publication: None,
     }
 }
 

@@ -1272,13 +1272,13 @@ mod tests {
         );
     }
 
-    /// Project-scoped plugin configuration is the first discovery tier used at
-    /// daemon boot. Keep the health reconciliation on that same path so a
-    /// consolidated backend configured only for one project is not mistaken
-    /// for a missing subject backend.
+    /// Daemon health uses the server-safe discovery surface, which must not
+    /// execute a repository-shipped `.animus/plugins.yaml` binary. A backend
+    /// configured only inside the project therefore remains intentionally
+    /// unroutable until an operator installs it into the trusted global tier.
     #[cfg(unix)]
     #[test]
-    fn subject_router_not_degraded_for_project_scoped_consolidated_backend() {
+    fn subject_router_degraded_for_project_scoped_backend_in_server_safe_discovery() {
         use std::os::unix::fs::PermissionsExt;
         let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1313,7 +1313,10 @@ mod tests {
 
         let _env = isolate_discovery_env(&config_dir, &plugin_dir);
         let reason = subject_router_degraded_reason(&project_root);
-        assert!(reason.is_none(), "project-scoped consolidated subject backend must be routable, got: {reason:?}");
+        assert!(
+            reason.as_deref().is_some_and(|value| value.contains("no executable subject-backend plugin")),
+            "server-safe discovery must ignore a repo-shipped project registry, got: {reason:?}"
+        );
     }
 
     /// A project with no subject_backend plugins at all must produce a degraded

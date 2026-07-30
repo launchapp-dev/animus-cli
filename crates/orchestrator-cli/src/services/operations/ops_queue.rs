@@ -4,6 +4,7 @@ pub(crate) use control_routing::build_queue_routing;
 
 use std::sync::Arc;
 
+use animus_execution_protocol::RepositoryReservation;
 use anyhow::{Context, Result};
 use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub};
 use protocol::{SubjectDispatch, SubjectDispatchExt};
@@ -69,19 +70,128 @@ async fn resolve_enqueue_dispatch_for_subject_id(
     subject_id: &str,
     workflow_ref: Option<String>,
     input: Option<serde_json::Value>,
-) -> Result<SubjectDispatch> {
+) -> Result<(SubjectDispatch, serde_json::Value)> {
     let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
     let subject_ref = resolve_subject_id_ref(subject_id, &probe).await?;
+    let subject_record = probe.subject_record(&subject_ref).await?;
     let workflow_ref = workflow_ref.unwrap_or_else(|| {
         load_workflow_config_or_default(std::path::Path::new(project_root)).config.default_workflow_ref
     });
-    Ok(SubjectDispatch::for_subject_with_metadata(
-        subject_ref,
-        workflow_ref,
-        "manual-queue-enqueue",
-        chrono::Utc::now(),
-    )
-    .with_input(input))
+    Ok((
+        SubjectDispatch::for_subject_with_metadata(
+            subject_ref,
+            workflow_ref,
+            "manual-queue-enqueue",
+            chrono::Utc::now(),
+        )
+        .with_input(input),
+        subject_record,
+    ))
+}
+
+fn record_string_field(record: &serde_json::Value, names: &[&str]) -> Option<String> {
+    let record = record.get("subject").unwrap_or(record);
+    [
+        record.get("data").and_then(serde_json::Value::as_object),
+        record.get("attributes").and_then(serde_json::Value::as_object),
+        record.get("custom").and_then(serde_json::Value::as_object),
+        record.as_object(),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|bag| {
+        bag.iter().find_map(|(key, value)| {
+            names
+                .iter()
+                .any(|name| key.eq_ignore_ascii_case(name))
+                .then(|| value.as_str().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string))
+                .flatten()
+        })
+    })
+}
+
+fn dispatch_string_field(dispatch: &SubjectDispatch, names: &[&str]) -> Option<String> {
+    dispatch.vars.iter().find_map(|(key, value)| {
+        (names.iter().any(|name| key.eq_ignore_ascii_case(name)) && !value.trim().is_empty())
+            .then(|| value.trim().to_string())
+    })
+}
+
+fn canonical_head_ref(value: &str, field: &str) -> Result<String> {
+    let value = value.trim();
+    let value = value.strip_prefix("origin/").unwrap_or(value);
+    let qualified = if value.starts_with("refs/heads/") {
+        value.to_string()
+    } else if value.starts_with("refs/") {
+        return Err(invalid_input_error(format!("{field} must name a mutable branch (refs/heads/*), got '{value}'")));
+    } else {
+        format!("refs/heads/{value}")
+    };
+    if qualified.contains("..")
+        || qualified.ends_with('/')
+        || qualified.chars().any(|character| character.is_whitespace() || "~^:?*[\\".contains(character))
+    {
+        return Err(invalid_input_error(format!("{field} is not a valid git branch ref: '{value}'")));
+    }
+    Ok(qualified)
+}
+
+fn default_subject_head_ref(dispatch: &SubjectDispatch) -> Result<String> {
+    let subject = dispatch.subject().context("repository reservation requires a subject")?;
+    let native_id = subject.id().split_once(':').map_or(subject.id(), |(_, native)| native);
+    let component: String =
+        native_id
+            .trim()
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+    anyhow::ensure!(!component.is_empty(), "subject id cannot produce an owned git branch");
+    Ok(format!("refs/heads/animus/{component}"))
+}
+
+fn repository_reservation_from_dispatch(
+    dispatch: &SubjectDispatch,
+    subject_record: Option<&serde_json::Value>,
+) -> Result<Option<RepositoryReservation>> {
+    let field = |names: &[&str]| {
+        dispatch_string_field(dispatch, names)
+            .or_else(|| subject_record.and_then(|record| record_string_field(record, names)))
+    };
+    // `git_repo` is the explicit coding marker used by Portal task subjects.
+    // Do not infer coding ownership from a generic `repository` field: other
+    // subject kinds may use that word as descriptive metadata.
+    let repository = field(&["git_repo"]);
+    let base_ref = field(&["base_ref", "git_ref"]);
+    let head_ref = field(&["head_ref", "branch", "branch_name"]);
+
+    let Some(repository) = repository else {
+        anyhow::ensure!(
+            base_ref.is_none() && head_ref.is_none(),
+            "subject declares git_ref/head_ref without git_repo; set git_repo or remove the git fields"
+        );
+        return Ok(None);
+    };
+    let base_ref = base_ref.ok_or_else(|| {
+        invalid_input_error(
+            "coding subject declares git_repo but no git_ref/base_ref; set the immutable base branch before enqueue",
+        )
+    })?;
+    let reservation = RepositoryReservation {
+        repository,
+        base_ref: canonical_head_ref(&base_ref, "git_ref/base_ref")?,
+        head_ref: match head_ref {
+            Some(head_ref) => canonical_head_ref(&head_ref, "head_ref/branch")?,
+            None => default_subject_head_ref(dispatch)?,
+        },
+    };
+    reservation.validate().map_err(invalid_input_error)?;
+    Ok(Some(reservation))
 }
 
 /// Reserved key under which a spawning chat conversation's id is stamped into a
@@ -164,19 +274,22 @@ pub(crate) async fn queue_enqueue_application(
     project_root: &str,
 ) -> Result<serde_json::Value> {
     inject_conversation_id_from_env(&mut request.input);
-    let dispatch = if let Some(subject_id) = request.subject_id.as_deref() {
+    let (dispatch, subject_record) = if let Some(subject_id) = request.subject_id.as_deref() {
         resolve_enqueue_dispatch_for_subject_id(project_root, subject_id, request.workflow_ref.clone(), request.input)
             .await?
     } else {
-        resolve_enqueue_dispatch(
-            project_root,
-            request.title,
-            request.description,
-            request.workflow_ref,
-            request.input,
-            request.adhoc,
+        (
+            resolve_enqueue_dispatch(
+                project_root,
+                request.title,
+                request.description,
+                request.workflow_ref,
+                request.input,
+                request.adhoc,
+            )
+            .await?,
+            serde_json::Value::Null,
         )
-        .await?
     };
     let run_at = request.run_at.as_deref().map(resolve_run_at).transpose()?;
     if request.expire_after_secs.is_some() && run_at.is_none() {
@@ -190,13 +303,17 @@ pub(crate) async fn queue_enqueue_application(
     let dispatch_value = serde_json::to_value(&dispatch).context("encoding subject_dispatch for queue plugin")?;
     let plugin_dispatch = serde_json::from_value(dispatch_value)
         .context("subject_dispatch shape drift vs animus_subject_protocol v0.5")?;
-    let plugin_request = animus_queue_protocol::QueueEnqueueRequest {
+    let repository =
+        repository_reservation_from_dispatch(&dispatch, (!subject_record.is_null()).then_some(&subject_record))?;
+    let plugin_request = animus_queue_protocol::QueueEnqueueV2Request {
         subject_dispatch: plugin_dispatch,
+        idempotency_key: None,
+        repository,
         run_at: run_at.clone(),
         expire_after_secs: request.expire_after_secs,
     };
     let plugin_response =
-        crate::services::plugin_clients::call_queue_enqueue(std::path::Path::new(project_root), &plugin_request)
+        crate::services::plugin_clients::call_queue_enqueue_v2(std::path::Path::new(project_root), &plugin_request)
             .await?
             .ok_or_else(|| queue_plugin_required("enqueue"))?;
     if plugin_response.enqueued {
@@ -206,7 +323,8 @@ pub(crate) async fn queue_enqueue_application(
     Ok(serde_json::json!({
         "enqueued": plugin_response.enqueued,
         "entry_id": plugin_response.entry_id,
-        "subject_id": plugin_response.subject_id,
+        "subject_id": plugin_response.subject.qualified_id,
+        "subject_generation": plugin_response.subject.generation,
         "run_at": run_at,
         "expire_after_secs": request.expire_after_secs,
         "warning": plugin_response.warning,
@@ -794,6 +912,43 @@ mod tests {
             details.pointer("/remediation/install_command").and_then(serde_json::Value::as_str),
             Some("animus plugin install-defaults")
         );
+    }
+
+    #[test]
+    fn repository_reservation_is_derived_from_subject_custom_fields() {
+        let dispatch = SubjectDispatch::for_task("task:TASK-1175", "standard");
+        let record = serde_json::json!({
+            "subject": {
+                "custom": {
+                    "git_repo": "https://github.com/launchapp-dev/animus-cli.git",
+                    "git_ref": "main"
+                }
+            }
+        });
+        let reservation = repository_reservation_from_dispatch(&dispatch, Some(&record))
+            .expect("valid reservation")
+            .expect("coding subject");
+        assert_eq!(reservation.repository, "https://github.com/launchapp-dev/animus-cli.git");
+        assert_eq!(reservation.base_ref, "refs/heads/main");
+        assert_eq!(reservation.head_ref, "refs/heads/animus/TASK-1175");
+    }
+
+    #[test]
+    fn repository_reservation_requires_explicit_base_ref() {
+        let dispatch = SubjectDispatch::for_task("task:TASK-1175", "standard");
+        let record = serde_json::json!({
+            "custom": { "git_repo": "https://github.com/launchapp-dev/animus-cli.git" }
+        });
+        let error = repository_reservation_from_dispatch(&dispatch, Some(&record))
+            .expect_err("coding enqueue without base must fail closed");
+        assert!(error.to_string().contains("git_ref/base_ref"));
+    }
+
+    #[test]
+    fn non_code_subject_has_no_repository_reservation() {
+        let dispatch = SubjectDispatch::for_requirement("requirement:REQUIREMENT-076", "audit", "manual-queue-enqueue");
+        let record = serde_json::json!({ "custom": { "channel": "stability" } });
+        assert!(repository_reservation_from_dispatch(&dispatch, Some(&record)).unwrap().is_none());
     }
 
     #[tokio::test]

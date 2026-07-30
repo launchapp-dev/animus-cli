@@ -203,6 +203,7 @@ struct Inner {
     /// run_id -> spawn-time context (project_root + expected environment id).
     pending: StdMutex<HashMap<String, PendingContext>>,
     client_resolver: Arc<ClientResolver>,
+    coding_scheduler: Option<crate::CodingScheduler>,
     /// The socket acceptor task; aborted + socket unlinked on drop.
     acceptor: StdMutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -236,8 +237,16 @@ impl EnvironmentBroker {
     /// resident [`EnvironmentClient`] the broker drives spawns its warm plugin
     /// host onto THIS runtime and is pinned there for the run's lifetime.
     pub async fn start(project_root: &str) -> std::io::Result<Self> {
+        Self::start_with_scheduler(project_root, None).await
+    }
+
+    pub async fn start_with_scheduler(
+        project_root: &str,
+        coding_scheduler: Option<crate::CodingScheduler>,
+    ) -> std::io::Result<Self> {
         Self::start_with_resolver(
             project_root,
+            coding_scheduler,
             Arc::new(|project_root, environment_id| {
                 Ok(Arc::new(EnvironmentClient::resolve(project_root, environment_id)?))
             }),
@@ -245,7 +254,11 @@ impl EnvironmentBroker {
         .await
     }
 
-    async fn start_with_resolver(project_root: &str, client_resolver: Arc<ClientResolver>) -> std::io::Result<Self> {
+    async fn start_with_resolver(
+        project_root: &str,
+        coding_scheduler: Option<crate::CodingScheduler>,
+        client_resolver: Arc<ClientResolver>,
+    ) -> std::io::Result<Self> {
         let records_dir = broker_records_dir(project_root);
         std::fs::create_dir_all(&records_dir)?;
         let socket_path = broker_socket_path(&records_dir);
@@ -262,6 +275,7 @@ impl EnvironmentBroker {
             key_locks: StdMutex::new(HashMap::new()),
             pending: StdMutex::new(HashMap::new()),
             client_resolver,
+            coding_scheduler,
             acceptor: StdMutex::new(None),
         });
 
@@ -307,6 +321,29 @@ impl EnvironmentBroker {
             .await
             .get(run_id)
             .is_some_and(|lease| lease.environment_id == environment_id && lease.handle == *handle)
+    }
+
+    /// Prove that `execution` is still the exact current scheduler fence for
+    /// `run_id`. A stale runner must fail this check after lease recovery and
+    /// therefore cannot tear down the replacement generation's node.
+    pub fn owns_coding_execution(&self, run_id: &str, execution: &animus_execution_protocol::ExecutionFence) -> bool {
+        self.inner
+            .coding_scheduler
+            .as_ref()
+            .is_none_or(|scheduler| execution.workflow_id == run_id && scheduler.owns(execution).unwrap_or(false))
+    }
+
+    pub fn mark_coding_runner_active(&self, execution: &animus_execution_protocol::ExecutionFence, active: bool) {
+        if let Some(scheduler) = self.inner.coding_scheduler.as_ref() {
+            if let Err(error) = scheduler.mark_runner_active(execution, active) {
+                tracing::warn!(
+                    target: "animus.runtime.environment_broker",
+                    workflow_id = %execution.workflow_id,
+                    %error,
+                    "failed to update exact coding runner projection"
+                );
+            }
+        }
     }
 
     #[cfg(test)]
@@ -390,18 +427,28 @@ impl EnvironmentBroker {
             // Every phase gets its own checkpoint. Reusing an existing
             // workflow lease must bind the current Running phase too, or a
             // second restart after the phase boundary cannot prove ownership.
+            self.bind_coding_resources(run_id, environment_id, &handle, &spec)?;
             bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
                 .with_context(|| format!("persisting reused phase environment binding for run {run_id}"))?;
             return Ok((handle.workspace_root.clone(), handle.id.clone()));
         }
 
-        // Slow path: prepare the node ONCE. Record BEFORE prepare so a crash
-        // mid-prepare still leaves a durable marker for the startup reaper.
-        self.write_record_required(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None)
-            .with_context(|| format!("persisting preparing lease for run {run_id}"))?;
-
         let mut spec = spec;
         set_run_id_metadata(&mut spec, run_id);
+        // Preserve the real allocation request across prepare. Its repo/ref and
+        // provider metadata must be fenced before the node reaches the runner.
+        let allocated_resources = spec.clone();
+
+        // Fence every identity known from the request before asking a provider
+        // to allocate anything. In particular, two runs targeting the same
+        // repository ref/branch/PR must not both reach `prepare`: doing the
+        // collision check afterwards can create a duplicate remote node.
+        self.bind_requested_coding_resources(run_id, &allocated_resources)?;
+
+        // Record BEFORE prepare so a crash mid-prepare still leaves a durable
+        // marker for the startup reaper.
+        self.write_record_required(run_id, environment_id, &pending.project_root, LeaseState::Preparing, None)
+            .with_context(|| format!("persisting preparing lease for run {run_id}"))?;
 
         let project_root = pending.project_root.clone();
         let environment_id_owned = environment_id.to_string();
@@ -437,13 +484,32 @@ impl EnvironmentBroker {
                         )
                     });
                 }
+                // Fence the exact provider allocation before publishing it in
+                // the Running checkpoint. Startup treats that checkpoint as a
+                // resume claim, so making it visible first could crash with a
+                // live node that the scheduler cannot prove it owns.
+                if let Err(error) = self.bind_coding_resources(run_id, environment_id, &handle, &allocated_resources) {
+                    let cleanup = client.teardown(&handle).err();
+                    if cleanup.is_none() {
+                        self.delete_record(run_id);
+                    }
+                    return Err(error).with_context(|| {
+                        format!(
+                            "binding prepared node to coding lease for run {run_id}; prepared node cleanup: {}",
+                            cleanup
+                                .map(|error| format!("failed: {error:#}"))
+                                .unwrap_or_else(|| "succeeded".to_string())
+                        )
+                    });
+                }
                 if let Err(error) =
                     bind_running_phase_checkpoint(&pending.project_root, run_id, environment_id, &handle)
                 {
-                    // The lease record is sufficient for cold reaping, but
-                    // restart resume and liveness reconciliation use the phase
-                    // checkpoint as their recovery oracle. Never let the
-                    // runner execute until that binding is durable too.
+                    // The lease record and fenced scheduler allocation are
+                    // sufficient for cold reaping, but restart resume and
+                    // liveness reconciliation use the phase checkpoint as
+                    // their recovery oracle. Never let the runner execute
+                    // until that binding is durable too.
                     let cleanup = client.teardown(&handle).err();
                     if cleanup.is_none() {
                         self.delete_record(run_id);
@@ -475,6 +541,90 @@ impl EnvironmentBroker {
                 self.write_record(run_id, environment_id, &pending.project_root, LeaseState::Failed, None);
                 self.delete_record(run_id);
                 Err(error)
+            }
+        }
+    }
+
+    fn bind_coding_resources(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        handle: &EnvironmentHandle,
+        spec: &EnvironmentSpec,
+    ) -> Result<()> {
+        self.bind_requested_coding_resources(run_id, spec)?;
+        self.bind_provider_coding_resources(run_id, environment_id, handle)
+    }
+
+    fn bind_requested_coding_resources(&self, run_id: &str, spec: &EnvironmentSpec) -> Result<()> {
+        let Some(scheduler) = self.inner.coding_scheduler.as_ref() else {
+            return Ok(());
+        };
+        let lease = self.coding_lease_for_workflow(scheduler, run_id)?;
+        let mut resources = lease.resources.clone();
+        if let Some(primary) = spec.repos.iter().find(|repo| repo.primary).or_else(|| spec.repos.first()) {
+            if !primary.url.trim().is_empty() {
+                resources.repository = primary.url.clone();
+            }
+            if primary.git_ref.as_ref().is_some_and(|git_ref| !git_ref.trim().is_empty()) {
+                resources.git_ref = primary.git_ref.clone();
+            }
+        }
+        resources.branch = allocation_string(&spec.metadata, &["branch", "head_branch"]).or(resources.branch);
+        resources.pull_request =
+            allocation_string(&spec.metadata, &["pull_request", "pull_request_url", "pr_url", "pr_number"])
+                .or(resources.pull_request);
+        self.bind_coding_lease(scheduler, run_id, &lease, resources)
+    }
+
+    fn bind_provider_coding_resources(
+        &self,
+        run_id: &str,
+        environment_id: &str,
+        handle: &EnvironmentHandle,
+    ) -> Result<()> {
+        let Some(scheduler) = self.inner.coding_scheduler.as_ref() else {
+            return Ok(());
+        };
+        let lease = self.coding_lease_for_workflow(scheduler, run_id)?;
+        let mut resources = lease.resources.clone();
+        // A workspace root is a mount path inside the allocated environment,
+        // not an allocation identity. Different nodes commonly expose the
+        // same path (for example `/workspace`), so include the provider and
+        // provider-issued handle id to keep independent allocations distinct.
+        resources.workspace_id = Some(format!("{environment_id}:{}:{}", handle.id, handle.workspace_root));
+        resources.environment_id = Some(format!("{environment_id}:{}", handle.id));
+        resources.branch = allocation_string(&handle.metadata, &["branch", "head_branch"]).or(resources.branch);
+        resources.pull_request =
+            allocation_string(&handle.metadata, &["pull_request", "pull_request_url", "pr_url", "pr_number"])
+                .or(resources.pull_request);
+        self.bind_coding_lease(scheduler, run_id, &lease, resources)
+    }
+
+    fn coding_lease_for_workflow(
+        &self,
+        scheduler: &crate::CodingScheduler,
+        run_id: &str,
+    ) -> Result<crate::CodingLease> {
+        scheduler
+            .status()?
+            .reservations
+            .into_iter()
+            .find(|lease| lease.resources.workflow_id == run_id)
+            .ok_or_else(|| anyhow!("no coding lease owns workflow {run_id}"))
+    }
+
+    fn bind_coding_lease(
+        &self,
+        scheduler: &crate::CodingScheduler,
+        run_id: &str,
+        lease: &crate::CodingLease,
+        resources: crate::CodingRunResources,
+    ) -> Result<()> {
+        match scheduler.bind_resources(&lease.execution, resources)? {
+            crate::ReservationOutcome::Reserved { .. } => Ok(()),
+            crate::ReservationOutcome::Rejected { reason } => {
+                bail!("coding resource collision for workflow {run_id}: {reason:?}")
             }
         }
     }
@@ -598,7 +748,7 @@ impl EnvironmentBroker {
             // node. Preserve it until startup reconciliation can probe/resume
             // it; otherwise broker startup destroys the node before TASK-933
             // recovery runs. Unclaimed records retain the cold-reap behavior.
-            if prior_record_is_claimed_for_resume(&record) {
+            if prior_record_is_claimed_for_resume(&record, self.inner.coding_scheduler.as_ref()) {
                 let Some(handle) = record.handle.clone() else {
                     continue;
                 };
@@ -717,7 +867,7 @@ fn bind_running_phase_checkpoint(
     .context("writing delegated environment binding")
 }
 
-fn prior_record_is_claimed_for_resume(record: &LeaseRecord) -> bool {
+fn prior_record_is_claimed_for_resume(record: &LeaseRecord, coding_scheduler: Option<&crate::CodingScheduler>) -> bool {
     // Only a fully prepared lease can be resumed. In particular, preserving a
     // TearingDown record would allow already-completed coding work to be
     // reattached after restart instead of letting startup finish reaping it.
@@ -730,6 +880,27 @@ fn prior_record_is_claimed_for_resume(record: &LeaseRecord) -> bool {
     let Some(scoped_root) = protocol::repository_scope::scoped_state_root(Path::new(&record.project_root)) else {
         return false;
     };
+    // Scheduler reconciliation runs before the broker starts. When scheduling
+    // is enabled, the checkpoint alone is deliberately not authority to
+    // re-adopt a node: DeadNode reconciliation clears allocation identities
+    // and Terminal reconciliation releases the lease, while both may leave a
+    // Running checkpoint on disk until the existing recovery path finishes.
+    // Require the surviving workflow lease to name this exact provider handle
+    // (and workspace) so only RetainedLiveNode can be adopted.
+    if let Some(scheduler) = coding_scheduler {
+        let expected_environment = format!("{}:{}", record.environment_id, handle.id);
+        let expected_workspace = format!("{}:{}:{}", record.environment_id, handle.id, handle.workspace_root);
+        let scheduler_claims_exact_node = scheduler.status().ok().is_some_and(|status| {
+            status.reservations.into_iter().any(|lease| {
+                lease.resources.workflow_id == record.run_id
+                    && lease.resources.environment_id.as_deref() == Some(expected_environment.as_str())
+                    && lease.resources.workspace_id.as_deref() == Some(expected_workspace.as_str())
+            })
+        });
+        if !scheduler_claims_exact_node {
+            return false;
+        }
+    }
     animus_runtime_shared::phase_session::list_running_checkpoints(&scoped_root).ok().into_iter().flatten().any(
         |(_, checkpoint)| {
             checkpoint.workflow_id == record.run_id
@@ -934,6 +1105,20 @@ fn set_run_id_metadata(spec: &mut EnvironmentSpec, run_id: &str) {
     }
 }
 
+/// Normalize allocation identities emitted by environment providers. PR
+/// numbers are often JSON numbers while branches and URLs are strings.
+fn allocation_string(metadata: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        let value = metadata.get(*key)?;
+        let normalized = match value {
+            serde_json::Value::String(value) => value.trim().to_string(),
+            serde_json::Value::Number(value) => value.to_string(),
+            _ => return None,
+        };
+        (!normalized.is_empty()).then_some(normalized)
+    })
+}
+
 /// Directory holding the broker's durable records and (length permitting) its
 /// socket. Scoped state root when resolvable; a `$TMPDIR` fallback otherwise
 /// (tests / non-git contexts) so the broker still works without cross-restart
@@ -988,7 +1173,47 @@ fn write_record_atomic(path: &Path, record: &LeaseRecord) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use animus_execution_protocol::{
+        ExecutionFence, QueueLeaseFence, RepositoryReservation, SubjectGeneration, EXECUTION_FENCE_SCHEMA_ID,
+        EXECUTION_FENCE_VERSION,
+    };
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn track_coding_lease(
+        scheduler: &crate::CodingScheduler,
+        task_id: &str,
+        workflow_id: &str,
+        repository: &str,
+        head_ref: Option<&str>,
+    ) -> crate::CodingLease {
+        let head_ref = head_ref.map(str::to_string).unwrap_or_else(|| format!("refs/heads/{workflow_id}"));
+        let execution = ExecutionFence {
+            schema: EXECUTION_FENCE_SCHEMA_ID.to_string(),
+            version: EXECUTION_FENCE_VERSION,
+            workflow_id: workflow_id.to_string(),
+            workflow_generation: 1,
+            subject: Some(SubjectGeneration {
+                qualified_id: if task_id.contains(':') { task_id.to_string() } else { format!("task:{task_id}") },
+                generation: 1,
+            }),
+            queue_lease: Some(QueueLeaseFence {
+                entry_id: format!("queue-{task_id}"),
+                owner_id: "test-daemon".to_string(),
+                generation: 1,
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            }),
+            repository: Some(RepositoryReservation {
+                repository: repository.to_string(),
+                base_ref: "refs/heads/main".to_string(),
+                head_ref,
+            }),
+        };
+        let resources = crate::CodingRunResources::from_execution(&execution).expect("coding resources");
+        match scheduler.track(execution, resources).expect("track coding lease") {
+            crate::ReservationOutcome::Reserved { lease } => *lease,
+            crate::ReservationOutcome::Rejected { reason } => panic!("reservation rejected: {reason:?}"),
+        }
+    }
 
     struct FakeLeaseClient {
         handle: EnvironmentHandle,
@@ -1175,16 +1400,71 @@ mod tests {
             updated_at: "2026-01-01T00:00:01Z".to_string(),
         };
 
-        assert!(prior_record_is_claimed_for_resume(&record));
+        assert!(prior_record_is_claimed_for_resume(&record, None));
         for state in [LeaseState::Preparing, LeaseState::TearingDown, LeaseState::TornDown, LeaseState::Failed] {
             let mut non_ready = record.clone();
             non_ready.state = state;
-            assert!(!prior_record_is_claimed_for_resume(&non_ready), "{state:?} record was claimed");
+            assert!(!prior_record_is_claimed_for_resume(&non_ready, None), "{state:?} record was claimed");
         }
     }
 
+    #[test]
+    fn scheduler_fences_prior_record_adoption_by_exact_allocation_identity() {
+        use crate::{CodingScheduler, ReservationOutcome};
+        use animus_runtime_shared::phase_session::{update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        write_session_pending(&scoped_root, "wf-resume", "implementation", "claude", "agent-run", None)
+            .expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-resume", "implementation").expect("running checkpoint");
+        let handle = EnvironmentHandle {
+            id: "node-resume".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+        bind_running_phase_checkpoint(&project_root, "wf-resume", "railway", &handle).expect("persist broker binding");
+        let record = LeaseRecord {
+            run_id: "wf-resume".to_string(),
+            daemon_instance_id: "prior-daemon".to_string(),
+            environment_id: "railway".to_string(),
+            project_root: project_root.clone(),
+            state: LeaseState::Ready,
+            handle: Some(handle.clone()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:01Z".to_string(),
+        };
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("coding-leases.json"));
+        let lease = track_coding_lease(&scheduler, "task-resume", "wf-resume", &project_root, None);
+
+        assert!(
+            !prior_record_is_claimed_for_resume(&record, Some(&scheduler)),
+            "checkpoint without a bound scheduler allocation must not adopt"
+        );
+        let mut resources = lease.resources.clone();
+        resources.environment_id = Some("railway:node-resume".into());
+        resources.workspace_id = Some("railway:node-resume:/workspace".into());
+        assert!(matches!(
+            scheduler.bind_resources(&lease.execution, resources).expect("bind exact node"),
+            ReservationOutcome::Reserved { .. }
+        ));
+        assert!(
+            prior_record_is_claimed_for_resume(&record, Some(&scheduler)),
+            "retained live node with the exact scheduler allocation must be adopted"
+        );
+
+        scheduler.clear_environment(&lease.execution).expect("clear dead-node allocation");
+        assert!(
+            !prior_record_is_claimed_for_resume(&record, Some(&scheduler)),
+            "dead-node reconciliation clears allocation authority before broker reap"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn restart_adopts_exact_lease_reuses_it_for_next_phase_and_tears_down_once() {
+    async fn crash_after_running_checkpoint_adopts_exact_lease_without_a_second_prepare() {
+        use crate::CodingScheduler;
         use animus_runtime_shared::phase_session::{
             read_checkpoint, update_session_completed, update_session_running, write_session_pending,
         };
@@ -1211,9 +1491,12 @@ mod tests {
             let fake = fake.clone();
             Arc::new(move |_, _| Ok(fake.clone()))
         };
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("coding-leases.json"));
+        let _lease = track_coding_lease(&scheduler, "task-restart", "wf-restart", &project_root, None);
 
-        let first =
-            EnvironmentBroker::start_with_resolver(&project_root, resolver.clone()).await.expect("start first broker");
+        let first = EnvironmentBroker::start_with_resolver(&project_root, Some(scheduler.clone()), resolver.clone())
+            .await
+            .expect("start first broker");
         first.register_run("wf-restart", &project_root, "railway");
         let spec = EnvironmentSpec {
             kind: "railway".to_string(),
@@ -1227,13 +1510,30 @@ mod tests {
         assert_eq!(first_handle, "node-h1");
         assert_eq!(fake.prepares.load(Ordering::SeqCst), 1);
 
-        // Simulate daemon replacement without terminal cleanup: the durable
-        // Ready record + Running checkpoint remain, while the old broker socket
-        // disappears with its process.
+        // This is the acquire crash boundary: once the Running checkpoint is
+        // visible, the scheduler must already fence the exact provider handle.
+        let first_checkpoint = read_checkpoint(&scoped_root, "wf-restart", "code-implement")
+            .expect("read first checkpoint")
+            .expect("first checkpoint exists");
+        assert_eq!(first_checkpoint.environment.expect("visible running binding").handle, fake.handle);
+        let fenced = scheduler
+            .status()
+            .expect("scheduler status")
+            .reservations
+            .into_iter()
+            .find(|lease| lease.resources.workflow_id == "wf-restart")
+            .expect("workflow reservation");
+        assert_eq!(fenced.resources.environment_id.as_deref(), Some("railway:node-h1"));
+        assert_eq!(fenced.resources.workspace_id.as_deref(), Some("railway:node-h1:/workspace"));
+
+        // Crash immediately after observing that checkpoint, without terminal
+        // cleanup. The durable Ready record, fenced allocation, and checkpoint
+        // remain while the old broker process disappears.
         first.stop_acceptor_for_restart_test();
         drop(first);
-        let replacement =
-            EnvironmentBroker::start_with_resolver(&project_root, resolver).await.expect("start replacement broker");
+        let replacement = EnvironmentBroker::start_with_resolver(&project_root, Some(scheduler), resolver)
+            .await
+            .expect("start replacement broker");
         assert!(
             replacement.owns_ready_lease("wf-restart", "railway", &fake.handle).await,
             "replacement daemon adopts the exact persisted handle"
@@ -1318,5 +1618,140 @@ mod tests {
         };
         let err = broker.acquire("wf-1", "container", spec).await.expect_err("must reject mismatch");
         assert!(err.to_string().contains("is bound to environment 'railway'"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn duplicate_repository_head_is_rejected_before_environment_prepare() {
+        use crate::CodingScheduler;
+        use animus_runtime_shared::phase_session::{update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("coding-leases.json"));
+        let first = track_coding_lease(&scheduler, "task-a", "wf-a", &project_root, Some("refs/heads/animus/shared"));
+        write_session_pending(&scoped_root, "wf-a", "code", "codex", "task-a", None).expect("pending checkpoint");
+        update_session_running(&scoped_root, "wf-a", "code").expect("running checkpoint");
+
+        let mut second_execution = first.execution.clone();
+        second_execution.workflow_id = "wf-b".into();
+        second_execution.subject.as_mut().expect("subject fence").qualified_id = "task:task-b".into();
+        second_execution.queue_lease.as_mut().expect("queue fence").entry_id = "queue-task-b".into();
+        let second_resources = crate::CodingRunResources::from_execution(&second_execution).expect("coding resources");
+        let rejection = scheduler.track(second_execution, second_resources).expect("evaluate duplicate reservation");
+        assert!(
+            matches!(
+                &rejection,
+                crate::ReservationOutcome::Rejected { reason: crate::CollisionReason::RepositoryRef { .. } }
+            ),
+            "duplicate repository/head must be rejected at admission: {rejection:?}"
+        );
+
+        let fake = Arc::new(FakeLeaseClient {
+            handle: EnvironmentHandle {
+                id: "shared-node".into(),
+                workspace_root: "/workspace/shared".into(),
+                metadata: json!({
+                    "branch": "animus/shared",
+                    "pull_request_url": "https://example.test/pull/7"
+                }),
+            },
+            prepares: AtomicUsize::new(0),
+            execs: AtomicUsize::new(0),
+            teardowns: AtomicUsize::new(0),
+        });
+        let resolver: Arc<ClientResolver> = {
+            let fake = fake.clone();
+            Arc::new(move |_, _| Ok(fake.clone()))
+        };
+        let broker = EnvironmentBroker::start_with_resolver(&project_root, Some(scheduler.clone()), resolver)
+            .await
+            .expect("start broker");
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 0, "admission rejection must not allocate a node");
+        let spec = EnvironmentSpec {
+            kind: "railway".into(),
+            repos: vec![orchestrator_core::environment::RepoRef {
+                url: project_root.clone(),
+                name: None,
+                git_ref: Some("refs/heads/animus/shared".into()),
+                primary: true,
+            }],
+            image: None,
+            resources: None,
+            env: std::collections::BTreeMap::new(),
+            metadata: json!({
+                "branch": "animus/shared",
+                "pull_request_url": "https://example.test/pull/7"
+            }),
+        };
+
+        broker.register_run("wf-a", &project_root, "railway");
+        broker.acquire("wf-a", "railway", spec.clone()).await.expect("first allocation");
+
+        assert_eq!(fake.prepares.load(Ordering::SeqCst), 1, "only the admitted allocation may reach prepare");
+        assert_eq!(fake.teardowns.load(Ordering::SeqCst), 0, "no rejected allocation exists to tear down");
+        assert!(!broker.inner.leases.lock().await.contains_key("wf-b"), "rejected node must not be retained");
+        let reservations = scheduler.status().expect("scheduler status").reservations;
+        assert_eq!(reservations.len(), 1, "only the first generation may retain a reservation");
+        let first = reservations.iter().find(|lease| lease.resources.workflow_id == "wf-a").expect("first lease");
+        assert_eq!(first.resources.branch.as_deref(), Some("animus/shared"));
+        assert_eq!(first.resources.pull_request.as_deref(), Some("https://example.test/pull/7"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn distinct_nodes_with_the_same_mount_path_bind_concurrently() {
+        use crate::CodingScheduler;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scheduler = CodingScheduler::with_state_path(temp.path().join("coding-leases.json"));
+        for (task, workflow, head_ref) in
+            [("task-a", "wf-a", "refs/heads/animus/a"), ("task-b", "wf-b", "refs/heads/animus/b")]
+        {
+            let _lease = track_coding_lease(&scheduler, task, workflow, &project_root, Some(head_ref));
+        }
+
+        let broker = EnvironmentBroker::start_with_resolver(
+            &project_root,
+            Some(scheduler.clone()),
+            Arc::new(|_, _| unreachable!("binding resources does not resolve a client")),
+        )
+        .await
+        .expect("start broker");
+        for (workflow, handle_id, git_ref, branch) in [
+            ("wf-a", "node-a", "refs/heads/animus/a", "animus/a"),
+            ("wf-b", "node-b", "refs/heads/animus/b", "animus/b"),
+        ] {
+            let handle = EnvironmentHandle {
+                id: handle_id.into(),
+                workspace_root: "/workspace/shared".into(),
+                metadata: serde_json::Value::Null,
+            };
+            let spec = EnvironmentSpec {
+                kind: "railway".into(),
+                repos: vec![orchestrator_core::environment::RepoRef {
+                    url: project_root.clone(),
+                    name: None,
+                    git_ref: Some(git_ref.into()),
+                    primary: true,
+                }],
+                image: None,
+                resources: None,
+                env: std::collections::BTreeMap::new(),
+                metadata: json!({ "branch": branch }),
+            };
+            broker.bind_coding_resources(workflow, "railway", &handle, &spec).expect("distinct node must bind");
+        }
+
+        let reservations = scheduler.status().expect("scheduler status").reservations;
+        assert_eq!(reservations.len(), 2, "both reservations must remain");
+        for (workflow, handle_id, branch) in [("wf-a", "node-a", "animus/a"), ("wf-b", "node-b", "animus/b")] {
+            let lease =
+                reservations.iter().find(|lease| lease.resources.workflow_id == workflow).expect("bound reservation");
+            let expected_workspace_id = format!("railway:{handle_id}:/workspace/shared");
+            assert_eq!(lease.resources.workspace_id.as_deref(), Some(expected_workspace_id.as_str()));
+            assert_eq!(lease.resources.branch.as_deref(), Some(branch));
+        }
     }
 }

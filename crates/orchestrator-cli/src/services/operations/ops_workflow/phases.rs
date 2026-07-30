@@ -115,6 +115,7 @@ pub(crate) fn workflow_execute_request_for_existing(
     };
     workflow_proto::WorkflowExecuteRequest {
         workflow_id: Some(workflow.id.clone()),
+        execution_fence: workflow.execution_fence.clone(),
         subject_dispatch,
         subject_ref: None,
         task_id: workflow.subject.as_ref().and_then(|s| s.task_id()).map(str::to_string),
@@ -1426,6 +1427,7 @@ workflows:
         // resolution after the CLI already reported the workflow dispatched.
         let workflow = orchestrator_core::OrchestratorWorkflow {
             id: "wf-blog-1".to_string(),
+            execution_fence: None,
             task_id: String::new(),
             workflow_ref: Some("draft-post".to_string()),
             input: None,

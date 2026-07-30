@@ -50,7 +50,8 @@ use serde_json::{json, Value};
 use animus_control_protocol::{
     control_trait::{DaemonEventStream, DaemonLogStream, SubjectWatchStream},
     types::{
-        AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, DaemonAgentsResponse,
+        AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, CodingFleetBlockedReason,
+        CodingFleetReservation, CodingFleetReservationState, CodingFleetStatusResponse, DaemonAgentsResponse,
         DaemonEventsRequest, DaemonHealthResponse, DaemonHealthStatus, DaemonLogEntry, DaemonLogsRequest,
         DaemonRunEvent as WireDaemonRunEvent, DaemonStatusResponse, PluginBrowseRequest, PluginCallRequest,
         PluginCallResponse, PluginHealth, PluginInfo, PluginInfoRequest, PluginInstallRequest, PluginInstallResponse,
@@ -575,6 +576,44 @@ impl ControlSurface for InProcessSurface {
         // (provider health) and per-run output streams. Returning an empty
         // list matches the historical "no addressable agents" shape.
         Ok(DaemonAgentsResponse { agents: Vec::new() })
+    }
+
+    async fn fleet_status(&self) -> Result<CodingFleetStatusResponse, ControlError> {
+        let scheduler = crate::CodingScheduler::for_project(&self.project_root)
+            .map_err(|error| ControlError::Internal(format!("fleet scheduler init: {error}")))?;
+        let status =
+            scheduler.status().map_err(|error| ControlError::Internal(format!("fleet status read: {error}")))?;
+        let now = chrono::Utc::now();
+        let reservations = status
+            .reservations
+            .into_iter()
+            .map(|lease| {
+                let expired = lease.expires_at <= now;
+                let retained = lease.resources.environment_id.is_some();
+                CodingFleetReservation {
+                    execution: lease.execution,
+                    state: if lease.runner_active {
+                        CodingFleetReservationState::Running
+                    } else if expired {
+                        CodingFleetReservationState::Recovering
+                    } else if retained {
+                        CodingFleetReservationState::Retained
+                    } else {
+                        CodingFleetReservationState::Leased
+                    },
+                    environment_handle: lease.resources.environment_id,
+                    blocked_reason: expired.then_some(CodingFleetBlockedReason::LeaseRecoveryRequired),
+                    updated_at: lease.updated_at,
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(CodingFleetStatusResponse {
+            capacity: u32::try_from(status.capacity).unwrap_or(u32::MAX),
+            active: u32::try_from(reservations.len()).unwrap_or(u32::MAX),
+            available: u32::try_from(status.available).unwrap_or(u32::MAX),
+            owner_id: status.owner_id.unwrap_or_else(|| "unassigned".to_string()),
+            reservations,
+        })
     }
 
     async fn daemon_events(&self, _request: DaemonEventsRequest) -> Result<DaemonEventStream, ControlError> {

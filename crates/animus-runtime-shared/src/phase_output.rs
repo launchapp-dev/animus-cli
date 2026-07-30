@@ -827,6 +827,7 @@ mod tests {
         let mut rework_counts = std::collections::HashMap::new();
         rework_counts.insert("code-review".to_string(), 2u32);
         let workflow = orchestrator_core::OrchestratorWorkflow {
+            execution_fence: None,
             id: workflow_id.to_string(),
             task_id: "TASK-1".to_string(),
             workflow_ref: None,

@@ -317,6 +317,7 @@ mod tests {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -347,6 +348,7 @@ mod tests {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -408,6 +410,7 @@ mod tests {
             budget: None,
             environment: None,
             workspace: None,
+            publication: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: "disabled-watcher".to_string(),

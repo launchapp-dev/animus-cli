@@ -47,6 +47,7 @@ use protocol::SubjectDispatch;
 
 use animus_queue_protocol as queue_proto;
 
+use crate::services::operations::subject_id_dispatch::RouterSubjectProbe;
 use crate::services::plugin_clients;
 
 const FORWARD_LOG_TARGET: &str = "animus::control::queue_routing";
@@ -224,8 +225,8 @@ impl QueueRouting for QueueRoutingImpl {
         // engages — mirroring the workflow-run path (ops_workflow). Without this,
         // control-routed enqueue of any plugin-backed subject failed with
         // "task not found", silently breaking the queue trigger over the transports.
-        let (resolved_id, workflow_ref) = match hub.tasks().get(&request.task_id).await {
-            Ok(task) => (task.id.clone(), workflow_ref_for_task(&task)),
+        let (resolved_id, workflow_ref, plugin_backed) = match hub.tasks().get(&request.task_id).await {
+            Ok(task) => (task.id.clone(), workflow_ref_for_task(&task), false),
             Err(in_tree_err) => {
                 // Derive the subject kind from the qualified id prefix
                 // (`<kind>:<native>`) so plugin-backed custom kinds (e.g. a
@@ -239,6 +240,7 @@ impl QueueRouting for QueueRoutingImpl {
                         orchestrator_core::load_workflow_config_or_default(self.project_root_path())
                             .config
                             .default_workflow_ref,
+                        true,
                     ),
                     Err(plugin_err) => {
                         return Err(ControlError::Internal(format!(
@@ -273,12 +275,23 @@ impl QueueRouting for QueueRoutingImpl {
             .map_err(|e| ControlError::Internal(format!("queue routing: SubjectDispatch shape drift: {e}")))?;
         // Control-routed enqueues are always immediate; deferral is a
         // CLI/MCP-only surface (`queue enqueue --at`).
-        let plugin_request = queue_proto::QueueEnqueueRequest {
+        let subject_record = if plugin_backed {
+            let probe = RouterSubjectProbe::discover(self.project_root_path()).await.map_err(internal_err)?;
+            let subject = dispatch.subject.as_ref().expect("control enqueue always has a subject");
+            Some(probe.subject_record(subject).await.map_err(internal_err)?)
+        } else {
+            None
+        };
+        let repository =
+            super::repository_reservation_from_dispatch(&dispatch, subject_record.as_ref()).map_err(internal_err)?;
+        let plugin_request = queue_proto::QueueEnqueueV2Request {
             subject_dispatch: plugin_dispatch,
+            idempotency_key: None,
+            repository,
             run_at: None,
             expire_after_secs: None,
         };
-        let response = plugin_clients::call_queue_enqueue(self.project_root_path(), &plugin_request)
+        let response = plugin_clients::call_queue_enqueue_v2(self.project_root_path(), &plugin_request)
             .await
             .map_err(internal_err)?
             .ok_or_else(|| plugin_missing("enqueue"))?;
@@ -305,7 +318,7 @@ impl QueueRouting for QueueRoutingImpl {
         let priority = priority_label_to_u8(dispatch.priority.as_deref());
         Ok(WireQueueEntry {
             id: response.entry_id,
-            subject_id: SubjectId::new(response.subject_id),
+            subject_id: SubjectId::new(response.subject.qualified_id),
             status: WireQueueEntryStatus::Ready,
             priority,
             enqueued_at: Utc::now(),

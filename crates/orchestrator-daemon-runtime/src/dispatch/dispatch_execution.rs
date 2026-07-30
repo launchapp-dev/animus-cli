@@ -25,9 +25,12 @@ where
         }
 
         let spawn = match planned_start.workflow_id.as_deref() {
-            Some(workflow_id) => {
-                process_manager.spawn_workflow_runner_with_id(&planned_start.dispatch, project_root, workflow_id)
-            }
+            Some(workflow_id) => process_manager.spawn_workflow_runner_with_id_and_fence(
+                &planned_start.dispatch,
+                project_root,
+                workflow_id,
+                planned_start.execution_fence.as_ref(),
+            ),
             None => process_manager.spawn_workflow_runner(&planned_start.dispatch, project_root),
         };
         match spawn {
@@ -86,6 +89,7 @@ mod tests {
         let starts = vec![PlannedDispatchStart {
             dispatch: SubjectDispatch::for_task("TASK-DEFER", "standard"),
             workflow_id: Some("wf-defer".to_string()),
+            execution_fence: None,
             selection_source: DispatchSelectionSource::DispatchQueue,
         }];
         let mut sink = RecordingSink { notices: Vec::new() };
@@ -122,6 +126,7 @@ mod tests {
         let starts = vec![PlannedDispatchStart {
             dispatch: SubjectDispatch::for_task("TASK-FAIL", "standard"),
             workflow_id: Some("wf-fail".to_string()),
+            execution_fence: None,
             selection_source: DispatchSelectionSource::DispatchQueue,
         }];
         let mut sink = RecordingSink { notices: Vec::new() };

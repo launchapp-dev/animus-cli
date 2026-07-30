@@ -1,3 +1,4 @@
+mod coding_scheduler;
 mod daemon_event_log;
 mod daemon_events_poll_response;
 mod daemon_run_event;
@@ -9,6 +10,10 @@ mod plugin_preflight_wiring;
 mod run_daemon;
 mod scheduler_nudge;
 
+pub use coding_scheduler::{
+    CodingLease, CodingRunResources, CodingScheduler, CodingSchedulerService, CodingSchedulerStatus, CollisionReason,
+    ReservationOutcome, TaskGeneration, CODING_SCHEDULER_CAPACITY,
+};
 pub use daemon_event_log::DaemonEventLog;
 pub use daemon_events_poll_response::DaemonEventsPollResponse;
 pub use daemon_run_event::{DaemonRunEvent, DiscoveredPluginSummary};

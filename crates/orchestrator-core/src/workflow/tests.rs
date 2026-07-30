@@ -13,6 +13,7 @@ use std::collections::HashMap;
 fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
     OrchestratorWorkflow {
         id: "WF-test".to_string(),
+        execution_fence: None,
         task_id: "TASK-1".to_string(),
         workflow_ref: Some("standard-workflow".to_string()),
         subject: Some(SubjectRef::task("TASK-1".to_string())),
@@ -387,6 +388,7 @@ fn make_held_join_run(id: &str, upstreams: &[&str]) -> OrchestratorWorkflow {
     .write_into_vars(&mut vars);
     OrchestratorWorkflow {
         id: id.to_string(),
+        execution_fence: None,
         task_id: "TASK-join".to_string(),
         workflow_ref: Some("standard-workflow".to_string()),
         subject: Some(SubjectRef::task("TASK-join".to_string())),
