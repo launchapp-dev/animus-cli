@@ -59,7 +59,10 @@ The index stores KEY names only — every actual value lives in the OS keychain.
 
 Two backends sit behind the same `animus secret` surface. The default is unchanged (OS keyring); the device-encrypted store is opt-in and exists for hosts where the keyring is awkward (a macOS binary whose signature changes re-prompts on every keychain access) or absent (a headless Linux server with no session keyring).
 
-Select per machine in the **global** config (`~/.animus/config.json`, or `$ANIMUS_CONFIG_DIR`):
+Configure this globally in `~/.animus/config.json` (or `$ANIMUS_CONFIG_DIR`),
+or per project in `<project>/.animus/config.json`. Project settings override
+global settings field by field, and are honored by both `animus secret` and MCP
+OAuth operations, including `animus mcp auth --complete`:
 
 ```jsonc
 {
@@ -73,7 +76,10 @@ Select per machine in the **global** config (`~/.animus/config.json`, or `$ANIMU
 
 - **`keyring`** — the OS keychain (macOS Keychain / libsecret / Windows Credential Manager). Default.
 - **`device`** — secrets live AEAD-sealed (ChaCha20-Poly1305) in `~/.animus/<scope>/secrets/secrets.enc.v1` (`0600`). A random master key seals the data and is itself wrapped under a **key source**. No keychain, no prompts, and the file is useless if copied off the device.
-- **`auto`** — keeps existing keyring installs on the keyring (never strands secrets); uses the device store once one exists for the scope.
+- **`auto`** — keeps existing keyring installs on the keyring (never strands
+  secrets); selects the device store when a server key is supplied through
+  `ANIMUS_SECRET_KEY`, `ANIMUS_SECRET_PASSPHRASE`, or `key_file`, and continues
+  using the device store once one exists for the scope.
 
 ### Key sources (what wraps the device store's master key)
 
