@@ -253,8 +253,16 @@ mod tests {
 
         let _key_guard = EnvVarGuard::remove("ANIMUS_SECRET_KEY");
         let store = build_secret_store_at(&project_root, tmp.path().join("state"));
-        let result = store.set("oauth_test", "token");
-        let stored = result.and_then(|()| store.get("oauth_test"));
+        store
+            .set("oauth_test", "token")
+            .expect("OAuth secret write must use the project-configured key file");
+        drop(store);
+
+        // Rebuild the store as the separate `mcp auth --complete` invocation
+        // does. This verifies that config is consulted on every path, not just
+        // that one in-memory store can read back its own write.
+        let reopened = build_secret_store_at(&project_root, tmp.path().join("state"));
+        let stored = reopened.get("oauth_test");
 
         assert_eq!(
             stored.expect("OAuth secret operations must use the project-configured key file").as_deref(),
