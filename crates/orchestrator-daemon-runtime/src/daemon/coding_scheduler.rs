@@ -258,12 +258,12 @@ impl CodingScheduler {
             // prepare and bind a second node while restart reconciliation is
             // still deciding whether the original runner/node survived.
             if state.leases[index].expires_at <= Utc::now() {
-                return ReservationOutcome::Rejected {
-                    reason: CollisionReason::LeaseExpired {
-                        task: task.clone(),
-                        lease_generation,
-                    },
+                let reason = CollisionReason::LeaseExpired {
+                    task: task.clone(),
+                    lease_generation,
                 };
+                state.last_collision = Some(reason.clone());
+                return ReservationOutcome::Rejected { reason };
             }
             let lease = state.leases.remove(index);
             if let Some(reason) = collision(state, task, &resources) {
@@ -826,6 +826,12 @@ mod tests {
                 reason: CollisionReason::LeaseExpired { lease_generation, .. }
             } if lease_generation == lease.lease_generation
         ));
-        assert_eq!(scheduler.status().unwrap().recovery_needed.len(), 1);
+        let status = scheduler.status().unwrap();
+        assert_eq!(status.recovery_needed.len(), 1);
+        assert!(matches!(
+            status.last_collision,
+            Some(CollisionReason::LeaseExpired { lease_generation, .. })
+                if lease_generation == lease.lease_generation
+        ));
     }
 }
