@@ -6,6 +6,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: write
   contents: write
 
 env:
@@ -59,3 +60,22 @@ jobs:
           git tag "${{ steps.version.outputs.version }}" -m "Release ${{ steps.version.outputs.version }}"
           git push origin "${{ steps.version.outputs.version }}"
           echo "Tagged and pushed ${{ steps.version.outputs.version }}"
+
+      # Tag pushes made with GITHUB_TOKEN intentionally do not trigger another
+      # workflow. Dispatch the release workflow explicitly at the immutable tag
+      # so every successful auto-tag has a corresponding publication attempt.
+      # Retries are safe: an existing tag must still resolve to this exact merge.
+      - name: Dispatch release workflow at exact tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG_COMMIT="$(git rev-list -n 1 "${VERSION}")"
+          HEAD_COMMIT="$(git rev-parse HEAD)"
+          if [[ "${TAG_COMMIT}" != "${HEAD_COMMIT}" ]]; then
+            echo "::error::tag ${VERSION} resolves to ${TAG_COMMIT}, expected merged HEAD ${HEAD_COMMIT}" >&2
+            exit 1
+          fi
+          gh workflow run release.yml --ref "${VERSION}" -f dry_run_note="auto-tag handoff from PR #${{ github.event.pull_request.number }}"
