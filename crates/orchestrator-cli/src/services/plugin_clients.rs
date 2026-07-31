@@ -654,6 +654,7 @@ mod tests {
 
     #[test]
     fn workflow_runner_environment_is_limited_to_workflow_dependencies() {
+        let _env_lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         const PROVIDER_SECRET: &str = "ANIMUS_TEST_SELECTED_PROVIDER_SECRET";
         const TRIGGER_SECRET: &str = "ANIMUS_TEST_UNRELATED_TRIGGER_SECRET";
 
@@ -735,6 +736,7 @@ mod tests {
     /// the daemon, rather than by primary kind or default name/repo (TASK-228).
     #[test]
     fn find_plugin_for_kind_resolves_multi_role_plugin_by_queue_role() {
+        let _env_lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
         let project_root = temp.path().join("project");
         fs::create_dir_all(&project_root).expect("project dir");
