@@ -259,8 +259,7 @@ mod tests {
             "device-encrypted store",
             "a project key_file must select the headless-safe device backend"
         );
-        store
-            .set("oauth_test", "token")
+        store.set("oauth_test", "token")
             .expect("OAuth secret write must use the project-configured key file");
         drop(store);
 
@@ -299,6 +298,11 @@ mod tests {
     #[test]
     fn oauth_secret_store_device_backend_auto_source_uses_project_key_file_without_env_key() {
         assert_oauth_store_uses_project_key_file(Some("auto"), Some("device"));
+    }
+
+    #[test]
+    fn oauth_secret_store_device_backend_default_source_uses_project_key_file_without_env_key() {
+        assert_oauth_store_uses_project_key_file(None, Some("device"));
     }
 
     #[test]
