@@ -254,6 +254,11 @@ mod tests {
 
         let _key_guard = EnvVarGuard::remove("ANIMUS_SECRET_KEY");
         let store = build_secret_store_at(&project_root, tmp.path().join("state"));
+        assert_eq!(
+            store.backend_label(),
+            "device-encrypted store",
+            "a project key_file must select the headless-safe device backend"
+        );
         store
             .set("oauth_test", "token")
             .expect("OAuth secret write must use the project-configured key file");
@@ -263,6 +268,11 @@ mod tests {
         // does. This verifies that config is consulted on every path, not just
         // that one in-memory store can read back its own write.
         let reopened = build_secret_store_at(&project_root, tmp.path().join("state"));
+        assert_eq!(
+            reopened.backend_label(),
+            "device-encrypted store",
+            "OAuth completion must reselect the project-configured device backend"
+        );
         let stored = reopened.get("oauth_test");
 
         assert_eq!(
