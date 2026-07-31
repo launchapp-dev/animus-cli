@@ -297,6 +297,11 @@ mod tests {
     }
 
     #[test]
+    fn oauth_secret_store_device_backend_auto_source_uses_project_key_file_without_env_key() {
+        assert_oauth_store_uses_project_key_file(Some("auto"), Some("device"));
+    }
+
+    #[test]
     fn oauth_secret_store_default_auto_uses_project_key_file_without_env_key() {
         assert_oauth_store_uses_project_key_file(None, None);
     }

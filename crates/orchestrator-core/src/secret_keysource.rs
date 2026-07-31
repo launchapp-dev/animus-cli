@@ -312,9 +312,10 @@ pub fn resolve_key_source(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<d
     }
 }
 
-/// `auto`: prefer an OS hardware-backed key, fall back to `device-id`. Hardware
-/// providers (Secure Enclave / DPAPI / TPM) are wired in per platform; until a
-/// platform's provider lands, `auto` resolves per the following priority:
+/// `auto`: prefer operator-supplied server key material, then fall back to
+/// `device-id`. Hardware providers (Secure Enclave / DPAPI / TPM) can be wired
+/// in per platform; until a platform's provider lands, `auto` resolves per the
+/// following priority:
 ///
 /// 1. `ANIMUS_SECRET_KEY` env var → `user-key` (runtime-injected key; highest priority)
 /// 2. `key_file` from `config` → `user-key` (operator-configured file; headless-safe)
