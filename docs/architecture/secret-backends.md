@@ -62,7 +62,7 @@ AEAD-sealed JSON map `{key: value}`:
 trait KeySource { fn key(&self) -> Result<Zeroizing<[u8; 32]>>; fn id(&self) -> &str; }
 ```
 
-Selected by config `secret_key_source`:
+Selected by config `secrets.key_source`:
 
 - `auto` (default): resolves in priority order — (1) `ANIMUS_SECRET_KEY` env var
   → `user-key`; (2) `key_file` configured in the `secrets` block → `user-key`;
@@ -107,11 +107,13 @@ already cover every target:
 
 ## Config (protocol::Config)
 
-- `secret_backend: auto | keyring | device | env` — `auto` keeps existing
-  keyring installs on keyring (don't silently strand secrets), uses `device` for
-  fresh installs / where keyring is absent.
-- `secret_key_source: auto | user-key | passphrase | device-id`.
-- `secret_key_file: <path>`.
+The settings live in the `secrets` object in global or project `config.json`:
+
+- `secrets.backend: auto | keyring | device | env` — `auto` keeps existing
+  keyring installs on keyring (don't silently strand secrets) and selects
+  `device` when server key material is configured.
+- `secrets.key_source: auto | user-key | passphrase | device-id`.
+- `secrets.key_file: <path>`.
 
 `animus secret migrate` moves secrets between keyring and the device store
 (idempotent, non-destructive by default). `env` always wins (unchanged).
