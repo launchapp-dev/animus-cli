@@ -32,8 +32,11 @@ everywhere, and binds the ciphertext to the device.
 `SecretStore` (set/get/delete/list_keys/snapshot_for_spawn) stays the seam.
 
 - New backend `DeviceEncryptedSecretStore: SecretStore`.
-- A factory `build_secret_store(repo_scope, scoped_root) -> Box<dyn SecretStore>`
-  reads config and returns the configured backend. It replaces the ~5 direct
+- The factories `build_secret_store(repo_scope, scoped_root)` and
+  `build_secret_store_for_project(repo_scope, scoped_root, project_root)` read
+  config and return the configured backend. Project-aware call sites use the
+  latter so the global and project `secrets` blocks are merged before backend
+  and key-source selection. They replace the ~5 direct
   `KeyringSecretStore::new(&scope, scoped_root)` construction sites
   (orchestrator-daemon-runtime/quotas.rs ×2, animus-mcp-oauth/config.rs,
   orchestrator-cli ops_secret.rs, ops_doctor/checks_api_keys.rs).
