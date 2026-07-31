@@ -233,6 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: guards process-global env mutation across async fixture setup
     async fn runner_failure_projection_preserves_reason_and_cancel_remains_distinct() {
         let _env_lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         // This test exercises terminal projection semantics, not journal-plugin
