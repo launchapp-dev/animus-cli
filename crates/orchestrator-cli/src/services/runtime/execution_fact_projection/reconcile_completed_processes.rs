@@ -234,6 +234,15 @@ mod tests {
 
     #[tokio::test]
     async fn runner_failure_projection_preserves_reason_and_cancel_remains_distinct() {
+        let _env_lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // This test exercises terminal projection semantics, not journal-plugin
+        // discovery. Pin both WorkflowStateManager instances to SQLite while
+        // holding the process-wide environment guard. Without this boundary,
+        // parallel runtime tests can temporarily redirect HOME/plugin state
+        // between FileServiceHub construction and the fixture's direct manager
+        // load, producing a nondeterministic "workflow not found" failure.
+        let _journal_backend =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_DISABLE_WORKFLOW_JOURNAL_PLUGIN", Some("1"));
         let root = tempfile::tempdir().expect("project root");
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root.path()).expect("file service hub"));
         let _config_source_seam =
