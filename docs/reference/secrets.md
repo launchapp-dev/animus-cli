@@ -174,6 +174,23 @@ either source selects the device-encrypted backend without requiring a desktop
 keyring. Back up the key separately from the encrypted store: losing or changing
 it makes the stored secrets unrecoverable.
 
+For example, a project-level `.animus/config.json` can select a key file without
+requiring `ANIMUS_SECRET_KEY` in the environment:
+
+```json
+{
+  "secrets": {
+    "key_source": "user-key",
+    "key_file": "/run/secrets/animus-secret-key"
+  }
+}
+```
+
+The file must contain exactly 32 bytes encoded as 64 hexadecimal characters or
+base64. `ANIMUS_SECRET_KEY` accepts the same formats and takes precedence over
+`key_file` when both are present. Both the CLI secret commands and MCP OAuth
+operations honor the project-level `secrets` block.
+
 ## Audit log
 
 Every mutation (`set`, `rm`, `import-env`, `export-env`) writes a line to the per-scope audit log under `~/.animus/<repo-scope>/audit.jsonl`. Only KEY names land in the log — never values. The actor is the resolved Principal (see [RBAC]). Example record:
