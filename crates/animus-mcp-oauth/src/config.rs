@@ -287,6 +287,11 @@ mod tests {
     }
 
     #[test]
+    fn oauth_secret_store_auto_backend_honors_project_user_key_without_env_key() {
+        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("auto"));
+    }
+
+    #[test]
     fn oauth_secret_store_auto_uses_project_key_file_without_env_key() {
         assert_oauth_store_uses_project_key_file(Some("auto"), Some("auto"));
     }
