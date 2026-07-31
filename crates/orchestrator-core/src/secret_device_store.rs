@@ -722,11 +722,12 @@ mod tests {
         std::env::remove_var(ENV_USER_KEY);
         let store = build_secret_store_for_project(scope, scoped_root, &project_dir);
         let set_result = store.set("FOO", "bar");
+        let get_result = store.get("FOO");
         if let Some(v) = prev {
             std::env::set_var(ENV_USER_KEY, v)
         }
         set_result.expect("project-config-sourced store must accept writes");
-        assert_eq!(store.get("FOO").unwrap().as_deref(), Some("bar"));
+        assert_eq!(get_result.unwrap().as_deref(), Some("bar"));
     }
 
     #[test]
@@ -779,10 +780,11 @@ mod tests {
         std::env::remove_var(ENV_USER_KEY);
         let store = build_backend_for_project(scope, scoped_root, "device", &project_dir);
         let set_result = store.set("MIGRATE_KEY", "value");
+        let get_result = store.get("MIGRATE_KEY");
         if let Some(v) = prev {
             std::env::set_var(ENV_USER_KEY, v)
         }
         set_result.expect("build_backend_for_project must honor project key_file for the device backend");
-        assert_eq!(store.get("MIGRATE_KEY").unwrap().as_deref(), Some("value"));
+        assert_eq!(get_result.unwrap().as_deref(), Some("value"));
     }
 }
