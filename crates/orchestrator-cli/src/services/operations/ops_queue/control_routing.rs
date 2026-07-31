@@ -225,8 +225,13 @@ impl QueueRouting for QueueRoutingImpl {
         // engages — mirroring the workflow-run path (ops_workflow). Without this,
         // control-routed enqueue of any plugin-backed subject failed with
         // "task not found", silently breaking the queue trigger over the transports.
-        let (resolved_id, workflow_ref, plugin_backed) = match hub.tasks().get(&request.task_id).await {
-            Ok(task) => (task.id.clone(), workflow_ref_for_task(&task), false),
+        let (resolved_id, workflow_ref, plugin_backed, in_tree_record) = match hub.tasks().get(&request.task_id).await {
+            Ok(task) => (
+                task.id.clone(),
+                workflow_ref_for_task(&task),
+                false,
+                Some(serde_json::json!({ "status": task.status.to_string() })),
+            ),
             Err(in_tree_err) => {
                 // Derive the subject kind from the qualified id prefix
                 // (`<kind>:<native>`) so plugin-backed custom kinds (e.g. a
@@ -241,6 +246,7 @@ impl QueueRouting for QueueRoutingImpl {
                             .config
                             .default_workflow_ref,
                         true,
+                        None,
                     ),
                     Err(plugin_err) => {
                         return Err(ControlError::Internal(format!(
@@ -280,8 +286,12 @@ impl QueueRouting for QueueRoutingImpl {
             let subject = dispatch.subject.as_ref().expect("control enqueue always has a subject");
             Some(probe.subject_record(subject).await.map_err(internal_err)?)
         } else {
-            None
+            in_tree_record
         };
+        if let Some(record) = subject_record.as_ref() {
+            super::ensure_queue_subject_is_dispatchable(&dispatch, record)
+                .map_err(|error| ControlError::InvalidRequest(format!("queue enqueue rejected: {error:#}")))?;
+        }
         let repository =
             super::repository_reservation_from_dispatch(&dispatch, subject_record.as_ref()).map_err(internal_err)?;
         let plugin_request = queue_proto::QueueEnqueueV2Request {

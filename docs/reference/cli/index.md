@@ -944,6 +944,13 @@ the qualified form. The resolved kind is preserved in the dispatch, so the
 queue lease and runner resolve the subject via `<kind>/get`. `--subject-id` is
 mutually exclusive with `--title` / `--adhoc`.
 
+For task subjects, queue admission fails closed unless the canonical lifecycle
+status is `ready` or `in-progress`. A task in backlog, blocked, on-hold, done,
+or cancelled must be explicitly transitioned before it can be queued; webhook
+and rework automation cannot silently resurrect it. This guard applies to the
+queue only—an operator can still use `animus workflow run` for a deliberate
+direct execution.
+
 **Deferred dispatch.** `--at` schedules the entry for a future time; it stays
 queued (counted under `pending`, and broken out as `deferred` in
 `queue stats`) but is not leased until the time passes, then dispatches on

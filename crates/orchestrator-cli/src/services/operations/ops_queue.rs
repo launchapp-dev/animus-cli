@@ -110,6 +110,47 @@ fn record_string_field(record: &serde_json::Value, names: &[&str]) -> Option<Str
     })
 }
 
+fn subject_record_status(record: &serde_json::Value) -> Option<&str> {
+    record
+        .get("subject")
+        .unwrap_or(record)
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|status| !status.is_empty())
+}
+
+/// Reject automation-driven queue admission for tasks whose lifecycle says
+/// they are not dispatchable. This deliberately lives at the queue boundary:
+/// direct `workflow run` remains an explicit operator escape hatch, while a
+/// webhook/reworker cannot silently resurrect blocked or terminal work.
+pub(super) fn ensure_queue_subject_is_dispatchable(
+    dispatch: &SubjectDispatch,
+    subject_record: &serde_json::Value,
+) -> Result<()> {
+    let Some(subject) = dispatch.subject() else {
+        return Ok(());
+    };
+    if subject.kind() != protocol::orchestrator::SUBJECT_KIND_TASK {
+        return Ok(());
+    }
+
+    let qualified_id = crate::qualify_subject_id(subject.id(), subject.kind());
+    let status = subject_record_status(subject_record).ok_or_else(|| {
+        invalid_input_error(format!(
+            "task '{qualified_id}' has no lifecycle status; queue admission requires an explicit 'ready' or 'in-progress' status"
+        ))
+    })?;
+    let normalized = status.trim().to_ascii_lowercase().replace('_', "-");
+    if matches!(normalized.as_str(), "ready" | "in-progress") {
+        return Ok(());
+    }
+
+    Err(invalid_input_error(format!(
+        "task '{qualified_id}' is not dispatchable while its status is '{status}'; explicitly transition it to 'ready' or 'in-progress' before queueing it"
+    )))
+}
+
 fn dispatch_string_field(dispatch: &SubjectDispatch, names: &[&str]) -> Option<String> {
     dispatch.vars.iter().find_map(|(key, value)| {
         (names.iter().any(|name| key.eq_ignore_ascii_case(name)) && !value.trim().is_empty())
@@ -300,6 +341,9 @@ pub(crate) async fn queue_enqueue_application(
         return Err(invalid_input_error(
             "subjectless (--adhoc) enqueue is not yet supported through the installed queue plugin: its queue RPC protocol still requires a subject. Dispatch the workflow directly instead.",
         ));
+    }
+    if !subject_record.is_null() {
+        ensure_queue_subject_is_dispatchable(&dispatch, &subject_record)?;
     }
     let dispatch_value = serde_json::to_value(&dispatch).context("encoding subject_dispatch for queue plugin")?;
     let plugin_dispatch = serde_json::from_value(dispatch_value)
@@ -933,6 +977,49 @@ mod tests {
         assert_eq!(reservation.repository, "https://github.com/launchapp-dev/animus-cli.git");
         assert_eq!(reservation.base_ref, "refs/heads/main");
         assert_eq!(reservation.head_ref, "refs/heads/animus/TASK-1175");
+    }
+
+    #[test]
+    fn queue_admission_allows_ready_and_in_progress_tasks() {
+        let dispatch = SubjectDispatch::for_task("task:TASK-1177", "coding");
+        for status in ["ready", "in-progress", "in_progress"] {
+            let record = serde_json::json!({ "subject": { "status": status } });
+            ensure_queue_subject_is_dispatchable(&dispatch, &record)
+                .unwrap_or_else(|error| panic!("{status} should be dispatchable: {error}"));
+        }
+    }
+
+    #[test]
+    fn queue_admission_rejects_non_dispatchable_task_lifecycles() {
+        let dispatch = SubjectDispatch::for_task("task:TASK-1195", "coding");
+        for status in ["backlog", "blocked", "on-hold", "on_hold", "done", "cancelled"] {
+            let record = serde_json::json!({ "status": status });
+            let error = ensure_queue_subject_is_dispatchable(&dispatch, &record)
+                .expect_err("non-dispatchable task status must fail closed");
+            assert!(error.to_string().contains(status), "error should name {status}: {error}");
+            assert_eq!(crate::classify_cli_error_kind(&error), CliErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn queue_admission_rejects_task_records_without_status() {
+        let dispatch = SubjectDispatch::for_task("task:TASK-1195", "coding");
+        let error = ensure_queue_subject_is_dispatchable(&dispatch, &serde_json::json!({ "subject": {} }))
+            .expect_err("task without lifecycle status must fail closed");
+        assert!(error.to_string().contains("no lifecycle status"));
+        assert_eq!(crate::classify_cli_error_kind(&error), CliErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn queue_admission_does_not_impose_task_lifecycle_on_dynamic_subjects() {
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            protocol::orchestrator::SubjectRef::new("transcript", "TRANSCRIPT-001"),
+            "relate",
+            "manual-queue-enqueue",
+            chrono::Utc::now(),
+        );
+        ensure_queue_subject_is_dispatchable(&dispatch, &serde_json::json!({}))
+            .expect("dynamic subject dispatch keeps its backend-defined lifecycle");
     }
 
     #[test]
