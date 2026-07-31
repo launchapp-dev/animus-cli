@@ -232,8 +232,9 @@ dispatch control.
 { "notification_config": { "desktop": { "enabled": true } } } // structured config-set
 { "limit": 50 }                              // animus.daemon.events
 { "project_root": "/repo" }                  // animus.queue.list / stats
-{ "task_id": "TASK-001" }                    // animus.queue.enqueue (task)
+{ "subject_id": "task:TASK-001" }            // animus.queue.enqueue (task)
 { "subject_id": "blog:BLOG-001" }            // animus.queue.enqueue (BaaS dynamic kind — kernel resolves the kind)
+{ "subject_id": "task:TASK-1177", "workflow_ref": "coding", "idempotency_key": "github:trigger-1177:delivery-1177" } // durable producer retry
 { "subject_id": "task:TASK-001" }            // animus.queue.hold / release / drop
 { "subject_ids": ["task:TASK-001", "task:TASK-002"] } // animus.queue.hold / release / drop (bulk)
 { "subject_ids": ["task:TASK-003", "task:TASK-001"] } // animus.queue.reorder

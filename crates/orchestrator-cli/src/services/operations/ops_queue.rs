@@ -249,6 +249,7 @@ pub(crate) struct QueueEnqueueRequest {
     pub(crate) description: Option<String>,
     pub(crate) workflow_ref: Option<String>,
     pub(crate) input: Option<serde_json::Value>,
+    pub(crate) idempotency_key: Option<String>,
     pub(crate) run_at: Option<String>,
     pub(crate) expire_after_secs: Option<u64>,
     pub(crate) adhoc: bool,
@@ -307,7 +308,7 @@ pub(crate) async fn queue_enqueue_application(
         repository_reservation_from_dispatch(&dispatch, (!subject_record.is_null()).then_some(&subject_record))?;
     let plugin_request = animus_queue_protocol::QueueEnqueueV2Request {
         subject_dispatch: plugin_dispatch,
-        idempotency_key: None,
+        idempotency_key: request.idempotency_key,
         repository,
         run_at: run_at.clone(),
         expire_after_secs: request.expire_after_secs,
@@ -378,6 +379,7 @@ pub(crate) async fn handle_queue(
                     description: args.description,
                     workflow_ref: args.workflow_ref,
                     input: args.input_json.map(|value| serde_json::from_str(&value)).transpose()?,
+                    idempotency_key: args.idempotency_key,
                     run_at: args.run_at,
                     expire_after_secs: args.expire_after_secs,
                     adhoc: args.adhoc,

@@ -54,6 +54,12 @@ pub(crate) struct QueueEnqueueArgs {
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
     #[arg(
+        long = "idempotency-key",
+        value_name = "KEY",
+        help = "Stable producer key for durable enqueue. An identical retry returns the original queue receipt; changed content with the same key fails closed."
+    )]
+    pub(crate) idempotency_key: Option<String>,
+    #[arg(
         long = "at",
         value_name = "WHEN",
         help = "Defer dispatch until this time. Accepts an RFC 3339 timestamp (2026-06-13T15:00:00Z) or a relative offset (90s, 30m, 2h, 3d). The entry stays queued but is not dispatched until then."

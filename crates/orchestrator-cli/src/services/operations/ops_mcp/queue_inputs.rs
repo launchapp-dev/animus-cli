@@ -20,6 +20,10 @@ pub(super) struct QueueEnqueueInput {
     /// retained for compatibility with older MCP clients.
     #[serde(default)]
     pub(super) input: Option<serde_json::Value>,
+    /// Stable producer key for durable enqueue. Exact retries return the
+    /// original receipt; changed content with the same key fails closed.
+    #[serde(default)]
+    pub(super) idempotency_key: Option<String>,
     /// Defer dispatch until this time: an RFC 3339 timestamp or a relative
     /// offset (`90s`, `30m`, `2h`, `3d`). The entry stays queued but is not
     /// leased until then. Omit to dispatch as soon as capacity allows.

@@ -123,6 +123,7 @@ fn queue_enqueue_request(input: QueueEnqueueInput) -> Result<QueueEnqueueRequest
         description: input.description,
         workflow_ref: input.workflow_ref,
         input: typed_input,
+        idempotency_key: input.idempotency_key,
         run_at: input.run_at,
         expire_after_secs,
         adhoc: false,
@@ -141,6 +142,7 @@ mod tests {
             workflow_ref: Some("coding".to_string()),
             input_json: None,
             input: None,
+            idempotency_key: None,
             run_at: None,
             expire_after: None,
             project_root: None,
@@ -153,6 +155,16 @@ mod tests {
         input.input = Some(json!({ "nested": { "count": 7 }, "items": [true, null, "x"] }));
         let request = queue_enqueue_request(input).expect("typed request");
         assert_eq!(request.input.unwrap()["nested"]["count"], 7);
+    }
+
+    #[test]
+    fn typed_enqueue_preserves_durable_producer_key() {
+        let mut input = input();
+        input.idempotency_key = Some("github:trigger-1177:delivery-1177".to_string());
+        assert_eq!(
+            queue_enqueue_request(input).unwrap().idempotency_key.as_deref(),
+            Some("github:trigger-1177:delivery-1177")
+        );
     }
 
     #[test]
