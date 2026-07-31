@@ -240,6 +240,12 @@ dispatch control.
 { "subject_ids": ["task:TASK-003", "task:TASK-001"] } // animus.queue.reorder
 ```
 
+Queueing a task is lifecycle-gated: only `ready` and `in-progress` tasks are
+accepted. Treat blocked, on-hold, backlog, done, and cancelled as a no-op until
+an operator explicitly transitions the task; do not revive those states from
+webhook or rework automation. Direct `workflow run` remains the deliberate
+operator path when queue admission is not appropriate.
+
 `animus.daemon.start` runs the same startup plugin preflight as the CLI. Use
 `auto_install` when you want the daemon to remediate missing required plugins
 from its recommended defaults before continuing; use `skip_preflight` only for

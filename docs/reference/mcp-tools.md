@@ -304,7 +304,7 @@ because the config write protocol does not yet carry an authenticated actor.
 |---|---|---|
 | `animus.queue.list` | List queued subject dispatches | `project_root` |
 | `animus.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input`, `input_json`, `idempotency_key`, `run_at`, `expire_after`, `project_root` |
+| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). Task subjects must be `ready` or `in-progress`; other task states fail closed. Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input`, `input_json`, `idempotency_key`, `run_at`, `expire_after`, `project_root` |
 | `animus.queue.reorder` | Set preferred dispatch order | `subject_ids[]`, `project_root` |
 | `animus.queue.hold` | Hold one or more pending subjects from dispatch | `subject_id`, `subject_ids[]`, `project_root` |
 | `animus.queue.release` | Release one or more held subjects for dispatch | `subject_id`, `subject_ids[]`, `project_root` |
@@ -318,6 +318,9 @@ dropped instead of dispatched late. Pass `idempotency_key` for durable
 producer-level deduplication: an exact retry returns the original receipt and
 changed content with the same key fails closed. Without a key, a collision with
 an existing entry for the same subject still enqueues and returns a `warning`.
+Task subjects additionally fail admission unless their canonical status is
+`ready` or `in-progress`; blocked, on-hold, backlog, done, and cancelled tasks
+require an explicit lifecycle transition before queueing.
 This
 is the path an agent uses to schedule a one-off run for a specific time. The
 daemon is queue-only: it executes only enqueued work plus cron schedules and
