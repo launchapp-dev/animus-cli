@@ -157,7 +157,9 @@ What the design does NOT defend against:
 
 ## Headless and CI
 
-CI containers typically have no D-Bus session and no macOS Keychain. The recommended pattern is to keep using process env on the CI box:
+CI containers and servers typically have no D-Bus session or macOS Keychain.
+For ephemeral CI jobs, keep passing application credentials through the process
+environment:
 
 ```sh
 LINEAR_API_TOKEN=$LINEAR_API_TOKEN \
@@ -165,7 +167,12 @@ OPENAI_API_KEY=$OPENAI_API_KEY \
 animus daemon start
 ```
 
-The keychain layer is a no-op in this configuration — the index file is empty, the spawn-path merge is empty, and behavior is byte-identical to pre-v0.5.8.
+For a long-running server that must persist Animus secrets or MCP OAuth tokens,
+configure a durable `key_file` in the `secrets` block or inject the same
+32-byte `ANIMUS_SECRET_KEY` on every start. With the default `auto` settings,
+either source selects the device-encrypted backend without requiring a desktop
+keyring. Back up the key separately from the encrypted store: losing or changing
+it makes the stored secrets unrecoverable.
 
 ## Audit log
 
@@ -210,7 +217,6 @@ The following are non-goals and will land (or not) in v0.6+:
 - Encrypted file backends (age, sops, similar) — only OS keychain for v0.5.8.
 - External secret brokers (1Password / HashiCorp Vault / Doppler) — defer until the plugin role for "secret broker" is designed.
 - Cross-machine sync — the keychain is local-only by design.
-- Headless / Linux-no-D-Bus mode — for now CI uses process env directly.
 - TUI for managing secrets.
 
 [RBAC]: ./security.md
