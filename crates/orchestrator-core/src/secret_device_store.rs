@@ -425,11 +425,13 @@ fn resolve_auto_backend(cfg: &protocol::SecretsConfig, scoped_root: &Path) -> &'
 /// injected via the corresponding env var.
 fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
     use crate::secret_keysource::{KeySourceKind, ENV_PASSPHRASE, ENV_USER_KEY};
-    cfg.key_source
+    let configured_source = cfg
+        .key_source
         .as_deref()
-        .and_then(|source| KeySourceKind::parse(source).ok())
-        .is_some_and(|source| matches!(source, KeySourceKind::UserKey | KeySourceKind::Passphrase))
-        || cfg.key_file.is_some()
+        .and_then(|source| KeySourceKind::parse(source).ok());
+    configured_source.is_some_and(|source| matches!(source, KeySourceKind::UserKey | KeySourceKind::Passphrase))
+        || (cfg.key_file.is_some()
+            && matches!(configured_source, None | Some(KeySourceKind::Auto | KeySourceKind::UserKey)))
         || std::env::var(ENV_USER_KEY).is_ok_and(|raw| !raw.trim().is_empty())
         || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty())
 }
@@ -650,6 +652,31 @@ mod tests {
             std::env::set_var(ENV_PASSPHRASE, v)
         }
         assert!(result, "key_file in secrets config must count as a server key source");
+    }
+
+    #[test]
+    fn key_file_does_not_override_explicit_device_id_source() {
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+        let cfg = protocol::SecretsConfig {
+            key_source: Some("device-id".to_string()),
+            key_file: Some("/srv/animus/secret.key".to_string()),
+            ..Default::default()
+        };
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::remove_var(ENV_PASSPHRASE);
+        let result = has_server_key_configured(&cfg);
+        match prev_key {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match prev_pass {
+            Some(value) => std::env::set_var(ENV_PASSPHRASE, value),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
+        assert!(!result, "key_file is ignored when device-id is explicitly selected");
     }
 
     #[test]
