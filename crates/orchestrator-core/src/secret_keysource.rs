@@ -105,11 +105,11 @@ impl UserKeySource {
         }
         if let Some(path) = key_file {
             let raw = std::fs::read_to_string(path)
-                .with_context(|| format!("reading secret_key_file at {}", path.display()))?;
+                .with_context(|| format!("reading secrets.key_file at {}", path.display()))?;
             return Ok(Self { key: parse_raw_key(raw.trim())? });
         }
         bail!(
-            "secret_key_source = user-key but no key provided: set {ENV_USER_KEY} (hex or base64, 32 bytes) or secret_key_file"
+            "secret_key_source = user-key but no key provided: set {ENV_USER_KEY} (hex or base64, 32 bytes) or secrets.key_file"
         )
     }
 }
@@ -383,6 +383,22 @@ pub(crate) mod tests {
         assert_eq!(*parse_raw_key(&b64).unwrap(), raw);
         assert!(parse_raw_key("deadbeef").is_err(), "16-bit key must be rejected");
         assert!(parse_raw_key("").is_err());
+    }
+
+    #[test]
+    fn user_key_error_names_the_public_config_field() {
+        let _guard = env_lock().lock().unwrap();
+        let previous = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let error = match UserKeySource::resolve(None) {
+            Ok(_) => panic!("user-key resolution unexpectedly succeeded without key material"),
+            Err(error) => error.to_string(),
+        };
+        match previous {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        assert!(error.contains("secrets.key_file"), "unexpected error: {error}");
     }
 
     #[test]
