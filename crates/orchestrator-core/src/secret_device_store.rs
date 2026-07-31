@@ -430,7 +430,7 @@ fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
         .as_deref()
         .and_then(|source| KeySourceKind::parse(source).ok());
     configured_source.is_some_and(|source| matches!(source, KeySourceKind::UserKey | KeySourceKind::Passphrase))
-        || (cfg.key_file.is_some()
+        || (cfg.key_file.as_deref().is_some_and(|path| !path.trim().is_empty())
             && matches!(configured_source, None | Some(KeySourceKind::Auto | KeySourceKind::UserKey)))
         || std::env::var(ENV_USER_KEY).is_ok_and(|raw| !raw.trim().is_empty())
         || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty())
@@ -468,7 +468,10 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
         .unwrap_or(crate::secret_keysource::KeySourceKind::Auto);
     KeySourceConfig {
         kind_override: Some(kind),
-        key_file: cfg.key_file.as_ref().map(PathBuf::from),
+        // Treat an empty JSON string as absent. Otherwise `auto` selects the
+        // device backend and later attempts to read an empty path as a key
+        // file, obscuring the actionable "no key provided" error.
+        key_file: cfg.key_file.as_deref().filter(|path| !path.trim().is_empty()).map(PathBuf::from),
         // `passphrase` is env-driven for both the CLI and the daemon: the key
         // source reads ANIMUS_SECRET_PASSPHRASE at resolve time (and errors with
         // that instruction when unset), so there is no in-process passphrase to
@@ -652,6 +655,31 @@ mod tests {
             std::env::set_var(ENV_PASSPHRASE, v)
         }
         assert!(result, "key_file in secrets config must count as a server key source");
+    }
+
+    #[test]
+    fn empty_key_file_is_not_a_server_key() {
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+        let cfg = protocol::SecretsConfig { key_file: Some("  ".to_string()), ..Default::default() };
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::remove_var(ENV_PASSPHRASE);
+
+        let configured = has_server_key_configured(&cfg);
+        let resolved = key_source_config(&cfg);
+
+        match prev_key {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        match prev_pass {
+            Some(value) => std::env::set_var(ENV_PASSPHRASE, value),
+            None => std::env::remove_var(ENV_PASSPHRASE),
+        }
+        assert!(!configured, "an empty key_file must not select the device backend");
+        assert!(resolved.key_file.is_none(), "an empty key_file must be normalized to absent");
     }
 
     #[test]
