@@ -304,7 +304,7 @@ because the config write protocol does not yet carry an authenticated actor.
 |---|---|---|
 | `animus.queue.list` | List queued subject dispatches | `project_root` |
 | `animus.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `run_at`, `expire_after`, `project_root` |
+| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input`, `input_json`, `idempotency_key`, `run_at`, `expire_after`, `project_root` |
 | `animus.queue.reorder` | Set preferred dispatch order | `subject_ids[]`, `project_root` |
 | `animus.queue.hold` | Hold one or more pending subjects from dispatch | `subject_id`, `subject_ids[]`, `project_root` |
 | `animus.queue.release` | Release one or more held subjects for dispatch | `subject_id`, `subject_ids[]`, `project_root` |
@@ -314,9 +314,11 @@ because the config write protocol does not yet carry an authenticated actor.
 offset like `90s` / `30m` / `2h` / `3d`) to **defer** dispatch: the entry
 stays queued but is not leased until the time passes. `expire_after` (e.g.
 `10m`) sets a grace window after `run_at` past which a still-pending entry is
-dropped instead of dispatched late. Enqueue is never deduplicated (immediate
-or deferred) — a collision with an existing entry for the same subject still
-enqueues and returns a `warning` in the result for the agent to act on. This
+dropped instead of dispatched late. Pass `idempotency_key` for durable
+producer-level deduplication: an exact retry returns the original receipt and
+changed content with the same key fails closed. Without a key, a collision with
+an existing entry for the same subject still enqueues and returns a `warning`.
+This
 is the path an agent uses to schedule a one-off run for a specific time. The
 daemon is queue-only: it executes only enqueued work plus cron schedules and
 never auto-dispatches `Ready` tasks from the subject backend.

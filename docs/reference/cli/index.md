@@ -913,6 +913,8 @@ has capacity.
 ```bash
 animus queue enqueue --subject-id TASK-001
 animus queue enqueue --subject-id requirement:REQ-042 --workflow-ref ops
+animus queue enqueue --subject-id task:TASK-1177 --workflow-ref coding \
+  --idempotency-key github:trigger-1177:delivery-1177
 animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
 animus queue enqueue --subject-id blog:BLOG-001                      # dynamic kind
 animus queue enqueue --adhoc --workflow-ref relate                   # subjectless (ad-hoc) run
@@ -956,11 +958,14 @@ animus queue enqueue --subject-id TASK-001 --at 2h --expire-after 10m  # drop if
 | Flag | Description |
 |---|---|
 | `--adhoc` | Dispatch a subjectless (ad-hoc) run with no bound subject. Requires `--workflow-ref`; mutually exclusive with the subject selectors. |
+| `--idempotency-key <KEY>` | Bind the effective queue request to a stable producer key. An exact retry returns the original entry receipt; changed content with the same key fails closed. |
 | `--at <WHEN>` | Defer until an RFC 3339 timestamp or a relative offset (`90s`, `30m`, `2h`, `3d`; bare number = seconds). Omit for immediate dispatch. |
 | `--expire-after <DURATION>` | Grace window after `--at`. If still pending past `--at + this`, the entry is dropped instead of dispatched late. Requires `--at`; omit to always fire late. |
 
-Enqueue is **not deduplicated** (immediate or deferred): every enqueue
-creates a new entry. When another entry already targets the same subject,
+Without `--idempotency-key`, enqueue is **not deduplicated** (immediate or
+deferred): every enqueue creates a new entry. With a key, the queue durably
+deduplicates across processes and restarts and returns the original entry id
+for an exact retry. When another unkeyed entry already targets the same subject,
 the enqueue still succeeds and returns a `warning` (in the human output and
 the `animus.cli.v1` envelope's `warning` field) — the caller decides whether
 to `drop` the duplicate. Lease-side exclusivity still prevents two entries
