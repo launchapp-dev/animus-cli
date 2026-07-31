@@ -69,7 +69,7 @@ OAuth operations, including `animus mcp auth --complete`:
   "secrets": {
     "backend": "device",        // auto (default) | keyring | device | env
     "key_source": "device-id",  // auto | user-key | passphrase | device-id
-    "key_file": "/path/to/key"  // only for key_source = user-key
+    "key_file": "/path/to/key"  // used by key_source = auto or user-key
   }
 }
 ```

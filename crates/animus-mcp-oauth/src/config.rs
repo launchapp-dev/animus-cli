@@ -231,7 +231,7 @@ mod tests {
         }
     }
 
-    fn assert_oauth_store_uses_project_key_file(key_source: Option<&str>) {
+    fn assert_oauth_store_uses_project_key_file(key_source: Option<&str>, backend: Option<&str>) {
         // Secret-key environment variables are process-global. Keep removal,
         // store construction, and restoration in one serialized window so
         // these tests cannot borrow or overwrite another test's key.
@@ -245,6 +245,7 @@ mod tests {
         std::fs::write(&key_file, "a5".repeat(32)).unwrap();
         let config = serde_json::json!({
             "secrets": {
+                "backend": backend,
                 "key_source": key_source,
                 "key_file": key_file
             }
@@ -272,16 +273,16 @@ mod tests {
 
     #[test]
     fn oauth_secret_store_honors_project_user_key_without_env_key() {
-        assert_oauth_store_uses_project_key_file(Some("user-key"));
+        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("device"));
     }
 
     #[test]
     fn oauth_secret_store_auto_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file(Some("auto"));
+        assert_oauth_store_uses_project_key_file(Some("auto"), Some("auto"));
     }
 
     #[test]
     fn oauth_secret_store_default_auto_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file(None);
+        assert_oauth_store_uses_project_key_file(None, None);
     }
 }
