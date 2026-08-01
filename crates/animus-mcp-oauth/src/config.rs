@@ -237,11 +237,7 @@ mod tests {
         }
     }
 
-    fn assert_oauth_store_uses_project_key_file(
-        key_source: Option<&str>,
-        backend: Option<&str>,
-        empty_env_key: bool,
-    ) {
+    fn assert_oauth_store_uses_project_key_file(key_source: Option<&str>, backend: Option<&str>, empty_env_key: bool) {
         // Secret-key environment variables are process-global. Keep removal,
         // store construction, and restoration in one serialized window so
         // these tests cannot borrow or overwrite another test's key.
@@ -273,8 +269,7 @@ mod tests {
             "device-encrypted store",
             "a project key_file must select the headless-safe device backend"
         );
-        store.set("oauth_test", "token")
-            .expect("OAuth secret write must use the project-configured key file");
+        store.set("oauth_test", "token").expect("OAuth secret write must use the project-configured key file");
         drop(store);
 
         // Rebuild the store as the separate `mcp auth --complete` invocation

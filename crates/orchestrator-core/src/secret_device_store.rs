@@ -425,9 +425,7 @@ fn resolve_auto_backend(cfg: &protocol::SecretsConfig, scoped_root: &Path) -> &'
 /// injected via the corresponding env var.
 fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
     use crate::secret_keysource::{KeySourceKind, ENV_PASSPHRASE, ENV_USER_KEY};
-    let configured_source = cfg.key_source
-        .as_deref()
-        .and_then(|source| KeySourceKind::parse(source).ok());
+    let configured_source = cfg.key_source.as_deref().and_then(|source| KeySourceKind::parse(source).ok());
     configured_source.is_some_and(|source| matches!(source, KeySourceKind::UserKey | KeySourceKind::Passphrase))
         || (cfg.key_file.as_deref().is_some_and(|path| !path.trim().is_empty())
             && matches!(configured_source, None | Some(KeySourceKind::Auto | KeySourceKind::UserKey)))
