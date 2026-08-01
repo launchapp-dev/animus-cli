@@ -588,9 +588,17 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
     }
     for (agent_id, profile) in &workflow.agent_profiles {
         match base.agents.get_mut(agent_id) {
-            Some(existing) => merge_agent_profile(existing, profile),
+            Some(existing) => {
+                merge_agent_profile(existing, profile);
+                // Explicitly carry fields that the external protocol crate's
+                // merge_agent_profile may not propagate at the pinned tag.
+                apply_workflow_agent_profile_overlay(existing, profile);
+            }
             None => {
-                base.agents.insert(agent_id.clone(), profile.to_profile());
+                let mut compiled = profile.to_profile();
+                // to_profile() may not carry all overlay fields; apply them explicitly.
+                apply_workflow_agent_profile_overlay(&mut compiled, profile);
+                base.agents.insert(agent_id.clone(), compiled);
             }
         }
     }
@@ -638,6 +646,21 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
         if definition.response_schema_flag.is_some() {
             entry.response_schema_flag = definition.response_schema_flag.clone();
         }
+    }
+}
+
+/// Carry overlay fields from a WorkflowConfig agent profile that
+/// `to_profile()` / `merge_agent_profile` in the external protocol crate may
+/// not propagate at the pinned tag. Applied after every call to those functions
+/// so values declared in project YAML (e.g. `reasoning_effort`, `permission_mode`)
+/// always reach the compiled `AgentRuntimeConfig.agents` map and are visible
+/// through `phase_reasoning_effort()` / `phase_permission_mode()`.
+fn apply_workflow_agent_profile_overlay(compiled: &mut AgentProfile, overlay: &AgentProfileOverlay) {
+    if let Some(effort) = overlay.reasoning_effort.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        compiled.reasoning_effort = Some(effort.to_string());
+    }
+    if let Some(mode) = overlay.permission_mode.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        compiled.permission_mode = Some(mode.to_string());
     }
 }
 
@@ -4251,6 +4274,53 @@ agents:
         let json = serde_json::to_string(&overlay).expect("serialize overlay");
         let restored: AgentProfileOverlay = serde_json::from_str(&json).expect("deserialize overlay");
         assert_eq!(restored.permission_mode.as_deref(), Some("plan"));
+    }
+
+    /// Regression test for TASK-446: `reasoning_effort` set on a WorkflowConfig
+    /// agent profile must survive the compile step and be returned by
+    /// `phase_reasoning_effort()` via the agent-profile fallback when no
+    /// phase-level `runtime.reasoning_effort` override is present.
+    #[test]
+    fn reasoning_effort_roundtrips_from_workflow_yaml_into_compiled_config() {
+        let yaml = r#"
+agents:
+  code-checker:
+    description: "Code quality reviewer"
+    reasoning_effort: medium
+phases:
+  code-check:
+    mode: agent
+    agent_id: code-checker
+    directive: "Review code quality."
+"#;
+        let config = crate::workflow_config::parse_yaml_workflow_config(yaml).expect("parse YAML");
+
+        // Verify the YAML parser carries reasoning_effort into AgentProfileOverlay.
+        let overlay = config.agent_profiles.get("code-checker").expect("code-checker profile parsed");
+        assert_eq!(overlay.reasoning_effort.as_deref(), Some("medium"));
+
+        let mut runtime = seeded_agent_runtime_config();
+        let mut existing_profile = overlay.to_profile();
+        existing_profile.reasoning_effort = Some("low".to_string());
+        runtime.agents.insert("code-checker".to_string(), existing_profile);
+        merge_workflow_runtime_overlay(&mut runtime, &config);
+
+        // The compiled AgentProfile must carry reasoning_effort, including when
+        // the workflow overlay updates a profile already present in the base.
+        let profile = runtime.agent_profile("code-checker").expect("code-checker profile compiled");
+        assert_eq!(
+            profile.reasoning_effort.as_deref(),
+            Some("medium"),
+            "reasoning_effort must survive the WorkflowConfig→AgentRuntimeConfig compile step"
+        );
+
+        // End-to-end: phase_reasoning_effort must return it via the agent-profile
+        // fallback (the phase has no runtime.reasoning_effort override).
+        assert_eq!(
+            runtime.phase_reasoning_effort("code-check"),
+            Some("medium"),
+            "phase_reasoning_effort must fall back to agent profile when phase runtime.reasoning_effort is absent"
+        );
     }
 
     #[test]
