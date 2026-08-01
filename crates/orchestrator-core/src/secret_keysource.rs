@@ -454,6 +454,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn resolve_auto_does_not_fall_back_when_configured_key_file_is_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key_file = tmp.path().join("missing-server.key");
+        let _guard = env_lock().lock().unwrap();
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let config = KeySourceConfig { kind_override: None, key_file: Some(key_file.clone()), passphrase: None };
+        let result = resolve_auto(&config, &[0u8; 16]);
+        match prev {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+
+        let error = match result {
+            Ok(_) => panic!("auto unexpectedly ignored an unreadable configured server key"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("secrets.key_file"), "unexpected error: {error}");
+        assert!(error.contains(&key_file.display().to_string()), "unexpected error: {error}");
+    }
+
+    #[test]
     fn resolve_auto_prefers_env_user_key_over_configured_key_file() {
         let env_key = [0x66u8; KEY_LEN];
         let file_key = [0x77u8; KEY_LEN];
