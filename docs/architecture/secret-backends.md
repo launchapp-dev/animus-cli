@@ -120,8 +120,9 @@ The settings live in the `secrets` object in global or project `config.json`:
 
 For a headless deployment, mount a durable 32-byte key (hex or base64) and
 point either the global or project config at it. `backend` and `key_source` may
-remain `auto`; all CLI secret operations, including `mcp auth --complete`, load
-the project `secrets` block:
+remain `auto`. Secret commands and MCP OAuth operations (including
+`mcp auth --complete`) merge the project `secrets` block over the global block
+field by field, so either location supplies the same server-key source:
 
 ```json
 {
