@@ -110,7 +110,8 @@ already cover every target:
 
 ## Config (protocol::Config)
 
-The settings live in the `secrets` object in global or project `config.json`:
+The settings live in the `secrets` object in the global
+`~/.animus/config.json` or project-local `.animus/config.json`:
 
 - `secrets.backend: auto | keyring | device | env` — `auto` keeps existing
   keyring installs on keyring (don't silently strand secrets) and selects
