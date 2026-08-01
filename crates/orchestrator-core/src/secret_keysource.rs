@@ -450,7 +450,7 @@ pub(crate) mod tests {
         }
         let src = result.expect("resolve_auto with key_file configured should succeed");
         assert_eq!(src.id(), "user-key", "auto must resolve to user-key when key_file is configured");
-        assert_eq!(*src.key().unwrap(), raw);
+        assert_eq!(*src.key().unwrap(), raw, "auto must read key material from the configured key file");
     }
 
     #[test]
