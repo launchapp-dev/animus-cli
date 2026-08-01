@@ -527,6 +527,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workflow_list_returns_guarded_items_without_cli_envelope_drift() {
+        let _env_lock = lock_env();
+        let root = tempfile::tempdir().expect("project root");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(root.path().to_string_lossy().as_ref()));
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(root.path());
+        let server = super::super::new_ao_mcp_server(root.path().to_string_lossy().as_ref());
+        let result = server
+            .workflow_list_inproc(super::super::WorkflowListInput {
+                project_root: None,
+                status: Some("running".to_string()),
+                workflow_ref: None,
+                subject_id: None,
+                phase_id: None,
+                search: None,
+                sort: None,
+                limit: Some(5),
+                offset: Some(0),
+                max_tokens: None,
+            })
+            .await
+            .expect("tool transport succeeds");
+
+        let payload = result.structured_content.expect("structured payload");
+        assert_ne!(result.is_error, Some(true), "payload: {payload}");
+        assert_eq!(payload.get("tool").and_then(Value::as_str), Some("animus.workflow.list"));
+        assert_eq!(
+            payload.pointer("/result/tool").and_then(Value::as_str),
+            Some("animus.workflow.list"),
+            "payload: {payload}",
+        );
+        assert_eq!(payload.pointer("/result/items").and_then(Value::as_array).map(Vec::len), Some(0));
+        assert_eq!(payload.pointer("/result/pagination/total").and_then(Value::as_u64), Some(0));
+    }
+
+    #[tokio::test]
     async fn workflow_config_get_returns_structured_data_without_cli_exec() {
         let _env_lock = lock_env();
         let root = tempfile::tempdir().expect("project root");
