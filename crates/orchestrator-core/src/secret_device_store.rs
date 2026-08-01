@@ -468,12 +468,7 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
         // Treat an empty JSON string as absent. Otherwise `auto` selects the
         // device backend and later attempts to read an empty path as a key
         // file, obscuring the actionable "no key provided" error.
-        key_file: cfg
-            .key_file
-            .as_deref()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(PathBuf::from),
+        key_file: cfg.key_file.as_deref().map(str::trim).filter(|path| !path.is_empty()).map(PathBuf::from),
         // `passphrase` is env-driven for both the CLI and the daemon: the key
         // source reads ANIMUS_SECRET_PASSPHRASE at resolve time (and errors with
         // that instruction when unset), so there is no in-process passphrase to
@@ -686,10 +681,8 @@ mod tests {
 
     #[test]
     fn key_file_path_is_trimmed_when_loaded_from_config() {
-        let cfg = protocol::SecretsConfig {
-            key_file: Some("  /srv/animus/secret.key\n".to_string()),
-            ..Default::default()
-        };
+        let cfg =
+            protocol::SecretsConfig { key_file: Some("  /srv/animus/secret.key\n".to_string()), ..Default::default() };
 
         let resolved = key_source_config(&cfg);
 
@@ -798,6 +791,34 @@ mod tests {
 
         set_result.expect("auto must use the project key_file without ANIMUS_SECRET_KEY");
         assert_eq!(get_result.unwrap().as_deref(), Some("bar"));
+        assert_eq!(store.backend_label(), "device-encrypted store");
+    }
+
+    #[test]
+    fn build_secret_store_for_project_trims_configured_key_file() {
+        crate::test_env::stable_test_home();
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, hex::encode([0xCDu8; KEY_LEN])).unwrap();
+        let padded_key_file = format!("  {}\n", key_file.display());
+        write_project_secrets_config(&project_dir, Some("auto"), Some(&padded_key_file));
+        let scoped_root = tmp.path().join("state");
+        std::fs::create_dir_all(&scoped_root).unwrap();
+
+        use crate::secret_keysource::ENV_USER_KEY;
+        let previous_key = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let store = build_secret_store_for_project("test-trimmed-key-file-scope", scoped_root, &project_dir);
+        let set_result = store.set("FOO", "bar");
+        match previous_key {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+
+        set_result.expect("auto must trim and use the project key_file without ANIMUS_SECRET_KEY");
         assert_eq!(store.backend_label(), "device-encrypted store");
     }
 

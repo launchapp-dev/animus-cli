@@ -14,6 +14,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use rand::RngCore;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use zeroize::Zeroizing;
 
 /// Length of the wrapping key (and the master key it wraps).
@@ -312,16 +313,49 @@ pub fn resolve_key_source(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<d
     }
 }
 
-/// `auto`: prefer operator-supplied server key material, then fall back to
-/// `device-id`. Hardware providers (Secure Enclave / DPAPI / TPM) can be wired
-/// in per platform; until a platform's provider lands, `auto` resolves per the
-/// following priority:
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoDecision {
+    UserKey,
+    Passphrase,
+    DeviceId,
+    HardError,
+}
+
+static DEVICE_ID_FALLBACK_WARNED: AtomicBool = AtomicBool::new(false);
+
+#[allow(clippy::fn_params_excessive_bools)]
+fn decide_auto(has_user_key: bool, has_passphrase: bool, is_server: bool, has_tty: bool) -> AutoDecision {
+    if has_user_key {
+        AutoDecision::UserKey
+    } else if has_passphrase {
+        AutoDecision::Passphrase
+    } else if is_server || !has_tty {
+        AutoDecision::HardError
+    } else {
+        AutoDecision::DeviceId
+    }
+}
+
+fn is_server_env() -> bool {
+    std::env::var("ANIMUS_SERVER").is_ok_and(|value| value.trim() == "1")
+}
+
+fn has_interactive_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() || std::io::stdout().is_terminal() || std::io::stderr().is_terminal()
+}
+
+/// `auto`: prefer operator-supplied server key material, then allow the
+/// `device-id` fallback only on an interactive local host. Hardware providers
+/// (Secure Enclave / DPAPI / TPM) can be wired in per platform; until a
+/// platform's provider lands, `auto` resolves per the following priority:
 ///
 /// 1. `ANIMUS_SECRET_KEY` env var → `user-key` (runtime-injected key; highest priority)
 /// 2. `key_file` from `config` → `user-key` (operator-configured file; headless-safe)
 /// 3. configured passphrase or `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase`
 ///    (Argon2id KDF; headless-safe)
-/// 4. `device-id` (fallback; interactive hosts only — binding, not on-device-secret-safe)
+/// 4. `device-id` on interactive local hosts only (binding, not secrecy)
+/// 5. hard error on server/headless hosts without operator key material
 ///
 /// Steps 1–3 let headless/server deployments work without setting
 /// `secret_key_source` explicitly: they just supply the key material (via env
@@ -338,19 +372,30 @@ fn resolve_auto(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<dyn KeySour
     // injection (e.g. Docker secrets via envFrom) takes precedence over a
     // file configured in the project/global config. If only key_file is set,
     // UserKeySource::resolve will still try the env first then the file.
-    if std::env::var(ENV_USER_KEY).is_ok_and(|raw| !raw.trim().is_empty()) || config.key_file.is_some() {
-        return Ok(Box::new(UserKeySource::resolve(config.key_file.as_deref())?));
-    }
+    let has_user_key = std::env::var(ENV_USER_KEY).is_ok_and(|raw| !raw.trim().is_empty()) || config.key_file.is_some();
     // An in-process or env-injected passphrase is also a headless-safe server
     // source. Prefer the in-process value when the caller supplied one, just
     // as explicit user-key material takes precedence over its fallback.
-    if config.passphrase.is_some() || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty()) {
-        return Ok(Box::new(PassphraseKeySource::resolve(
+    let has_passphrase =
+        config.passphrase.is_some() || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty());
+    match decide_auto(has_user_key, has_passphrase, is_server_env(), has_interactive_tty()) {
+        AutoDecision::UserKey => Ok(Box::new(UserKeySource::resolve(config.key_file.as_deref())?)),
+        AutoDecision::Passphrase => Ok(Box::new(PassphraseKeySource::resolve(
             config.passphrase.as_ref().map(|passphrase| passphrase.as_str()),
             salt,
-        )?));
+        )?)),
+        AutoDecision::DeviceId => {
+            if !DEVICE_ID_FALLBACK_WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "secret_key_source = auto fell back to device-id: the secret store is bound to this machine but is decryptable by any local user; set {ENV_USER_KEY}, configure secrets.key_file, or set {ENV_PASSPHRASE} for at-rest secrecy"
+                );
+            }
+            Ok(Box::new(DeviceIdKeySource::resolve(salt)?))
+        }
+        AutoDecision::HardError => bail!(
+            "secret_key_source = auto has no key material on a server/headless host, and the device-id fallback is decryptable by any local user. Set {ENV_USER_KEY} (hex or base64, 32 bytes), configure secrets.key_file, or set {ENV_PASSPHRASE}"
+        ),
     }
-    Ok(Box::new(DeviceIdKeySource::resolve(salt)?))
 }
 
 #[cfg(test)]
@@ -540,12 +585,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn resolve_auto_ignores_empty_passphrase_env() {
+    fn resolve_auto_hard_errors_on_server_without_key_material() {
         let _guard = env_lock().lock().unwrap();
         let prev_key = std::env::var(ENV_USER_KEY).ok();
         let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        let prev_server = std::env::var("ANIMUS_SERVER").ok();
         std::env::remove_var(ENV_USER_KEY);
         std::env::set_var(ENV_PASSPHRASE, "   ");
+        std::env::set_var("ANIMUS_SERVER", "1");
         let salt = [0xACu8; 16];
         let result = resolve_auto(&KeySourceConfig::default(), &salt);
         match &prev_key {
@@ -556,16 +603,12 @@ pub(crate) mod tests {
             Some(v) => std::env::set_var(ENV_PASSPHRASE, v),
             None => std::env::remove_var(ENV_PASSPHRASE),
         }
-        match result {
-            Ok(src) => assert_eq!(src.id(), "device-id"),
-            Err(err) => {
-                let message = format!("{err:#}");
-                assert!(
-                    message.contains("machine id") || message.contains("machine-id"),
-                    "empty passphrase must fall through to device-id, got: {message}"
-                );
-            }
+        match &prev_server {
+            Some(v) => std::env::set_var("ANIMUS_SERVER", v),
+            None => std::env::remove_var("ANIMUS_SERVER"),
         }
+        let error = result.err().expect("empty passphrase must not provide headless key material");
+        assert!(error.to_string().contains("server/headless host"), "unexpected error: {error:#}");
     }
 
     #[test]
@@ -616,6 +659,20 @@ pub(crate) mod tests {
         }
         let src = result.expect("resolve_auto with both env vars set should succeed");
         assert_eq!(src.id(), "user-key", "user-key env must take priority over passphrase env");
+    }
+
+    #[test]
+    fn auto_decision_allows_device_id_only_interactively() {
+        assert_eq!(decide_auto(false, false, false, true), AutoDecision::DeviceId);
+        assert_eq!(decide_auto(false, false, false, false), AutoDecision::HardError);
+        assert_eq!(decide_auto(false, false, true, true), AutoDecision::HardError);
+        assert_eq!(decide_auto(false, false, true, false), AutoDecision::HardError);
+    }
+
+    #[test]
+    fn auto_decision_preserves_operator_key_precedence_on_servers() {
+        assert_eq!(decide_auto(true, true, true, false), AutoDecision::UserKey);
+        assert_eq!(decide_auto(false, true, true, false), AutoDecision::Passphrase);
     }
 
     #[test]

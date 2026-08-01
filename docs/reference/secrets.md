@@ -85,10 +85,10 @@ OAuth operations, including `animus mcp auth --complete`:
 
 ### Key sources (what wraps the device store's master key)
 
-- **`device-id`** — `HKDF(machine-id + per-install salt)`. The machine id never travels with the file, so an off-device copy can't decrypt. Cross-platform, no prompt. Default fallback.
+- **`device-id`** — `HKDF(machine-id + per-install salt)`. The machine id never travels with the file, so an off-device copy can't decrypt. Cross-platform, no prompt. Used as the `auto` fallback only on interactive local hosts; headless/server hosts must supply explicit key material.
 - **`user-key`** — an operator-supplied 32-byte key from `ANIMUS_SECRET_KEY` (hex/base64) or `key_file`. For headless/server with a deploy-injected key (systemd `LoadCredential`, mounted secret, external KMS).
 - **`passphrase`** — `Argon2id` over a passphrase read from `ANIMUS_SECRET_PASSPHRASE`. Env-driven for both the CLI and the daemon (so the mode is script-safe and behaves identically everywhere); in exposure terms a non-interactive passphrase is equivalent to `user-key`. The store errors with that variable name when it is unset.
-- **`auto`** — resolves in priority order: (1) `ANIMUS_SECRET_KEY` env var → `user-key`; (2) `key_file` configured in the `secrets` block → `user-key`; (3) `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase`; (4) `device-id` fallback. Steps 1–3 let headless/server deployments work without setting `key_source` explicitly — just supply the key material via env or file and `auto` selects the right source. The OS hardware-backed sources (Secure Enclave / DPAPI / TPM) are deferred.
+- **`auto`** — resolves in priority order: (1) `ANIMUS_SECRET_KEY` env var → `user-key`; (2) `key_file` configured in the `secrets` block → `user-key`; (3) `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase`; (4) `device-id`, but only on an interactive local host. Steps 1–3 let headless/server deployments work without setting `key_source` explicitly — just supply the key material via env or file and `auto` selects the right source. On a headless host (or when `ANIMUS_SERVER=1`), `auto` hard-errors if none of `ANIMUS_SECRET_KEY`, `secrets.key_file`, or `ANIMUS_SECRET_PASSPHRASE` supplies key material; it never falls back to the locally decryptable, machine-bound `device-id` source there. The OS hardware-backed sources (Secure Enclave / DPAPI / TPM) are deferred.
 
 ### Moving between backends
 
