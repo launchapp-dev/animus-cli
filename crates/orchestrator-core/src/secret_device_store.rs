@@ -433,15 +433,13 @@ fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
         || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty())
 }
 
-/// Read the project-level `.animus/config.json` and return its `secrets` block.
-/// Returns `None` when the file is absent or unparseable (side-effect-free).
+/// Load the project configuration through the canonical protocol loader and
+/// return its `secrets` block. Keeping secret-store construction on the same
+/// loader as the rest of the CLI prevents OAuth (including a separate
+/// `mcp auth --complete` process) from interpreting project configuration
+/// differently from ordinary secret operations.
 fn load_project_secrets_config(project_root: &Path) -> Option<protocol::SecretsConfig> {
-    let path = project_root.join(".animus").join("config.json");
-    if !path.exists() {
-        return None;
-    }
-    let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str::<protocol::Config>(&content).ok()?.secrets
+    protocol::Config::load_or_default(project_root.to_string_lossy().as_ref()).ok()?.secrets
 }
 
 /// Merge two [`protocol::SecretsConfig`] values; `project` wins field-by-field.
