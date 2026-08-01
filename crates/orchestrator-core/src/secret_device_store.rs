@@ -443,7 +443,19 @@ fn load_project_secrets_config(project_root: &Path) -> Option<protocol::SecretsC
         return None;
     }
     let contents = std::fs::read(config_path).ok()?;
-    serde_json::from_slice::<protocol::Config>(&contents).ok()?.secrets
+    let mut secrets = serde_json::from_slice::<protocol::Config>(&contents).ok()?.secrets?;
+    // A project key file belongs to the project configuration, not to the
+    // caller's current working directory. OAuth completion may run in a
+    // separate process (or from a daemon), so leaving a relative path
+    // unresolved would make otherwise identical secret operations select
+    // different key material.
+    if let Some(key_file) = secrets.key_file.as_deref().map(str::trim).filter(|path| !path.is_empty()) {
+        let path = Path::new(key_file);
+        if path.is_relative() {
+            secrets.key_file = Some(project_root.join(path).to_string_lossy().into_owned());
+        }
+    }
+    Some(secrets)
 }
 
 /// Merge two [`protocol::SecretsConfig`] values; `project` wins field-by-field.
@@ -806,6 +818,31 @@ mod tests {
 
         set_result.expect("auto must use the project key_file without ANIMUS_SECRET_KEY");
         assert_eq!(get_result.unwrap().as_deref(), Some("bar"));
+        assert_eq!(store.backend_label(), "device-encrypted store");
+    }
+
+    #[test]
+    fn build_secret_store_for_project_resolves_relative_key_file_from_project_root() {
+        crate::test_env::stable_test_home();
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("server.key"), hex::encode([0xBEu8; KEY_LEN])).unwrap();
+        write_project_secrets_config(&project_dir, Some("auto"), Some("server.key"));
+        let scoped_root = tmp.path().join("state");
+
+        use crate::secret_keysource::ENV_USER_KEY;
+        let previous_key = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let store = build_secret_store_for_project("test-relative-key-file-scope", scoped_root, &project_dir);
+        let set_result = store.set("FOO", "bar");
+        match previous_key {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+
+        set_result.expect("a relative project key_file must resolve from the project root");
         assert_eq!(store.backend_label(), "device-encrypted store");
     }
 
