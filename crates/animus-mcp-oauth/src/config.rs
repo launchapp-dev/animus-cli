@@ -300,6 +300,11 @@ mod tests {
     }
 
     #[test]
+    fn oauth_secret_store_user_key_ignores_empty_env_key() {
+        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("device"), true);
+    }
+
+    #[test]
     fn oauth_secret_store_auto_backend_honors_project_user_key_without_env_key() {
         assert_oauth_store_uses_project_key_file(Some("user-key"), Some("auto"), false);
     }
