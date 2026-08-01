@@ -4294,9 +4294,13 @@ phases:
         assert_eq!(overlay.reasoning_effort.as_deref(), Some("medium"));
 
         let mut runtime = seeded_agent_runtime_config();
+        let mut existing_profile = overlay.to_profile();
+        existing_profile.reasoning_effort = Some("low".to_string());
+        runtime.agents.insert("code-checker".to_string(), existing_profile);
         merge_workflow_runtime_overlay(&mut runtime, &config);
 
-        // The compiled AgentProfile must carry reasoning_effort.
+        // The compiled AgentProfile must carry reasoning_effort, including when
+        // the workflow overlay updates a profile already present in the base.
         let profile = runtime.agent_profile("code-checker").expect("code-checker profile compiled");
         assert_eq!(
             profile.reasoning_effort.as_deref(),
