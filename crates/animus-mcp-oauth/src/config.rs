@@ -220,6 +220,12 @@ mod tests {
             std::env::remove_var(name);
             Self { name, previous }
         }
+
+        fn set(name: &'static str, value: &str) -> Self {
+            let previous = std::env::var(name).ok();
+            std::env::set_var(name, value);
+            Self { name, previous }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -231,7 +237,11 @@ mod tests {
         }
     }
 
-    fn assert_oauth_store_uses_project_key_file(key_source: Option<&str>, backend: Option<&str>) {
+    fn assert_oauth_store_uses_project_key_file(
+        key_source: Option<&str>,
+        backend: Option<&str>,
+        empty_env_key: bool,
+    ) {
         // Secret-key environment variables are process-global. Keep removal,
         // store construction, and restoration in one serialized window so
         // these tests cannot borrow or overwrite another test's key.
@@ -252,7 +262,11 @@ mod tests {
         });
         std::fs::write(animus_dir.join("config.json"), serde_json::to_vec(&config).unwrap()).unwrap();
 
-        let _key_guard = EnvVarGuard::remove("ANIMUS_SECRET_KEY");
+        let _key_guard = if empty_env_key {
+            EnvVarGuard::set("ANIMUS_SECRET_KEY", "  ")
+        } else {
+            EnvVarGuard::remove("ANIMUS_SECRET_KEY")
+        };
         let store = build_secret_store_at(&project_root, tmp.path().join("state"));
         assert_eq!(
             store.backend_label(),
@@ -282,31 +296,36 @@ mod tests {
 
     #[test]
     fn oauth_secret_store_honors_project_user_key_without_env_key() {
-        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("device"));
+        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("device"), false);
     }
 
     #[test]
     fn oauth_secret_store_auto_backend_honors_project_user_key_without_env_key() {
-        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("auto"));
+        assert_oauth_store_uses_project_key_file(Some("user-key"), Some("auto"), false);
     }
 
     #[test]
     fn oauth_secret_store_auto_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file(Some("auto"), Some("auto"));
+        assert_oauth_store_uses_project_key_file(Some("auto"), Some("auto"), false);
+    }
+
+    #[test]
+    fn oauth_secret_store_auto_ignores_empty_env_key_when_project_key_file_is_configured() {
+        assert_oauth_store_uses_project_key_file(Some("auto"), Some("auto"), true);
     }
 
     #[test]
     fn oauth_secret_store_device_backend_auto_source_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file(Some("auto"), Some("device"));
+        assert_oauth_store_uses_project_key_file(Some("auto"), Some("device"), false);
     }
 
     #[test]
     fn oauth_secret_store_device_backend_default_source_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file(None, Some("device"));
+        assert_oauth_store_uses_project_key_file(None, Some("device"), false);
     }
 
     #[test]
     fn oauth_secret_store_default_auto_uses_project_key_file_without_env_key() {
-        assert_oauth_store_uses_project_key_file(None, None);
+        assert_oauth_store_uses_project_key_file(None, None, false);
     }
 }
