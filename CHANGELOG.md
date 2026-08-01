@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Headless secret stores now honor durable server keys consistently.** With
+  `secrets.key_source = auto`, `ANIMUS_SECRET_KEY` or a configured
+  `secrets.key_file` selects the device-encrypted store before any keychain or
+  device-id fallback. Project-level `secrets` settings are also applied by MCP
+  OAuth operations, including a separate `animus mcp auth --complete` process.
+
 ## [0.6.11] - 2026-06-24
 
 **v0.6.11 — `animus update` defers to avm.**

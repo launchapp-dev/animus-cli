@@ -433,13 +433,17 @@ fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
         || std::env::var(ENV_PASSPHRASE).is_ok_and(|raw| !raw.trim().is_empty())
 }
 
-/// Load the project configuration through the canonical protocol loader and
-/// return its `secrets` block. Keeping secret-store construction on the same
-/// loader as the rest of the CLI prevents OAuth (including a separate
-/// `mcp auth --complete` process) from interpreting project configuration
-/// differently from ordinary secret operations.
+/// Read the project configuration, when present, and return its `secrets`
+/// block. This intentionally avoids [`protocol::Config::load_or_default`]:
+/// constructing a secret store is a read operation and must not create a
+/// default `.animus/config.json` in an otherwise unconfigured project.
 fn load_project_secrets_config(project_root: &Path) -> Option<protocol::SecretsConfig> {
-    protocol::Config::load_or_default(project_root.to_string_lossy().as_ref()).ok()?.secrets
+    let config_path = project_root.join(".animus").join("config.json");
+    if !config_path.is_file() {
+        return None;
+    }
+    let contents = std::fs::read(config_path).ok()?;
+    serde_json::from_slice::<protocol::Config>(&contents).ok()?.secrets
 }
 
 /// Merge two [`protocol::SecretsConfig`] values; `project` wins field-by-field.
@@ -761,6 +765,19 @@ mod tests {
         }
         set_result.expect("project-config-sourced store must accept writes");
         assert_eq!(get_result.unwrap().as_deref(), Some("bar"));
+    }
+
+    #[test]
+    fn build_secret_store_for_project_does_not_configure_an_unconfigured_project() {
+        crate::test_env::stable_test_home();
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let scoped_root = tmp.path().join("state");
+
+        let _store = build_secret_store_for_project("test-unconfigured-project-scope", scoped_root, &project_dir);
+
+        assert!(!project_dir.join(".animus").exists(), "secret-store construction must not modify the project");
     }
 
     #[test]
