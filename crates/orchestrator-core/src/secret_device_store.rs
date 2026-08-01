@@ -468,7 +468,12 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
         // Treat an empty JSON string as absent. Otherwise `auto` selects the
         // device backend and later attempts to read an empty path as a key
         // file, obscuring the actionable "no key provided" error.
-        key_file: cfg.key_file.as_deref().filter(|path| !path.trim().is_empty()).map(PathBuf::from),
+        key_file: cfg
+            .key_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from),
         // `passphrase` is env-driven for both the CLI and the daemon: the key
         // source reads ANIMUS_SECRET_PASSPHRASE at resolve time (and errors with
         // that instruction when unset), so there is no in-process passphrase to
@@ -677,6 +682,18 @@ mod tests {
         }
         assert!(!configured, "an empty key_file must not select the device backend");
         assert!(resolved.key_file.is_none(), "an empty key_file must be normalized to absent");
+    }
+
+    #[test]
+    fn key_file_path_is_trimmed_when_loaded_from_config() {
+        let cfg = protocol::SecretsConfig {
+            key_file: Some("  /srv/animus/secret.key\n".to_string()),
+            ..Default::default()
+        };
+
+        let resolved = key_source_config(&cfg);
+
+        assert_eq!(resolved.key_file.as_deref(), Some(Path::new("/srv/animus/secret.key")));
     }
 
     #[test]
