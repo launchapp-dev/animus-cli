@@ -118,6 +118,25 @@ The settings live in the `secrets` object in global or project `config.json`:
 - `secrets.key_source: auto | user-key | passphrase | device-id`.
 - `secrets.key_file: <path>`.
 
+For a headless deployment, mount a durable 32-byte key (hex or base64) and
+point either the global or project config at it. `backend` and `key_source` may
+remain `auto`; all CLI secret operations, including `mcp auth --complete`, load
+the project `secrets` block:
+
+```json
+{
+  "secrets": {
+    "backend": "auto",
+    "key_source": "auto",
+    "key_file": "/run/secrets/animus-secret-key"
+  }
+}
+```
+
+The key file must persist across redeployments. Losing or replacing it makes
+the existing encrypted store unreadable; Animus does not wipe or rebuild the
+store automatically.
+
 `animus secret migrate` moves secrets between keyring and the device store
 (idempotent, non-destructive by default). `env` always wins (unchanged).
 
