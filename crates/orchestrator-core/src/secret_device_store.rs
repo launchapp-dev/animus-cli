@@ -773,6 +773,35 @@ mod tests {
     }
 
     #[test]
+    fn build_secret_store_for_project_auto_uses_project_key_file() {
+        crate::test_env::stable_test_home();
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, hex::encode([0xBCu8; KEY_LEN])).unwrap();
+        write_project_secrets_config(&project_dir, Some("auto"), Some(key_file.to_str().unwrap()));
+        let scoped_root = tmp.path().join("state");
+        std::fs::create_dir_all(&scoped_root).unwrap();
+
+        use crate::secret_keysource::ENV_USER_KEY;
+        let previous_key = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let store = build_secret_store_for_project("test-auto-project-scope", scoped_root, &project_dir);
+        let set_result = store.set("FOO", "bar");
+        let get_result = store.get("FOO");
+        match previous_key {
+            Some(value) => std::env::set_var(ENV_USER_KEY, value),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+
+        set_result.expect("auto must use the project key_file without ANIMUS_SECRET_KEY");
+        assert_eq!(get_result.unwrap().as_deref(), Some("bar"));
+        assert_eq!(store.backend_label(), "device-encrypted store");
+    }
+
+    #[test]
     fn resolve_auto_backend_uses_device_when_server_key_in_cfg() {
         let cfg = protocol::SecretsConfig { backend: None, key_source: Some("user-key".to_string()), key_file: None };
         let dir = tempfile::tempdir().unwrap();
