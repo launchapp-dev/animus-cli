@@ -15,7 +15,7 @@ time so the container boots without network access.
 ```dockerfile
 # ---- stage 1: fetch the prebuilt animus binary ----
 FROM debian:bookworm-slim AS animus-fetch
-ARG ANIMUS_VERSION=v0.7.0-rc.39
+ARG ANIMUS_VERSION=v0.7.0-rc.40
 ARG ANIMUS_TARGET=x86_64-unknown-linux-gnu
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -82,7 +82,7 @@ CMD ["/app/deploy/start.sh"]
 
 | ARG | Default | Description |
 |---|---|---|
-| `ANIMUS_VERSION` | `v0.7.0-rc.39` | Release tag to download from `launchapp-dev/animus-cli` |
+| `ANIMUS_VERSION` | `v0.7.0-rc.40` | Release tag to download from `launchapp-dev/animus-cli` |
 | `ANIMUS_TARGET` | `x86_64-unknown-linux-gnu` | Target triple; must match the container's glibc |
 | `SIG` | `--signature-policy=disabled` | Signature policy flag passed to every `plugin install` |
 
