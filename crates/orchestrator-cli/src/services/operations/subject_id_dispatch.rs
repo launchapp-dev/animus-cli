@@ -75,6 +75,19 @@ fn subject_ref_preserving_key(kind: &str, qualified: &str, bare_native: &str) ->
     }
 }
 
+fn plugin_subject_kind(kind: &str) -> &str {
+    match kind {
+        SUBJECT_KIND_TASK => "task",
+        SUBJECT_KIND_REQUIREMENT => "requirement",
+        other => other,
+    }
+}
+
+fn plugin_subject_get_request(subject: &SubjectRef) -> (String, String) {
+    let kind = plugin_subject_kind(subject.kind());
+    (format!("{kind}/get"), crate::qualify_subject_id(subject.id(), kind))
+}
+
 /// Abstraction over the subject router used to resolve a bare id's real kind.
 /// Split out as a trait so the resolution logic is unit-testable with a stub
 /// router (no plugin processes spawned).
@@ -207,9 +220,8 @@ impl RouterSubjectProbe {
     /// uses the record's explicit git fields to allocate an immutable
     /// repository/head reservation before any daemon can lease the entry.
     pub(crate) async fn subject_record(&self, subject: &SubjectRef) -> Result<Value> {
-        let kind = subject.kind();
-        let qualified_id = crate::qualify_subject_id(subject.id(), kind);
-        let method = format!("{kind}/get");
+        let kind = plugin_subject_kind(subject.kind());
+        let (method, qualified_id) = plugin_subject_get_request(subject);
         let params = Some(json!({ "id": qualified_id }));
         let result = match self.actor.as_ref() {
             Some(actor) => self.dispatch.route_actor_call(&method, params, actor).await,
@@ -312,6 +324,29 @@ mod tests {
         let blog = subject_ref_for_kind("blog", "blog:BLOG-001");
         assert_eq!(blog.kind(), "blog");
         assert_eq!(blog.id(), "blog:BLOG-001");
+    }
+
+    #[test]
+    fn plugin_subject_kind_uses_backend_aliases_for_builtins() {
+        assert_eq!(plugin_subject_kind(SUBJECT_KIND_TASK), "task");
+        assert_eq!(plugin_subject_kind(SUBJECT_KIND_REQUIREMENT), "requirement");
+        assert_eq!(plugin_subject_kind("transcript"), "transcript");
+    }
+
+    #[test]
+    fn plugin_subject_get_request_preserves_qualified_id_and_uses_backend_kind() {
+        assert_eq!(
+            plugin_subject_get_request(&SubjectRef::task("task:TASK-1216".to_string())),
+            ("task/get".to_string(), "task:TASK-1216".to_string())
+        );
+        assert_eq!(
+            plugin_subject_get_request(&SubjectRef::requirement("requirement:REQ-1".to_string())),
+            ("requirement/get".to_string(), "requirement:REQ-1".to_string())
+        );
+        assert_eq!(
+            plugin_subject_get_request(&SubjectRef::new("transcript".to_string(), "TRANSCRIPT-1".to_string())),
+            ("transcript/get".to_string(), "transcript:TRANSCRIPT-1".to_string())
+        );
     }
 
     #[test]
