@@ -1510,17 +1510,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_agent_binding_and_persona_are_persisted_before_provider_execution() {
+    async fn explicit_harness_and_model_preserve_bound_agent_prompt_profile_and_mcp() {
         let tmp = tempfile::tempdir().unwrap();
         let store = store_for(&tmp);
         store.create(Some("c1".into())).unwrap();
         let producer = MockProducer::new(vec![text_turn("hi", "sess-1")]);
         let mut sink = CapturingSink::new();
+        let mcp_contract = serde_json::json!({
+            "mcp": {
+                "additional_servers": {
+                    "animus": { "command": "animus", "args": ["mcp", "serve"] }
+                }
+            }
+        });
         let turn = TurnContext {
             agent_id: Some("researcher"),
             agent_system_prompt: Some("You are the research agent."),
             agent_tool_profile: Some("research-profile"),
-            ..ctx("c1", "claude", "hello", &tmp)
+            mcp_contract: Some(&mcp_contract),
+            model: "gpt-5.6-terra",
+            ..ctx("c1", "codex", "hello", &tmp)
         };
 
         run_turn(&producer, &store, &mut sink, turn).await.unwrap();
@@ -1529,8 +1538,12 @@ mod tests {
         assert_eq!(meta.agent_id.as_deref(), Some("researcher"));
         assert_eq!(meta.revision, 3, "bind + user acceptance + assistant completion each advance revision");
         let request = &producer.requests()[0];
+        assert_eq!(request.tool, "codex");
+        assert_eq!(request.model, "gpt-5.6-terra");
         assert_eq!(request.extras.get("system_prompt").and_then(Value::as_str), Some("You are the research agent."));
         assert_eq!(request.extras.get("claude_profile").and_then(Value::as_str), Some("research-profile"));
+        assert!(request.extras.pointer("/runtime_contract/mcp/additional_servers/animus").is_some());
+        assert!(request.mcp_servers.as_ref().and_then(|servers| servers.get("animus")).is_some());
     }
 
     #[tokio::test]
