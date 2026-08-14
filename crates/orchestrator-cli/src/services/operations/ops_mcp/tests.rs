@@ -258,38 +258,6 @@ fn build_cli_error_payload_falls_back_to_stdout_envelope_when_stderr_json_missin
 }
 
 #[test]
-fn build_bulk_workflow_run_item_args_basic() {
-    let item = BulkWorkflowRunItem { subject_id: "TASK-4".to_string(), workflow_ref: None, input_json: None };
-    let args = build_bulk_workflow_run_item_args(&item);
-    assert_eq!(
-        args,
-        vec!["workflow".to_string(), "run".to_string(), "--subject-id".to_string(), "TASK-4".to_string(),]
-    );
-}
-
-#[test]
-fn build_bulk_workflow_run_item_args_with_workflow_ref_and_input() {
-    let item = BulkWorkflowRunItem {
-        subject_id: "TASK-5".to_string(),
-        workflow_ref: Some("my-pipeline".to_string()),
-        input_json: Some(r#"{"key":"val"}"#.to_string()),
-    };
-    let args = build_bulk_workflow_run_item_args(&item);
-    assert_eq!(
-        args,
-        vec![
-            "workflow".to_string(),
-            "run".to_string(),
-            "my-pipeline".to_string(),
-            "--subject-id".to_string(),
-            "TASK-5".to_string(),
-            "--input-json".to_string(),
-            r#"{"key":"val"}"#.to_string(),
-        ]
-    );
-}
-
-#[test]
 fn validate_workflow_run_multiple_rejects_empty() {
     let err = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &[]).unwrap_err();
     assert!(err.contains("must not be empty"), "expected empty-array error, got: {err}");
@@ -297,7 +265,7 @@ fn validate_workflow_run_multiple_rejects_empty() {
 
 #[test]
 fn validate_workflow_run_multiple_rejects_empty_subject_id() {
-    let runs = vec![BulkWorkflowRunItem { subject_id: "".to_string(), workflow_ref: None, input_json: None }];
+    let runs = vec![BulkWorkflowRunItem { subject_id: "".to_string(), ..Default::default() }];
     let err = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).unwrap_err();
     assert!(err.contains("subject_id must not be empty"), "expected empty-subject-id error, got: {err}");
 }
@@ -305,11 +273,11 @@ fn validate_workflow_run_multiple_rejects_empty_subject_id() {
 #[test]
 fn validate_workflow_run_multiple_accepts_valid_runs() {
     let runs = vec![
-        BulkWorkflowRunItem { subject_id: "TASK-1".to_string(), workflow_ref: None, input_json: None },
+        BulkWorkflowRunItem { subject_id: "TASK-1".to_string(), ..Default::default() },
         BulkWorkflowRunItem {
             subject_id: "TASK-2".to_string(),
             workflow_ref: Some("p1".to_string()),
-            input_json: None,
+            ..Default::default()
         },
     ];
     assert!(validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).is_ok());
@@ -330,7 +298,7 @@ fn on_error_continue_as_str() {
 #[test]
 fn validate_workflow_run_multiple_rejects_over_max() {
     let runs: Vec<BulkWorkflowRunItem> = (0..=MAX_BATCH_SIZE)
-        .map(|i| BulkWorkflowRunItem { subject_id: format!("TASK-{i}"), workflow_ref: None, input_json: None })
+        .map(|i| BulkWorkflowRunItem { subject_id: format!("TASK-{i}"), ..Default::default() })
         .collect();
     let err = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).unwrap_err();
     assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
@@ -403,133 +371,6 @@ fn validate_subject_batch_inputs_accept_valid_items() {
     assert!(validate_subject_batch_create_input("animus.subject.batch-create", "task", &creates).is_ok());
     let updates = vec![batch_update_item("TASK-1", Some("ready"))];
     assert!(validate_subject_batch_update_input("animus.subject.batch-update", "task", &updates).is_ok());
-}
-
-fn batch_exec_item(target_id: &str) -> BatchItemExec {
-    BatchItemExec {
-        target_id: target_id.to_string(),
-        command: format!("subject create --title {target_id}"),
-        args: vec!["subject".to_string(), "create".to_string(), "--title".to_string(), target_id.to_string()],
-    }
-}
-
-fn batch_success_result(title: &str) -> CliExecutionResult {
-    CliExecutionResult {
-        command: "animus".to_string(),
-        args: vec!["--json".to_string()],
-        requested_args: vec!["subject".to_string(), "create".to_string()],
-        project_root: "/tmp/project".to_string(),
-        exit_code: 0,
-        success: true,
-        stdout: String::new(),
-        stderr: String::new(),
-        stdout_json: Some(json!({
-            "schema": CLI_SCHEMA_ID,
-            "ok": true,
-            "data": { "result": { "title": title } }
-        })),
-        stderr_json: None,
-    }
-}
-
-fn batch_failure_result(message: &str) -> CliExecutionResult {
-    let mut result = sample_cli_failure_result();
-    result.exit_code = 2;
-    result.stderr = message.to_string();
-    result.stderr_json = Some(json!({
-        "schema": CLI_SCHEMA_ID,
-        "ok": false,
-        "error": { "code": "invalid_input", "message": message, "exit_code": 2 }
-    }));
-    result
-}
-
-/// Drive the batch loop with a fake executor: every item succeeds.
-#[tokio::test]
-async fn run_batch_items_happy_path_reports_all_success() {
-    let items = vec![batch_exec_item("A"), batch_exec_item("B")];
-    let result =
-        super::exec::run_batch_items("animus.subject.batch-create", items, &OnError::Stop, |args| async move {
-            let title = args.last().cloned().unwrap_or_default();
-            Ok(batch_success_result(&title))
-        })
-        .await;
-
-    assert_eq!(result.get("schema").and_then(Value::as_str), Some(BATCH_RESULT_SCHEMA));
-    assert_eq!(result.pointer("/summary/requested").and_then(Value::as_u64), Some(2));
-    assert_eq!(result.pointer("/summary/succeeded").and_then(Value::as_u64), Some(2));
-    assert_eq!(result.pointer("/summary/failed").and_then(Value::as_u64), Some(0));
-    assert_eq!(result.pointer("/summary/completed").and_then(Value::as_bool), Some(true));
-    assert_eq!(result.pointer("/results/0/status").and_then(Value::as_str), Some("success"));
-    assert_eq!(result.pointer("/results/1/result/result/title").and_then(Value::as_str), Some("B"));
-}
-
-/// on_error=stop: the failing item halts the batch; later items are marked
-/// skipped and the executor is never invoked for them.
-#[tokio::test]
-async fn run_batch_items_stop_mode_skips_after_first_failure_without_executing() {
-    let items = vec![batch_exec_item("A"), batch_exec_item("BAD"), batch_exec_item("C")];
-    let executed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let executed_in = executed.clone();
-    let result = super::exec::run_batch_items("animus.subject.batch-create", items, &OnError::Stop, move |args| {
-        let executed_in = executed_in.clone();
-        async move {
-            let title = args.last().cloned().unwrap_or_default();
-            executed_in.lock().expect("lock").push(title.clone());
-            if title == "BAD" {
-                Ok(batch_failure_result("--title must not be empty"))
-            } else {
-                Ok(batch_success_result(&title))
-            }
-        }
-    })
-    .await;
-
-    assert_eq!(*executed.lock().expect("lock"), vec!["A".to_string(), "BAD".to_string()], "C must never execute");
-    assert_eq!(result.pointer("/summary/executed").and_then(Value::as_u64), Some(2));
-    assert_eq!(result.pointer("/summary/succeeded").and_then(Value::as_u64), Some(1));
-    assert_eq!(result.pointer("/summary/failed").and_then(Value::as_u64), Some(1));
-    assert_eq!(result.pointer("/summary/skipped").and_then(Value::as_u64), Some(1));
-    assert_eq!(result.pointer("/results/1/status").and_then(Value::as_str), Some("failed"));
-    assert_eq!(result.pointer("/results/2/status").and_then(Value::as_str), Some("skipped"));
-    assert_eq!(result.pointer("/results/2/reason").and_then(Value::as_str), Some("stopped after earlier failure"));
-}
-
-/// on_error=continue: a mid-batch failure is isolated — every other item
-/// still runs and succeeds, and the failed item carries the structured
-/// error (remediation included) without poisoning its neighbors.
-#[tokio::test]
-async fn run_batch_items_continue_mode_isolates_per_item_failures() {
-    let items = vec![batch_exec_item("A"), batch_exec_item("BAD"), batch_exec_item("C")];
-    let result =
-        super::exec::run_batch_items("animus.subject.batch-update", items, &OnError::Continue, |args| async move {
-            let title = args.last().cloned().unwrap_or_default();
-            if title == "BAD" {
-                Ok(batch_failure_result("--id must not be empty"))
-            } else {
-                Ok(batch_success_result(&title))
-            }
-        })
-        .await;
-
-    assert_eq!(result.get("on_error").and_then(Value::as_str), Some("continue"));
-    assert_eq!(result.pointer("/summary/executed").and_then(Value::as_u64), Some(3));
-    assert_eq!(result.pointer("/summary/succeeded").and_then(Value::as_u64), Some(2));
-    assert_eq!(result.pointer("/summary/failed").and_then(Value::as_u64), Some(1));
-    assert_eq!(result.pointer("/summary/skipped").and_then(Value::as_u64), Some(0));
-    assert_eq!(result.pointer("/summary/completed").and_then(Value::as_bool), Some(false));
-    assert_eq!(result.pointer("/results/0/status").and_then(Value::as_str), Some("success"));
-    assert_eq!(result.pointer("/results/1/status").and_then(Value::as_str), Some("failed"));
-    assert_eq!(
-        result.pointer("/results/1/error/error/message").and_then(Value::as_str),
-        Some("--id must not be empty")
-    );
-    assert_eq!(
-        result.pointer("/results/1/error/remediation/kind").and_then(Value::as_str),
-        Some("invalid_input"),
-        "per-item errors carry the remediation payload"
-    );
-    assert_eq!(result.pointer("/results/2/status").and_then(Value::as_str), Some("success"));
 }
 
 #[test]

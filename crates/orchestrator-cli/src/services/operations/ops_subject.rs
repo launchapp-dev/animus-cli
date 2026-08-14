@@ -437,7 +437,7 @@ fn read_batch_items<T: serde::de::DeserializeOwned>(file: &Path, tool_name: &str
 /// resolution, honoring `on_error` (stop = remaining items are marked
 /// skipped; continue = every item runs) and assembling an
 /// `animus.cli.batch.result.v1` envelope whose per-item result shape matches
-/// the MCP `run_batch_items` output. The `items` carry `(target_id, method,
+/// the MCP batch-tool contract. The `items` carry `(target_id, method,
 /// params)` triples; routing goes through the same `route_or_not_found` path
 /// the single-item verbs use.
 async fn run_subject_batch(

@@ -17,14 +17,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<WorkflowRunInput>()
     )]
     async fn ao_workflow_run(&self, params: Parameters<WorkflowRunInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["workflow".to_string(), "run".to_string()];
-        push_workflow_run_pipeline_arg(&mut args, input.workflow_ref);
-        push_opt(&mut args, "--title", input.title);
-        push_opt(&mut args, "--subject-id", input.subject_id);
-        push_opt(&mut args, "--description", input.description);
-        push_opt(&mut args, "--input-json", input.input_json);
-        self.run_tool("animus.workflow.run", args, input.project_root).await
+        self.workflow_run_inproc(params.0).await
     }
 
     #[tool(
@@ -96,23 +89,7 @@ impl AoMcpServer {
         &self,
         params: Parameters<WorkflowRunMultipleInput>,
     ) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        if let Err(msg) = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &input.runs) {
-            return Ok(CallToolResult::structured_error(json!({
-                "tool": "animus.workflow.run-multiple",
-                "error": msg,
-            })));
-        }
-        let items: Vec<BatchItemExec> = input
-            .runs
-            .into_iter()
-            .map(|item| {
-                let args = build_bulk_workflow_run_item_args(&item);
-                let command = args.join(" ");
-                BatchItemExec { target_id: item.subject_id, command, args }
-            })
-            .collect();
-        self.run_batch_tool("animus.workflow.run-multiple", items, &input.on_error, input.project_root).await
+        self.workflow_run_multiple_inproc(params.0).await
     }
 
     #[tool(
@@ -121,18 +98,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<WorkflowExecuteInput>()
     )]
     async fn ao_workflow_execute(&self, params: Parameters<WorkflowExecuteInput>) -> Result<CallToolResult, McpError> {
-        let input = params.0;
-        let mut args = vec!["workflow".to_string(), "run".to_string()];
-        push_workflow_run_pipeline_arg(&mut args, input.workflow_ref);
-        args.push("--sync".to_string());
-        args.push("--subject-id".to_string());
-        args.push(input.subject_id);
-        push_opt(&mut args, "--phase", input.phase);
-        push_opt(&mut args, "--model", input.model);
-        push_opt(&mut args, "--tool", input.tool);
-        push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
-        push_opt(&mut args, "--input-json", input.input_json);
-        self.run_tool("animus.workflow.execute", args, input.project_root).await
+        self.workflow_execute_inproc(params.0).await
     }
 
     #[tool(
@@ -157,11 +123,5 @@ impl AoMcpServer {
         params: Parameters<WorkflowPhaseRejectInput>,
     ) -> Result<CallToolResult, McpError> {
         self.workflow_phase_reject_inproc(params.0).await
-    }
-}
-
-fn push_workflow_run_pipeline_arg(args: &mut Vec<String>, workflow_ref: Option<String>) {
-    if let Some(workflow_ref) = workflow_ref {
-        args.push(workflow_ref);
     }
 }

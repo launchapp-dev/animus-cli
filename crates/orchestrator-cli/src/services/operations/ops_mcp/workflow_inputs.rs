@@ -43,11 +43,27 @@ pub(super) struct WorkflowRunInput {
     pub(super) workflow_ref: Option<String>,
     #[serde(default)]
     pub(super) input_json: Option<String>,
+    /// Structured workflow input. Prefer this over `input_json`; the latter is
+    /// retained for compatibility with older MCP clients.
+    #[serde(default)]
+    pub(super) input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(super) vars: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub(super) model: Option<String>,
+    #[serde(default)]
+    pub(super) tool: Option<String>,
+    #[serde(default)]
+    pub(super) phase_timeout_secs: Option<u64>,
+    /// Durable actor/workspace-scoped operation key. Reusing the same key and
+    /// effective request replays the canonical workflow; changed input conflicts.
+    #[serde(default)]
+    pub(super) idempotency_key: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub(super) struct BulkWorkflowRunItem {
     /// Subject to run the workflow for. Accepts a qualified id (`task:TASK-001`)
     /// or a bare id (`TASK-001`, kind resolved via the subject router).
@@ -56,6 +72,18 @@ pub(super) struct BulkWorkflowRunItem {
     pub(super) workflow_ref: Option<String>,
     #[serde(default)]
     pub(super) input_json: Option<String>,
+    #[serde(default)]
+    pub(super) input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(super) vars: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub(super) model: Option<String>,
+    #[serde(default)]
+    pub(super) tool: Option<String>,
+    #[serde(default)]
+    pub(super) phase_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub(super) idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -148,6 +176,11 @@ pub(super) struct WorkflowExecuteInput {
     pub(super) phase_timeout_secs: Option<u64>,
     #[serde(default)]
     pub(super) input_json: Option<String>,
+    /// Structured workflow input. Prefer this over `input_json`.
+    #[serde(default)]
+    pub(super) input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(super) vars: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

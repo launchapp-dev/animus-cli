@@ -24,7 +24,7 @@ use protocol::SubjectDispatchExt;
 use serde_json::Value;
 use uuid::Uuid;
 
-use self::execute::WorkflowExecuteArgs;
+pub(crate) use self::execute::{workflow_execute_application, WorkflowExecuteArgs};
 use crate::{
     dry_run_envelope, ensure_destructive_confirmation, parse_workflow_query_sort_opt, parse_workflow_status_opt,
     print_value, render_table, WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand,
@@ -778,6 +778,107 @@ pub(crate) async fn workflow_phase_reject_application(
     project_manual_phase_result_for_application(result, project_root, actor, owner.as_ref())
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct WorkflowDispatchApplicationRequest {
+    pub(crate) title: Option<String>,
+    pub(crate) subject_id: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) workflow_ref: Option<String>,
+    pub(crate) input: Option<Value>,
+    pub(crate) vars: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WorkflowLaunchApplicationRequest {
+    pub(crate) dispatch: protocol::SubjectDispatch,
+    pub(crate) model: Option<String>,
+    pub(crate) tool: Option<String>,
+    pub(crate) phase_timeout_secs: Option<u64>,
+    pub(crate) idempotency_key: Option<String>,
+}
+
+pub(crate) async fn workflow_dispatch_application(
+    project_root: &str,
+    request: WorkflowDispatchApplicationRequest,
+    actor: Option<&Actor>,
+) -> Result<protocol::SubjectDispatch> {
+    if request.title.is_some() && request.subject_id.is_some() {
+        return Err(crate::invalid_input_error("title and subject_id are mutually exclusive"));
+    }
+    if let Some(subject_id) = request.subject_id.as_deref() {
+        let subject = resolve_subject_id_ref_via_router(project_root, subject_id, actor).await?;
+        let workflow_ref = request.workflow_ref.unwrap_or_else(|| default_project_workflow_ref(project_root));
+        return Ok(protocol::SubjectDispatch::for_subject_with_metadata(
+            subject,
+            workflow_ref,
+            "application-workflow-run",
+            Utc::now(),
+        )
+        .with_input(request.input)
+        .with_vars(request.vars));
+    }
+    if let Some(title) = request.title {
+        return Ok(protocol::SubjectDispatch::for_custom(
+            title,
+            request.description.unwrap_or_default(),
+            request.workflow_ref.unwrap_or_else(|| default_project_workflow_ref(project_root)),
+            request.input,
+            "application-workflow-run",
+        )
+        .with_vars(request.vars));
+    }
+    Err(crate::invalid_input_error("one of subject_id or title must be provided"))
+}
+
+fn validate_workflow_launch_idempotency_key(key: &str) -> Result<()> {
+    let bytes = key.as_bytes();
+    if bytes.is_empty() || bytes.len() > orchestrator_core::MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES {
+        return Err(crate::invalid_input_error(format!(
+            "idempotency key must contain 1..={} bytes",
+            orchestrator_core::MAX_WORKFLOW_LAUNCH_IDEMPOTENCY_KEY_BYTES
+        )));
+    }
+    if !key.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-')) {
+        return Err(crate::invalid_input_error(
+            "idempotency key may contain only ASCII letters, digits, '.', '_', ':', and '-'",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn workflow_launch_application(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    request: WorkflowLaunchApplicationRequest,
+    actor: Option<&Actor>,
+) -> Result<Value> {
+    let runner_overrides = phases::DetachedRunnerOverrides {
+        model: request.model,
+        tool: request.tool,
+        phase_timeout_secs: request.phase_timeout_secs,
+        actor: actor.cloned(),
+    };
+    let input = request.dispatch.to_workflow_run_input();
+    let workflow = match request.idempotency_key {
+        Some(key) => {
+            validate_workflow_launch_idempotency_key(&key)?;
+            let actor = actor.ok_or_else(|| {
+                crate::invalid_input_error("idempotency_key requires a transport-authenticated actor")
+            })?;
+            if actor.user_id.trim().is_empty() || actor.tenant_id.as_deref().is_none_or(|value| value.trim().is_empty())
+            {
+                return Err(crate::invalid_input_error(
+                    "idempotent workflow launch requires non-empty actor user_id and tenant_id",
+                ));
+            }
+            idempotency::start_workflow_idempotently(hub, project_root, input, runner_overrides, key).await?
+        }
+        None => phases::start_workflow_with_runner(hub, project_root, input, runner_overrides).await?,
+    };
+    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor);
+    workflow_value_for_application(workflow, &runtime, actor)
+}
+
 pub(crate) async fn handle_workflow(
     command: WorkflowCommand,
     hub: Arc<dyn ServiceHub>,
@@ -938,8 +1039,8 @@ pub(crate) async fn handle_workflow(
                     model: args.model,
                     tool: args.tool,
                     phase_timeout_secs: args.phase_timeout_secs,
-                    input_json: args.input_json,
-                    vars: args.vars,
+                    input: args.input_json.as_deref().map(serde_json::from_str).transpose()?,
+                    vars: parse_workflow_vars(&args.vars)?,
                     // Actor precedence: an explicit transport-asserted
                     // `--actor-json` flag wins. Otherwise this `--sync` branch
                     // is also the entry point of the daemon-spawned detached
@@ -966,16 +1067,6 @@ pub(crate) async fn handle_workflow(
                 } else {
                     std::collections::HashMap::new()
                 };
-                let runner_overrides = phases::DetachedRunnerOverrides {
-                    model: args.model.clone(),
-                    tool: args.tool.clone(),
-                    phase_timeout_secs: args.phase_timeout_secs,
-                    // The transport-asserted `--actor-json` (if any) is relayed
-                    // to the detached runner child via WORKFLOW_ACTOR_ENV. With
-                    // no flag this is `None` => global scope; an authenticated
-                    // inbound control request supplies its own actor instead.
-                    actor: effective_actor.clone(),
-                };
                 let dispatch = if let Some(subject_dispatch) = subject_id_dispatch {
                     // Generic subject: the kind-correct dispatch was built up
                     // front; the detached runner resolves it via `<kind>/get`.
@@ -994,31 +1085,24 @@ pub(crate) async fn handle_workflow(
                         )?,
                     }
                 };
-                // Post-v0.5 there is no in-process executor: a bare
-                // `workflows.run(...)` only bootstraps a Running record
-                // that nothing drives (the orphan reconciler then
-                // zombie-cancels it). Hand execution to a detached
-                // workflow_runner spawn instead.
-                let input = dispatch.to_workflow_run_input();
-                let workflow = match args.idempotency_key {
-                    Some(key) => {
-                        idempotency::start_workflow_idempotently(
-                            hub.clone(),
-                            project_root,
-                            input,
-                            runner_overrides,
-                            key,
-                        )
-                        .await?
-                    }
-                    None => {
-                        phases::start_workflow_with_runner(hub.clone(), project_root, input, runner_overrides).await?
-                    }
-                };
+                let workflow = workflow_launch_application(
+                    hub.clone(),
+                    project_root,
+                    WorkflowLaunchApplicationRequest {
+                        dispatch,
+                        model: args.model,
+                        tool: args.tool,
+                        phase_timeout_secs: args.phase_timeout_secs,
+                        idempotency_key: args.idempotency_key,
+                    },
+                    effective_actor.as_ref(),
+                )
+                .await?;
                 if !json {
+                    let workflow_id = workflow.get("id").and_then(Value::as_str).unwrap_or("unknown");
+                    let status = workflow.get("status").and_then(Value::as_str).unwrap_or("unknown");
                     eprintln!(
-                        "dispatched workflow {} (status={:?}) — tail with: animus daemon events --follow, or rerun with --sync to stream phase events",
-                        workflow.id, workflow.status
+                        "dispatched workflow {workflow_id} (status={status}) — tail with: animus daemon events --follow, or rerun with --sync to stream phase events"
                     );
                 }
                 print_value(workflow, json)

@@ -1,6 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub(super) struct CliExecutionResult {
     pub(super) command: String,
     pub(super) args: Vec<String>,
