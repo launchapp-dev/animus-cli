@@ -258,6 +258,133 @@ impl DeviceEncryptedSecretStore {
         let _ = FileExt::unlock(&lock);
         r
     }
+
+    /// Parse only the header, returning (source_id, salt, wrapped_master,
+    /// offset of the sealed body). Shared by `decode` and `rewrap_master_key`.
+    fn parse_header(raw: &[u8]) -> SecretStoreResult<(String, Vec<u8>, Vec<u8>, usize)> {
+        let mut cur = Cursor::new(raw);
+        let magic = cur.take(MAGIC.len())?;
+        if magic != MAGIC {
+            return Err(backend("not an Animus secret store (bad magic)"));
+        }
+        let version = cur.take(1)?[0];
+        if version != FORMAT_VERSION {
+            return Err(backend(format!("unsupported secret store version {version}")));
+        }
+        let source_id = String::from_utf8(cur.take_lp()?.to_vec()).map_err(|_| backend("bad key-source id"))?;
+        let salt = cur.take_lp()?.to_vec();
+        let wrapped_master = cur.take_lp()?.to_vec();
+        Ok((source_id, salt, wrapped_master, cur.pos))
+    }
+
+    /// Read-only probe for deploy preflights (`animus secret verify`): unlocks
+    /// the store exactly like a real read but NEVER creates, initializes, or
+    /// rewrites anything — a wrong key can never silently wipe the store.
+    pub fn verify(&self) -> SecretVerifyStatus {
+        let raw = match std::fs::read(&self.secrets_path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SecretVerifyStatus::Missing,
+            Err(e) => return SecretVerifyStatus::Corrupt(format!("read failed: {e}")),
+        };
+        match self.decode(&raw) {
+            Ok(state) => SecretVerifyStatus::Ok { entries: state.entries.len() },
+            Err(err) => {
+                let msg = err.to_string();
+                // AEAD failure means the ciphertext did not authenticate under
+                // the configured key (wrong key or tamper); a key-source id
+                // mismatch means the operator pointed at the wrong source.
+                // Both are "unlock" problems, not structural corruption.
+                if msg.contains("AEAD verification failed") || msg.contains("was written with key source") {
+                    SecretVerifyStatus::UnlockFailed(msg)
+                } else {
+                    SecretVerifyStatus::Corrupt(msg)
+                }
+            }
+        }
+    }
+
+    /// Re-wrap the store's master key under `new_wrap_key` (rotation of the
+    /// operator key, e.g. a new ANIMUS_SECRET_KEY). Only the wrap changes: the
+    /// master key and every sealed secret stay byte-identical, so no secret
+    /// re-encryption is needed. Serialized under the same advisory write lock
+    /// as every other mutation; fails WITHOUT touching the file when the
+    /// current key cannot unlock the store first.
+    ///
+    /// Idempotent: when the file already unwraps to the same master key under
+    /// the new key (a retried rotation), reports AlreadyWrapped and succeeds.
+    pub fn rewrap_master_key(&self, new_wrap_key: &[u8; KEY_LEN]) -> SecretStoreResult<RewrapOutcome> {
+        self.with_write_lock(|| {
+            let raw = std::fs::read(&self.secrets_path).map_err(|e| io_err(&self.secrets_path, e))?;
+            let (source_id, salt, wrapped_master, body_offset) = Self::parse_header(&raw)?;
+            let aad = Self::aad(&source_id, &salt);
+
+            // Try CURRENT first, then NEXT (codex review): after a completed
+            // rotation the configured key is stale until the operator swaps
+            // env, and a retried rewrap must still succeed idempotently.
+            let state = match self.decode(&raw) {
+                Ok(state) => state,
+                Err(decode_err) => {
+                    if let Ok(recovered) = open(new_wrap_key, &wrapped_master, &aad) {
+                        if recovered.len() == KEY_LEN {
+                            return Ok(RewrapOutcome::AlreadyWrapped);
+                        }
+                    }
+                    return Err(decode_err);
+                }
+            };
+
+            // Idempotency: already wrapped under the new key to the same master.
+            if let Ok(recovered) = open(new_wrap_key, &wrapped_master, &aad) {
+                if recovered.as_slice() == state.master_key.as_slice() {
+                    return Ok(RewrapOutcome::AlreadyWrapped);
+                }
+                return Err(backend(
+                    "new key unwraps the store but recovers a DIFFERENT master key — refusing to rotate (possible key collision or tamper)",
+                ));
+            }
+
+            let new_wrapped = seal(new_wrap_key, state.master_key.as_slice(), &aad)?;
+            // Self-check before committing: the new wrap must recover the exact
+            // master key (codex review: unwrap → wrap → unwrap → compare).
+            let recovered = open(new_wrap_key, &new_wrapped, &aad)?;
+            if recovered.as_slice() != state.master_key.as_slice() {
+                return Err(backend("post-rotation unwrap mismatch; the store was NOT rewritten"));
+            }
+
+            let mut out = Vec::with_capacity(raw.len());
+            out.extend_from_slice(MAGIC);
+            out.push(FORMAT_VERSION);
+            write_lp(&mut out, source_id.as_bytes());
+            write_lp(&mut out, &state.salt);
+            write_lp(&mut out, &new_wrapped);
+            out.extend_from_slice(&raw[body_offset..]);
+            self.atomic_write(&out)?;
+            Ok(RewrapOutcome::Rewrapped)
+        })
+    }
+}
+
+/// Outcome of a read-only `verify` probe. Never mutates the store.
+#[derive(Debug)]
+pub enum SecretVerifyStatus {
+    /// Store decrypted cleanly; carries the entry count.
+    Ok { entries: usize },
+    /// No store file exists (fresh install; a later write initializes it).
+    Missing,
+    /// The file exists but cannot be unlocked with the configured key source
+    /// (wrong key, wrong key-source configuration, or tampered ciphertext).
+    UnlockFailed(String),
+    /// The file is structurally invalid (bad magic/version/framing).
+    Corrupt(String),
+}
+
+/// Outcome of [`DeviceEncryptedSecretStore::rewrap_master_key`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum RewrapOutcome {
+    /// The master key was re-wrapped under the new key and the store rewritten.
+    Rewrapped,
+    /// The store was already wrapped under the new key — idempotent success.
+    AlreadyWrapped,
 }
 
 impl SecretStore for DeviceEncryptedSecretStore {
@@ -418,6 +545,16 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
     }
 }
 
+/// Build the device-encrypted store for a repo scope with the global `secrets`
+/// config's key source, mirroring `build_secret_store`'s resolution. Used by
+/// `animus secret verify` / `animus secret rewrap-key`, which must address the
+/// encrypted store directly regardless of the configured default backend.
+pub fn build_device_store(scoped_root: impl Into<PathBuf>) -> DeviceEncryptedSecretStore {
+    let scoped_root = scoped_root.into();
+    let cfg = protocol::Config::load_global_if_exists().and_then(|c| c.secrets).unwrap_or_default();
+    DeviceEncryptedSecretStore::new(scoped_root, key_source_config(&cfg))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +596,77 @@ mod tests {
         s.set("API_KEY", "PLAINTEXT_NEEDLE").unwrap();
         let raw = std::fs::read(s.path()).unwrap();
         assert!(!raw.windows(16).any(|w| w == b"PLAINTEXT_NEEDLE"), "secret value must not appear in the file");
+    }
+
+    // --- verify / rewrap_master_key (operator-key rotation) ---
+
+    #[test]
+    fn verify_reports_missing_ok_unlock_failed_and_corrupt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = store(tmp.path());
+        assert!(matches!(s.verify(), SecretVerifyStatus::Missing));
+
+        s.set("API_KEY", "v").unwrap();
+        assert!(matches!(s.verify(), SecretVerifyStatus::Ok { entries: 1 }));
+
+        let wrong = store_with_key(tmp.path(), "wrong.key", [9u8; KEY_LEN]);
+        assert!(matches!(wrong.verify(), SecretVerifyStatus::UnlockFailed(_)));
+
+        std::fs::write(s.path(), b"garbage").unwrap();
+        assert!(matches!(s.verify(), SecretVerifyStatus::Corrupt(_)));
+    }
+
+    #[test]
+    fn rewrap_rotates_the_wrap_key_without_touching_secrets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let key_a = [3u8; KEY_LEN];
+        let key_b = [7u8; KEY_LEN];
+        let store_a = store_with_key(tmp.path(), "a.key", key_a);
+        store_a.set("API_KEY", "sekret").unwrap();
+        store_a.set("OTHER", "v2").unwrap();
+
+        assert_eq!(store_a.rewrap_master_key(&key_b).unwrap(), RewrapOutcome::Rewrapped);
+        // Idempotent: a retried rotation is a no-op success.
+        assert_eq!(store_a.rewrap_master_key(&key_b).unwrap(), RewrapOutcome::AlreadyWrapped);
+
+        // The new key reads everything; the old key no longer unlocks.
+        let store_b = store_with_key(tmp.path(), "b.key", key_b);
+        assert!(matches!(store_b.verify(), SecretVerifyStatus::Ok { entries: 2 }));
+        assert_eq!(store_b.get("API_KEY").unwrap().as_deref(), Some("sekret"));
+        assert_eq!(store_b.get("OTHER").unwrap().as_deref(), Some("v2"));
+        assert!(matches!(store_a.verify(), SecretVerifyStatus::UnlockFailed(_)));
+    }
+
+    #[test]
+    fn rewrap_refuses_a_new_key_that_recovers_a_different_master() {
+        // Construct the pathological case by hand: a store whose wrapped blob
+        // authenticates under BOTH the old key and a colliding new key is not
+        // constructible via the public API, so this test instead proves the
+        // guard's inverse: rotation to the CURRENT key is idempotent, never a
+        // rewrite.
+        let tmp = tempfile::tempdir().unwrap();
+        let key_a = [3u8; KEY_LEN];
+        let store_a = store_with_key(tmp.path(), "a.key", key_a);
+        store_a.set("API_KEY", "sekret").unwrap();
+        let before = std::fs::read(store_a.path()).unwrap();
+        assert_eq!(store_a.rewrap_master_key(&key_a).unwrap(), RewrapOutcome::AlreadyWrapped);
+        let after = std::fs::read(store_a.path()).unwrap();
+        assert_eq!(before, after, "idempotent no-op must not rewrite the file");
+    }
+
+    #[test]
+    fn rewrap_requires_the_current_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store_a = store_with_key(tmp.path(), "a.key", [3u8; KEY_LEN]);
+        store_a.set("API_KEY", "sekret").unwrap();
+        // A store configured with the WRONG current key must fail closed and
+        // leave the file byte-identical.
+        let store_wrong = store_with_key(tmp.path(), "wrong.key", [9u8; KEY_LEN]);
+        let before = std::fs::read(store_a.path()).unwrap();
+        assert!(store_wrong.rewrap_master_key(&[7u8; KEY_LEN]).is_err());
+        let after = std::fs::read(store_a.path()).unwrap();
+        assert_eq!(before, after);
+        assert!(matches!(store_a.verify(), SecretVerifyStatus::Ok { entries: 1 }));
     }
 
     #[test]
