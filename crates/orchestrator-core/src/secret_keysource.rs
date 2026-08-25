@@ -23,6 +23,10 @@ pub const KEY_LEN: usize = 32;
 /// Env var holding a raw operator-supplied key (hex or base64), used by
 /// `secret_key_source = user-key`.
 pub const ENV_USER_KEY: &str = "ANIMUS_SECRET_KEY";
+/// Env var staging the NEXT operator key for `animus secret rewrap-key`: the
+/// store's master key is re-wrapped from the current key to this one, then the
+/// operator swaps ANIMUS_SECRET_KEY to the new value and unsets this var.
+pub const ENV_USER_KEY_NEXT: &str = "ANIMUS_SECRET_KEY_NEXT";
 /// Env var holding a passphrase for `secret_key_source = passphrase` in
 /// non-interactive (daemon) contexts.
 pub const ENV_PASSPHRASE: &str = "ANIMUS_SECRET_PASSPHRASE";
@@ -139,6 +143,16 @@ fn parse_raw_key(raw: &str) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     key.copy_from_slice(&bytes);
     Ok(key)
+}
+
+/// Resolve the staged NEXT operator key for `animus secret rewrap-key`
+/// ([`ENV_USER_KEY_NEXT`], hex or base64, 32 bytes). The rotation flow:
+/// stage the new key here, run `animus secret rewrap-key`, verify, swap
+/// [`ENV_USER_KEY`] to the new value, unset this var.
+pub fn resolve_next_user_key() -> Result<Zeroizing<[u8; KEY_LEN]>> {
+    let raw = std::env::var(ENV_USER_KEY_NEXT)
+        .with_context(|| format!("{ENV_USER_KEY_NEXT} is not set (hex or base64, 32 bytes)"))?;
+    parse_raw_key(raw.trim())
 }
 
 // ----------------------------------------------------------------------------

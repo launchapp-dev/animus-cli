@@ -27,6 +27,33 @@ pub(crate) enum SecretCommand {
     /// device-encrypted store). Non-destructive: the source is left intact
     /// unless `--remove-source` is passed.
     Migrate(SecretMigrateArgs),
+    /// Read-only probe of the device-encrypted store: reports whether the
+    /// configured key source unlocks it (ok / missing / unlock-failed /
+    /// corrupt) and NEVER creates, initializes, or rewrites anything. Intended
+    /// as a deploy preflight so a bad ANIMUS_SECRET_KEY fails loudly at boot
+    /// instead of bricking the daemon at first secret read.
+    Verify(SecretVerifyArgs),
+    /// Re-wrap the store's master key from the current operator key to the key
+    /// staged in ANIMUS_SECRET_KEY_NEXT (hex or base64, 32 bytes). Only the
+    /// wrap changes — no secret is re-encrypted. Idempotent. Operator flow:
+    /// stage the new key in ANIMUS_SECRET_KEY_NEXT, run this command, run
+    /// `animus secret verify` with the new key, swap ANIMUS_SECRET_KEY to the
+    /// new value, then unset ANIMUS_SECRET_KEY_NEXT.
+    RewrapKey(SecretRewrapArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SecretVerifyArgs {
+    /// Emit machine-readable JSON output on the `animus.cli.v1` envelope.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SecretRewrapArgs {
+    /// Emit machine-readable JSON output on the `animus.cli.v1` envelope.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]

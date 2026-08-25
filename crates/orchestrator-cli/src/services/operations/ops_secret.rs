@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::{
     print_value, SecretCommand, SecretExportEnvArgs, SecretGetArgs, SecretImportEnvArgs, SecretListArgs,
-    SecretMigrateArgs, SecretRmArgs, SecretSetArgs,
+    SecretMigrateArgs, SecretRewrapArgs, SecretRmArgs, SecretSetArgs, SecretVerifyArgs,
 };
 
 pub(crate) async fn handle_secret(
@@ -42,7 +42,56 @@ pub(crate) async fn handle_secret(
             handle_export_env(args, store.as_ref(), &project_root_path, &scoped_root, &actor, cli_json)
         }
         SecretCommand::Migrate(args) => handle_migrate(args, &project_root_path, &scoped_root, &actor, cli_json),
+        SecretCommand::Verify(args) => handle_verify(args, &scoped_root, cli_json),
+        SecretCommand::RewrapKey(args) => handle_rewrap_key(args, &scoped_root, cli_json),
     }
+}
+
+fn handle_verify(args: SecretVerifyArgs, scoped_root: &Path, cli_json: bool) -> Result<()> {
+    let json = cli_json || args.json;
+    let store = orchestrator_core::build_device_store(scoped_root.to_path_buf());
+    let status = store.verify();
+    let (state, detail) = match &status {
+        orchestrator_core::SecretVerifyStatus::Ok { entries } => ("ok", format!("{entries} entries")),
+        orchestrator_core::SecretVerifyStatus::Missing => ("missing", "no store file (fresh install)".to_string()),
+        orchestrator_core::SecretVerifyStatus::UnlockFailed(msg) => ("unlock_failed", msg.clone()),
+        orchestrator_core::SecretVerifyStatus::Corrupt(msg) => ("corrupt", msg.clone()),
+    };
+    let ok = matches!(
+        status,
+        orchestrator_core::SecretVerifyStatus::Ok { .. } | orchestrator_core::SecretVerifyStatus::Missing
+    );
+    print_value(
+        json!({ "ok": ok, "state": state, "detail": detail, "store": store.path().display().to_string() }),
+        json,
+    )?;
+    if ok {
+        Ok(())
+    } else {
+        Err(anyhow!("secret store verify failed: {state} — {detail}"))
+    }
+}
+
+fn handle_rewrap_key(args: SecretRewrapArgs, scoped_root: &Path, cli_json: bool) -> Result<()> {
+    let json = cli_json || args.json;
+    let next = orchestrator_core::resolve_next_user_key()?;
+    let store = orchestrator_core::build_device_store(scoped_root.to_path_buf());
+    let outcome = store.rewrap_master_key(&next)?;
+    let (rewrapped, detail) = match outcome {
+        orchestrator_core::RewrapOutcome::Rewrapped => (
+            true,
+            "master key re-wrapped under ANIMUS_SECRET_KEY_NEXT — swap ANIMUS_SECRET_KEY to the new value, verify, then unset ANIMUS_SECRET_KEY_NEXT".to_string(),
+        ),
+        orchestrator_core::RewrapOutcome::AlreadyWrapped => (
+            false,
+            "store is already wrapped under ANIMUS_SECRET_KEY_NEXT (idempotent no-op)".to_string(),
+        ),
+    };
+    print_value(
+        json!({ "ok": true, "rewrapped": rewrapped, "detail": detail, "store": store.path().display().to_string() }),
+        json,
+    )?;
+    Ok(())
 }
 
 /// Copy every secret between backends (keyring <-> device store). Builds both
