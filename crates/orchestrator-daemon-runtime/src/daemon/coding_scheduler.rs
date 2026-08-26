@@ -341,7 +341,10 @@ impl CodingScheduler {
             let recovery_needed = state.leases.iter().filter(|lease| lease.expires_at <= now).cloned().collect();
             CodingSchedulerStatus {
                 capacity: CODING_SCHEDULER_CAPACITY,
-                available: CODING_SCHEDULER_CAPACITY.saturating_sub(state.leases.len()),
+                // TASK-1332: only LIVE leases consume slots; expired entries are
+                // recovery bookkeeping, not occupancy.
+                available: CODING_SCHEDULER_CAPACITY
+                    .saturating_sub(state.leases.iter().filter(|lease| lease.expires_at > now).count()),
                 owner_id: state.owner_id.clone(),
                 reservations: state.leases.clone(),
                 recovery_needed,
@@ -513,10 +516,19 @@ fn same_queue_authority(left: &ExecutionFence, right: &ExecutionFence) -> bool {
 }
 
 fn collision(state: &SchedulerState, wanted: &CodingLease) -> Option<CollisionReason> {
-    if let Some(existing) = state.leases.iter().find(|lease| lease.task == wanted.task) {
+    let now = Utc::now();
+    // TASK-1332: an EXPIRED lease must never block a freshly queue-leased
+    // dispatch. The queue backend is the lease authority — it issued the new
+    // lease because the old one lapsed — so expired local bookkeeping only
+    // wedges the fleet (the 2026-08-26 outage: a recovered lease for a
+    // cancelled run bounced every later entry for its subject with
+    // LeaseExpired/TaskAlreadyActive forever). Live leases keep every
+    // protection below unchanged.
+    let live = |lease: &&CodingLease| lease.expires_at > now;
+    if let Some(existing) = state.leases.iter().filter(live).find(|lease| lease.task == wanted.task) {
         return Some(CollisionReason::DuplicateTaskGeneration { task: existing.task.clone() });
     }
-    if let Some(existing) = state.leases.iter().find(|lease| lease.task.task_id == wanted.task.task_id) {
+    if let Some(existing) = state.leases.iter().filter(live).find(|lease| lease.task.task_id == wanted.task.task_id) {
         return Some(CollisionReason::TaskAlreadyActive {
             task_id: existing.task.task_id.clone(),
             generation: existing.task.generation.clone(),
@@ -525,13 +537,18 @@ fn collision(state: &SchedulerState, wanted: &CodingLease) -> Option<CollisionRe
     if let Some(reason) = resource_collision(state, usize::MAX, wanted) {
         return Some(reason);
     }
-    (state.leases.len() >= CODING_SCHEDULER_CAPACITY)
+    (state.leases.iter().filter(|lease| lease.expires_at > now).count() >= CODING_SCHEDULER_CAPACITY)
         .then_some(CollisionReason::Capacity { capacity: CODING_SCHEDULER_CAPACITY })
 }
 
 fn resource_collision(state: &SchedulerState, skip: usize, wanted: &CodingLease) -> Option<CollisionReason> {
+    let now = Utc::now();
     for (index, existing) in state.leases.iter().enumerate() {
         if index == skip {
+            continue;
+        }
+        // TASK-1332: expired leases never collide — see collision().
+        if existing.expires_at <= now {
             continue;
         }
         if let (Some(held), Some(wanted_ref)) =
@@ -718,6 +735,12 @@ mod tests {
         CodingRunResources::from_execution(&execution(n)).unwrap()
     }
 
+    fn expired_execution(n: usize) -> ExecutionFence {
+        let mut execution = execution(n);
+        execution.queue_lease.as_mut().unwrap().expires_at = Utc::now() - Duration::minutes(1);
+        execution
+    }
+
     fn non_code_execution(n: usize) -> ExecutionFence {
         let mut execution = execution(n);
         execution.repository = None;
@@ -750,6 +773,36 @@ mod tests {
             scheduler.track(execution(9), resources(9)).unwrap(),
             ReservationOutcome::Rejected { reason: CollisionReason::Capacity { capacity: 5 } }
         ));
+    }
+
+    #[test]
+    fn expired_leases_never_block_a_fresh_queue_lease_for_the_same_task() {
+        // TASK-1332 regression: a recovered, expired lease for a cancelled run
+        // used to bounce every later queue entry for the same subject with
+        // TaskAlreadyActive forever (production wedge, 2026-08-26).
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("leases.json");
+        let scheduler = CodingScheduler::with_state_path(path.clone());
+
+        let stale = expired_execution(1);
+        assert!(matches!(
+            scheduler.track(stale.clone(), CodingRunResources::from_execution(&stale).unwrap()).unwrap(),
+            ReservationOutcome::Reserved { .. }
+        ));
+
+        // A different execution (new workflow + new queue entry) for the SAME
+        // task must reserve cleanly even though the stale lease is still on disk.
+        let mut fresh = execution(2);
+        fresh.subject = stale.subject.clone();
+        assert!(matches!(
+            scheduler.track(fresh.clone(), CodingRunResources::from_execution(&fresh).unwrap()).unwrap(),
+            ReservationOutcome::Reserved { .. }
+        ));
+
+        // Only live leases consume capacity: 1 live of 5, not 2 of 5.
+        let status = CodingScheduler::with_state_path(path).status().unwrap();
+        assert_eq!(status.available, CODING_SCHEDULER_CAPACITY - 1);
+        assert_eq!(status.recovery_needed.len(), 1, "the expired lease remains listed for queue recovery");
     }
 
     #[test]
