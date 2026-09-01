@@ -306,13 +306,13 @@ animus
 │   └── revoke-trust         Revoke trust for a GitHub org (tombstones `revoked_at` so re-installs re-prompt); the built-in `launchapp-dev` org cannot be revoked
 │
 ├── status                   Show a unified project status dashboard. `--failures N` sets how many recent workflow failures to list (default 3; applies to both human and JSON output). Human view includes three additional sections: **Task Summary** (live from SubjectRouter; renders "unavailable" with an error when the router is unreachable), **Blocked / Paused** (id + reason + blocked_by + age), and **Needs You** (pending agent interactions with answer-command hints). The Daemon section reports `provider_plugins_healthy` (the replacement for the removed `runner_connected`/`runner_pid` fields, which were dropped from both the human view and the `--json` envelope)
-├── output                   Inspect run output and artifacts
-│   ├── read                 Read run event payloads (`--run-id`, or `--workflow-id` to resolve the latest run recorded for that workflow; clear error when none or ambiguous)
+├── output                   Inspect run output and artifacts. When the local `runs/<run_id>/` directory is absent (node-executed runs), `read`/`jsonl`/`monitor`/`cli` fall back to the project's `log_storage_backend` plugin (`log_storage/query` with `source: "workflow"`, `source_name: <workflow-id>`, filtered to `fields.run_id`); entries must carry `fields.run_event` + `fields.source_file` per the writer contract in `crates/orchestrator-cli/src/services/operations/ops_output_remote.rs`
+│   ├── read                 Read run event payloads (`--run-id`, or `--workflow-id` to resolve the latest run recorded for that workflow; clear error when none or ambiguous). When no local run is recorded for `--workflow-id` at all, reads the workflow's events back from the log_storage backend
 │   ├── phase-outputs        Read persisted workflow phase outputs. Human view renders one block per phase (verdict, reason, commit) plus a Skills section — requested vs applied (with source scope and contribution kinds) vs missing — so an attached skill is verifiably applied, never a silent no-op; `--json` carries the raw outputs incl. the persisted skill records
 │   ├── artifacts            List artifacts for an execution id
 │   ├── download             Download an artifact payload
-│   ├── jsonl                Read aggregated JSONL output streams for a run
-│   ├── monitor              Inspect run output with optional task/phase filtering
+│   ├── jsonl                Read aggregated JSONL output streams for a run (log_storage fallback when the local run dir is absent)
+│   ├── monitor              Inspect run output with optional task/phase filtering (log_storage fallback when the local run dir is absent)
 │   ├── cli                  Infer CLI provider details from run output
 │   └── decisions            Read the per-run LLM decision log (`runs/<run_id>/decisions.jsonl`: session header, prompts, tool calls/results, errors) by `--run-id` or `--workflow-id`. Distinct from `workflow decisions`, which shows phase-advance decision history stored on workflow state
 │

@@ -30,10 +30,34 @@ impl AoMcpServer {
         }
     }
 
-    pub(super) fn output_run_inproc(&self, input: super::RunIdInput) -> CallToolResult {
-        self.run_output_application("animus.output.run", input.project_root, true, |root, actor| {
-            output_read_application(root, Some(&input.run_id), None, None, actor)
+    /// Async variant for output applications that may fall back to the
+    /// log_storage backend (remote/node-executed runs).
+    async fn run_output_application_async<T, F, Fut>(
+        &self,
+        tool_name: &str,
+        project_root: Option<String>,
+        actor_bound: bool,
+        call: F,
+    ) -> CallToolResult
+    where
+        T: Serialize,
+        F: FnOnce(String, Option<animus_actor::Actor>) -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        self.audit_actor_tool_decision(tool_name, actor_bound, if actor_bound { "forward" } else { "management-only" });
+        let project_root = resolve_project_root(&self.default_project_root, project_root);
+        let actor = self.pinned_actor().cloned();
+        match call(project_root, actor).await {
+            Ok(result) => CallToolResult::structured(json!({ "tool": tool_name, "result": result })),
+            Err(error) => CallToolResult::structured_error(build_inproc_tool_error_payload(tool_name, &error)),
+        }
+    }
+
+    pub(super) async fn output_run_inproc(&self, input: super::RunIdInput) -> CallToolResult {
+        self.run_output_application_async("animus.output.run", input.project_root, true, |root, actor| async move {
+            output_read_application(&root, Some(&input.run_id), None, None, actor.as_ref()).await
         })
+        .await
     }
 
     pub(super) fn output_phase_outputs_inproc(&self, input: super::OutputPhaseOutputsInput) -> CallToolResult {
@@ -42,16 +66,24 @@ impl AoMcpServer {
         })
     }
 
-    pub(super) fn output_monitor_inproc(&self, input: super::OutputMonitorInput) -> CallToolResult {
-        self.run_output_application("animus.output.monitor", input.project_root, false, |root, _actor| {
-            output_monitor_application(root, &input.run_id, input.task_id.as_deref(), input.phase_id.as_deref())
-        })
+    pub(super) async fn output_monitor_inproc(&self, input: super::OutputMonitorInput) -> CallToolResult {
+        self.run_output_application_async(
+            "animus.output.monitor",
+            input.project_root,
+            false,
+            |root, _actor| async move {
+                output_monitor_application(&root, &input.run_id, input.task_id.as_deref(), input.phase_id.as_deref())
+                    .await
+            },
+        )
+        .await
     }
 
-    pub(super) fn output_jsonl_inproc(&self, input: super::OutputJsonlInput) -> CallToolResult {
-        self.run_output_application("animus.output.jsonl", input.project_root, false, |root, _actor| {
-            output_jsonl_application(root, &input.run_id, input.entries)
+    pub(super) async fn output_jsonl_inproc(&self, input: super::OutputJsonlInput) -> CallToolResult {
+        self.run_output_application_async("animus.output.jsonl", input.project_root, false, |root, _actor| async move {
+            output_jsonl_application(&root, &input.run_id, input.entries).await
         })
+        .await
     }
 
     pub(super) fn output_artifacts_inproc(&self, input: super::ExecutionIdInput) -> CallToolResult {
@@ -67,8 +99,9 @@ mod tests {
     use protocol::RunId;
     use serde_json::Value;
 
-    #[test]
-    fn output_read_is_in_process_and_conceals_cross_actor_runs() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: guards process-global env mutation across the awaits
+    async fn output_read_is_in_process_and_conceals_cross_actor_runs() {
         let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().expect("temp home");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
@@ -126,13 +159,13 @@ mod tests {
         let bob_server = super::super::new_ao_mcp_server_with_options(root.as_ref(), false, None, None, Some(bob));
         let input = || super::super::RunIdInput { run_id: workflow_id.to_string(), project_root: None };
 
-        let allowed = alice_server.output_run_inproc(input());
+        let allowed = alice_server.output_run_inproc(input()).await;
         let allowed_is_error = allowed.is_error;
         let payload = allowed.structured_content.expect("owned output");
         assert_ne!(allowed_is_error, Some(true), "{payload}");
         assert_eq!(payload.pointer("/result/0/text").and_then(Value::as_str), Some("ready"), "{payload}");
 
-        let denied = bob_server.output_run_inproc(input());
+        let denied = bob_server.output_run_inproc(input()).await;
         assert_eq!(denied.is_error, Some(true));
         let payload = denied.structured_content.expect("concealed output");
         assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("not_found"), "{payload}");
@@ -154,8 +187,9 @@ mod tests {
         assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("not_found"), "{payload}");
     }
 
-    #[test]
-    fn jsonl_and_monitor_share_typed_run_entries_without_a_child_cli() {
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: guards process-global env mutation across the awaits
+    async fn jsonl_and_monitor_share_typed_run_entries_without_a_child_cli() {
         let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().expect("temp home");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
@@ -171,20 +205,24 @@ mod tests {
         .expect("stdout events");
         let server = super::super::new_ao_mcp_server(project_root.to_string_lossy().as_ref());
 
-        let jsonl = server.output_jsonl_inproc(super::super::OutputJsonlInput {
-            run_id: run_id.to_string(),
-            entries: true,
-            project_root: None,
-        });
+        let jsonl = server
+            .output_jsonl_inproc(super::super::OutputJsonlInput {
+                run_id: run_id.to_string(),
+                entries: true,
+                project_root: None,
+            })
+            .await;
         let payload = jsonl.structured_content.expect("jsonl output");
         assert_eq!(payload.pointer("/result/0/source_file").and_then(Value::as_str), Some("stdout.jsonl"));
 
-        let monitor = server.output_monitor_inproc(super::super::OutputMonitorInput {
-            run_id: run_id.to_string(),
-            task_id: Some("TASK-971".to_string()),
-            phase_id: Some("build".to_string()),
-            project_root: None,
-        });
+        let monitor = server
+            .output_monitor_inproc(super::super::OutputMonitorInput {
+                run_id: run_id.to_string(),
+                task_id: Some("TASK-971".to_string()),
+                phase_id: Some("build".to_string()),
+                project_root: None,
+            })
+            .await;
         let payload = monitor.structured_content.expect("monitor output");
         assert_eq!(payload.pointer("/result/0/text").and_then(Value::as_str), Some("keep"));
         assert_eq!(payload.pointer("/result").and_then(Value::as_array).map(Vec::len), Some(1));
