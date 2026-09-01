@@ -365,7 +365,7 @@ animus
 │   ├── list                 List managed environment nodes with their state + orphan flag
 │   ├── get                  Describe one managed node by substrate id or name
 │   ├── teardown             Destroy one managed node by substrate id or name (idempotent)
-│   └── reap                 Reap orphaned/dead nodes (`--dry-run` previews; `--all --force` also reaps healthy orphans)
+│   └── reap                 Reap orphaned/dead nodes (default is owner-known: dead nodes + healthy nodes of terminal/gone workflows, `--dry-run` previews; `--all --force` keeps the legacy healthy-orphan sweep)
 │
 ├── flavor                   Inspect or install Animus flavor manifests (`flavors/<name>.toml`) — v0.5
 │   ├── list                 List available flavor manifests on disk

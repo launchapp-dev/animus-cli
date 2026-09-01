@@ -29,24 +29,24 @@ categories = ["command-line-utilities", "development-tools"]
 # this repo. Every dependency is pinned to the same release so Cargo resolves
 # one coherent wire identity with no workstation paths or legacy source split.
 animus-runtime-utils = { path = "crates/animus-runtime-utils" }
-animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-application-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-execution-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
+animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-application-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-execution-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
+animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43" }
 # v0.7: environment plugin kind — EnvironmentSpec/HarnessCommand/ExecRequest wire
 # types + prepare/exec/exec_stream/teardown methods. Consumed by the routing
 # resolver + the follow-on runtime EnvironmentClient (not yet built).
-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14", package = "protocol" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.43", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }

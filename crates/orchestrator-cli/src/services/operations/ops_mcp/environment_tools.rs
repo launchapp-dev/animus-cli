@@ -38,7 +38,10 @@ pub(super) struct EnvironmentTeardownInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct EnvironmentReapInput {
-    /// Also reap non-dead nodes with no live owning run (requires `force`).
+    /// Also reap non-dead nodes with no live owning run (requires `force`),
+    /// WITHOUT consulting the journal's live run set. Without `all`, the
+    /// default reap runs owner-known: healthy nodes of terminal/gone workflows
+    /// are reaped too (subject to the plugin's age grace).
     #[serde(default)]
     pub(super) all: bool,
     /// Confirm reaping healthy orphans; required with `all`.
@@ -90,7 +93,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.environment.reap",
-        description = "Reap orphaned/dead environment nodes. Default reaps ONLY dead (FAILED/CRASHED) nodes — always safe. Purpose: clean up leaked run nodes without a dashboard/2FA delete. Prerequisites: an environment plugin installed. Example: {} (reap dead) or {\"dry_run\": true} (preview) or {\"all\": true, \"force\": true} (also reap healthy orphans). Sequencing: run with dry_run first to preview.",
+        description = "Reap orphaned/dead environment nodes. Default reaps dead (FAILED/CRASHED) nodes AND, when the journal's live run set is readable, healthy (SUCCESS) nodes whose owning workflow is terminal/gone (owner-known mode; plugin age grace applies) — always safe. Purpose: clean up leaked run nodes without a dashboard/2FA delete. Prerequisites: an environment plugin installed. Example: {} (default owner-known reap) or {\"dry_run\": true} (preview) or {\"all\": true, \"force\": true} (legacy healthy-orphan sweep). Sequencing: run with dry_run first to preview.",
         input_schema = ao_schema_for_type::<EnvironmentReapInput>()
     )]
     async fn ao_environment_reap(&self, params: Parameters<EnvironmentReapInput>) -> Result<CallToolResult, McpError> {

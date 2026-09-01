@@ -312,9 +312,21 @@ impl EnvironmentClient {
 
     /// `environment/reap`: destroy orphaned/dead managed nodes. Default (all=
     /// false) reaps only dead nodes; `all`+`force` also reaps healthy orphans;
-    /// `dry_run` reports the plan without deleting.
-    pub fn reap(&self, all: bool, force: bool, dry_run: bool, older_than_secs: Option<u64>) -> Result<ReapResponse> {
-        let request = ReapRequest { all, force, dry_run, older_than_secs };
+    /// `dry_run` reports the plan without deleting. When `live_run_ids` is
+    /// `Some`, the plugin switches to owner-known mode: healthy (SUCCESS) nodes
+    /// whose owning run id is NOT in the set are reaped (subject to the plugin's
+    /// age grace), and nodes owned by runs in the set are always kept. `None`
+    /// preserves the plugin's dead-only default — callers must pass `None`
+    /// (never `Some([])`) when they cannot obtain a trustworthy liveness set.
+    pub fn reap(
+        &self,
+        all: bool,
+        force: bool,
+        dry_run: bool,
+        older_than_secs: Option<u64>,
+        live_run_ids: Option<Vec<String>>,
+    ) -> Result<ReapResponse> {
+        let request = ReapRequest { all, force, dry_run, older_than_secs, live_run_ids };
         let value = self.call_blocking(METHOD_ENVIRONMENT_REAP, request, ENVIRONMENT_RPC_TIMEOUT)?;
         serde_json::from_value(value)
             .with_context(|| format!("decoding ReapResponse from environment plugin {}", self.plugin.name))
