@@ -12,8 +12,11 @@ pub(crate) enum EnvironmentCommand {
     Get(EnvironmentGetArgs),
     /// Destroy one managed node by substrate id or name (idempotent).
     Teardown(EnvironmentTeardownArgs),
-    /// Reap orphaned/dead nodes. Default reaps only dead (FAILED/CRASHED)
-    /// nodes; `--all --force` also reaps healthy nodes with no live owning run.
+    /// Reap orphaned/dead nodes. Default reaps dead (FAILED/CRASHED) nodes AND,
+    /// when the journal's live run set is readable, healthy (SUCCESS) nodes whose
+    /// owning workflow is terminal/gone (owner-known mode, plugin age grace
+    /// applies). `--all --force` keeps the legacy behavior: also reap healthy
+    /// nodes with no live owning run.
     Reap(EnvironmentReapArgs),
 }
 
@@ -43,7 +46,11 @@ pub(crate) struct EnvironmentTeardownArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct EnvironmentReapArgs {
-    /// Also reap non-dead nodes that have no live owning run (needs --force).
+    /// Also reap non-dead nodes that have no live owning run (needs --force),
+    /// WITHOUT consulting the journal's live run set (legacy healthy-orphan
+    /// sweep). Without --all, the default reap runs owner-known: it passes the
+    /// journal's live run ids so healthy nodes of terminal/gone workflows are
+    /// reaped too (subject to the plugin's age grace).
     #[arg(long)]
     pub(crate) all: bool,
     /// Confirm reaping healthy orphans; required with --all (guards against a

@@ -234,16 +234,20 @@ verbs to MCP callers through the same typed in-process application services used
 by the CLI. Those services drive the installed `environment` plugin's typed
 node-management protocol (`environment/list` · `/get` · `/teardown_node` ·
 `/reap`), so the plugin remains the intentional out-of-process state owner while
-the redundant child-CLI/argv hop is removed. `reap` defaults to deleting only
-DEAD (FAILED/CRASHED) nodes — always safe, since a live node is never dead;
-`all`+`force` also reaps healthy orphans.
+the redundant child-CLI/argv hop is removed. `reap` defaults to owner-known
+mode: it deletes DEAD (FAILED/CRASHED) nodes and, when the journal's live run
+set is readable, also healthy (SUCCESS) nodes whose owning workflow is
+terminal/gone (the plugin still applies its age grace; nodes owned by live
+runs are always kept). If the journal read fails, reap falls back to deleting
+only dead nodes. `all`+`force` keeps the legacy healthy-orphan sweep without
+consulting the journal.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `animus.environment.list` | List managed environment nodes with their state + orphan flag | `environment`, `project_root` |
 | `animus.environment.get` | Describe one managed node by substrate id or name | `id`, `environment`, `project_root` |
 | `animus.environment.teardown` | Destroy one managed node by substrate id or name (idempotent) | `id`, `environment`, `project_root` |
-| `animus.environment.reap` | Reap orphaned/dead nodes (default: only dead) | `all`, `force`, `dry_run`, `older_than_secs`, `environment`, `project_root` |
+| `animus.environment.reap` | Reap orphaned/dead nodes (default: owner-known — dead nodes + healthy nodes of terminal/gone workflows) | `all`, `force`, `dry_run`, `older_than_secs`, `environment`, `project_root` |
 
 Environment tools remain management-only because the node-management protocol
 does not carry an authenticated actor or partition nodes by user and tenant.

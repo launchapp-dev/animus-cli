@@ -278,8 +278,14 @@ spawns a child Animus process.
 { "id": "animus-run-abc123" }                        // animus.environment.get
 { "id": "animus-run-abc123" }                        // animus.environment.teardown
 { "dry_run": true, "older_than_secs": 3600 }         // animus.environment.reap preview
-{ "all": true, "force": true }                       // also reap healthy orphans
+{ "all": true, "force": true }                       // legacy healthy-orphan sweep (no journal liveness)
 ```
+
+The default `reap` is owner-known: it passes the journal's live
+(Pending/Running/Paused) run ids to the plugin, which also reaps healthy
+nodes whose owning workflow is terminal/gone (age grace applies; live owners
+are always kept). If the journal is unreadable it falls back to reaping only
+dead nodes.
 
 These tools remain management-only until the environment node-management
 protocol carries an authenticated actor and the owning plugin enforces its

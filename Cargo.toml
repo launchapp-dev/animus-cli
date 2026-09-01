@@ -33,7 +33,11 @@ animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag =
 animus-application-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
 animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
 animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
-animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
+# TEMPORARY (TASK-1466): pinned to the `task-1466/reap-live-run-ids` BRANCH so
+# `ReapRequest.live_run_ids` is available before the next write-once protocol
+# tag. Before merge/release: merge animus-protocol PR #8, cut the new tag, and
+# repin this entry to `tag = "<new-tag>"`.
+animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "task-1466/reap-live-run-ids" }
 animus-execution-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
 animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
 animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.14" }
