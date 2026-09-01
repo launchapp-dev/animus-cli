@@ -169,6 +169,13 @@ fn resolve_workflow_id_for_run(project_root: &str, run_id: &str) -> Result<Optio
     if orchestrator_core::WorkflowStateManager::new(project_root).load_workflow_actor(run_id).is_some() {
         return Ok(Some(run_id.to_string()));
     }
+    // Node-executed runs may have no local runs/ state at all; the runner's
+    // `wf-<workflow_uuid>-<phase>-...` run ids still embed the workflow id.
+    if let Some(workflow_id) = super::ops_output_remote::workflow_id_from_run_id(run_id) {
+        if orchestrator_core::WorkflowStateManager::new(project_root).load_workflow_actor(&workflow_id).is_some() {
+            return Ok(Some(workflow_id));
+        }
+    }
     Ok(None)
 }
 
@@ -216,7 +223,7 @@ fn resolve_run_id_for_workflow_phase(project_root: &str, workflow_id: &str, phas
     Err(not_found_error(format!("no run recorded for phase '{phase_id}' of workflow {workflow_id}")))
 }
 
-fn extract_timestamp_hint(line: &str) -> Option<String> {
+pub(crate) fn extract_timestamp_hint(line: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(line).ok()?;
     parsed
         .get("timestamp")
@@ -254,6 +261,20 @@ pub(crate) fn get_run_jsonl_entries(project_root: &str, run_id: &str) -> Result<
 
     rows.sort_by(|a, b| a.timestamp_hint.cmp(&b.timestamp_hint));
     Ok(rows)
+}
+
+/// Local-first read of a run's jsonl rows, falling back to the project's
+/// `log_storage_backend` plugin when no local `runs/<run_id>/` directory
+/// exists (node-executed runs — see `ops_output_remote`). A local run dir
+/// that exists but is empty does NOT trigger the remote read.
+pub(crate) async fn get_run_jsonl_entries_with_remote(
+    project_root: &str,
+    run_id: &str,
+) -> Result<Vec<RunJsonlEntryCli>> {
+    if resolve_run_dir_for_lookup(project_root, run_id)?.is_some() {
+        return get_run_jsonl_entries(project_root, run_id);
+    }
+    super::ops_output_remote::remote_run_jsonl_entries(project_root, run_id).await
 }
 
 fn infer_cli_from_jsonl(entries: &[RunJsonlEntryCli]) -> Option<String> {
@@ -324,7 +345,7 @@ fn ensure_safe_workflow_id(workflow_id: &str) -> Result<()> {
     ensure_safe_id_segment("workflow id", workflow_id)
 }
 
-pub(crate) fn output_read_application(
+pub(crate) async fn output_read_application(
     project_root: &str,
     run_id: Option<&str>,
     workflow_id: Option<&str>,
@@ -334,10 +355,34 @@ pub(crate) fn output_read_application(
     ensure_output_actor_access(project_root, workflow_id, run_id, actor)?;
     let resolved_run_id = match (phase, workflow_id) {
         (Some(phase), Some(workflow_id)) => resolve_run_id_for_workflow_phase(project_root, workflow_id, phase)?,
-        _ => resolve_run_id_arg(project_root, run_id.map(str::to_string), workflow_id.map(str::to_string))?,
+        _ => match resolve_run_id_arg(project_root, run_id.map(str::to_string), workflow_id.map(str::to_string)) {
+            Ok(run_id) => run_id,
+            Err(err) => {
+                // No local run was ever recorded for this workflow — try the
+                // log_storage backend before giving up (node-executed runs).
+                if let Some(workflow_id) = workflow_id {
+                    let events = super::ops_output_remote::remote_workflow_events(project_root, workflow_id).await?;
+                    if !events.is_empty() {
+                        return Ok(events);
+                    }
+                }
+                return Err(err);
+            }
+        },
     };
-    let run_dir = resolve_run_dir_for_lookup(project_root, &resolved_run_id)?
-        .ok_or_else(|| not_found_error(format!("run directory not found for {resolved_run_id}")))?;
+    let run_dir = match resolve_run_dir_for_lookup(project_root, &resolved_run_id)? {
+        Some(run_dir) => run_dir,
+        None => {
+            // The run resolved (e.g. via session checkpoints) but its run dir
+            // is gone, or it executed on a node — read the transcript back
+            // from the log_storage backend when one is configured.
+            let events = super::ops_output_remote::remote_run_events(project_root, &resolved_run_id).await?;
+            if !events.is_empty() {
+                return Ok(events);
+            }
+            return Err(not_found_error(format!("run directory not found for {resolved_run_id}")));
+        }
+    };
     let events_path = run_dir.join("events.jsonl");
     if !events_path.exists() {
         return Ok(Vec::new());
@@ -364,8 +409,8 @@ pub(crate) fn output_artifacts_application(project_root: &str, execution_id: &st
     list_artifact_infos(project_root, execution_id)
 }
 
-pub(crate) fn output_jsonl_application(project_root: &str, run_id: &str, include_entries: bool) -> Result<Value> {
-    let entries = get_run_jsonl_entries(project_root, run_id)?;
+pub(crate) async fn output_jsonl_application(project_root: &str, run_id: &str, include_entries: bool) -> Result<Value> {
+    let entries = get_run_jsonl_entries_with_remote(project_root, run_id).await?;
     if include_entries {
         Ok(serde_json::to_value(entries)?)
     } else {
@@ -373,13 +418,13 @@ pub(crate) fn output_jsonl_application(project_root: &str, run_id: &str, include
     }
 }
 
-pub(crate) fn output_monitor_application(
+pub(crate) async fn output_monitor_application(
     project_root: &str,
     run_id: &str,
     task_id: Option<&str>,
     phase_id: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let entries = get_run_jsonl_entries(project_root, run_id)?;
+    let entries = get_run_jsonl_entries_with_remote(project_root, run_id).await?;
     let mut events = Vec::new();
     for entry in entries {
         let Ok(payload) = serde_json::from_str::<Value>(&entry.line) else {
@@ -452,7 +497,8 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
                     args.workflow_id.as_deref(),
                     args.phase.as_deref(),
                     actor.as_ref(),
-                )?,
+                )
+                .await?,
                 json,
             )
         }
@@ -498,14 +544,15 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
             )
         }
         OutputCommand::Jsonl(args) => {
-            print_value(output_jsonl_application(project_root, &args.run_id, args.entries)?, json)
+            print_value(output_jsonl_application(project_root, &args.run_id, args.entries).await?, json)
         }
         OutputCommand::Monitor(args) => print_value(
-            output_monitor_application(project_root, &args.run_id, args.task_id.as_deref(), args.phase_id.as_deref())?,
+            output_monitor_application(project_root, &args.run_id, args.task_id.as_deref(), args.phase_id.as_deref())
+                .await?,
             json,
         ),
         OutputCommand::Cli(args) => {
-            let entries = get_run_jsonl_entries(project_root, &args.run_id)?;
+            let entries = get_run_jsonl_entries_with_remote(project_root, &args.run_id).await?;
             print_value(
                 serde_json::json!({
                     "run_id": args.run_id,

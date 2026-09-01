@@ -13,6 +13,7 @@ mod ops_manifest;
 mod ops_mcp;
 mod ops_metrics;
 mod ops_output;
+mod ops_output_remote;
 mod ops_pack;
 mod ops_plugin;
 mod ops_queue;

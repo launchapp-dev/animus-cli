@@ -8,7 +8,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<RunIdInput>()
     )]
     async fn ao_output_run(&self, params: Parameters<RunIdInput>) -> Result<CallToolResult, McpError> {
-        Ok(self.output_run_inproc(params.0))
+        Ok(self.output_run_inproc(params.0).await)
     }
 
     #[tool(
@@ -29,7 +29,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<OutputMonitorInput>()
     )]
     async fn ao_output_monitor(&self, params: Parameters<OutputMonitorInput>) -> Result<CallToolResult, McpError> {
-        Ok(self.output_monitor_inproc(params.0))
+        Ok(self.output_monitor_inproc(params.0).await)
     }
 
     #[tool(
@@ -56,7 +56,7 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<OutputJsonlInput>()
     )]
     async fn ao_output_jsonl(&self, params: Parameters<OutputJsonlInput>) -> Result<CallToolResult, McpError> {
-        Ok(self.output_jsonl_inproc(params.0))
+        Ok(self.output_jsonl_inproc(params.0).await)
     }
 
     #[tool(
