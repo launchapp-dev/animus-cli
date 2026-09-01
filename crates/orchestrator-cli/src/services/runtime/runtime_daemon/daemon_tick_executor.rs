@@ -1,8 +1,8 @@
 use super::*;
 use crate::services::runtime::execution_fact_projection::reconcile_completed_processes;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
-    journal_resume_enabled, reconcile_manual_phase_timeouts, recover_orphaned_running_workflows,
-    resumable_orphans_for_redispatch,
+    journal_resume_enabled, reconcile_manual_phase_timeouts, reconcile_terminal_environment_leases,
+    recover_orphaned_running_workflows, resumable_orphans_for_redispatch,
 };
 use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
@@ -309,6 +309,15 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         // Steady-state: the remote delegate is alive on its node, so skip live
         // delegated runs (see `recover_orphaned_running_workflows`).
         Ok(recover_orphaned_running_workflows(hub, root, active_subject_ids, resume_orphans, true).await)
+    }
+
+    /// TASK-1466: steady-state sweep for environment leases whose workflow
+    /// run is TERMINAL in the journal but whose owning runner/plugin died
+    /// before teardown ran. Without this leg the broker only retries those
+    /// leases at daemon STARTUP, so a steady-state leak burns compute until
+    /// the next restart.
+    async fn reconcile_terminal_environment_leases(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {
+        Ok(reconcile_terminal_environment_leases(hub, root).await)
     }
 
     async fn reconcile_manual_timeouts(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {

@@ -47,7 +47,8 @@ pub use dispatch_support::{
 pub use dispatch_workflow_start::DispatchWorkflowStart;
 pub use dispatch_workflow_start_summary::DispatchWorkflowStartSummary;
 pub use environment_broker::{
-    is_local_environment, EnvironmentBroker, ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
+    is_local_environment, list_environment_lease_records, remove_environment_lease_record, BrokerLeaseState,
+    EnvironmentBroker, EnvironmentLeaseSnapshot, ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
     ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV,
 };
 #[cfg(unix)]

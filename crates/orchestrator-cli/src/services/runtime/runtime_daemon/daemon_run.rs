@@ -4,7 +4,7 @@ use crate::services::operations::{
 };
 use crate::services::runtime::runtime_daemon::build_daemon_ops_routing;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
-    journal_resume_enabled, recover_orphaned_running_workflows,
+    journal_resume_enabled, reconcile_terminal_environment_leases, recover_orphaned_running_workflows,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -855,6 +855,16 @@ impl DaemonRunHooks for CliDaemonRunHost {
             let applier = FileResumedOutcomeApplier::new(project_root.to_string(), scoped_root.clone(), apply_hub);
             auto_resume_running_checkpoints(&scoped_root, &registry, &applier).await;
         }
+
+        // TASK-1466: a run can be TERMINAL in the durable journal while its
+        // environment teardown never ran (owner died between terminal
+        // projection and teardown, plugin restart, daemon kill). The broker's
+        // startup reap only handles records owned by a PRIOR daemon instance;
+        // sweep terminal rows with retained environment leases here too, and
+        // the heartbeat leg (`reconcile_terminal_environment_leases`) keeps
+        // retrying at steady state.
+        let terminal_env_hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(project_root)?);
+        reconcile_terminal_environment_leases(terminal_env_hub, project_root).await;
 
         Ok(orphans)
     }

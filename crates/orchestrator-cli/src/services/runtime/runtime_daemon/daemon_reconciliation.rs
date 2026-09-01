@@ -1,9 +1,10 @@
 use super::*;
 use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
 use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running_workflow;
-use animus_environment_protocol::{ExecResponse, HarnessCommand};
+use animus_environment_protocol::{EnvironmentHandle, ExecResponse, HarnessCommand};
 use animus_runtime_shared::phase_session::{
-    mark_environment_torn_down, read_checkpoint, update_session_failed, EnvironmentBinding,
+    list_checkpoints_with_retained_environment, mark_environment_torn_down, read_checkpoint, update_session_failed,
+    EnvironmentBinding,
 };
 use anyhow::{Context, Result};
 use orchestrator_core::{
@@ -83,6 +84,23 @@ enum ReconcileDecision {
     NotResumable,
     /// Cancelled as an unrecoverable orphan (cancel leg only).
     CancelledOrphan,
+    /// TASK-1466: a TERMINAL run's retained environment lease was torn down
+    /// by the sweep (terminal-env leg only).
+    TeardownTerminalLease,
+    /// TASK-1466: teardown of a terminal run's retained environment lease
+    /// FAILED; the durable record is retained for the next sweep
+    /// (terminal-env leg only).
+    TerminalLeaseTeardownFailed,
+    /// TASK-1466: retained lease skipped — the run is not terminal in the
+    /// journal (terminal-env leg only).
+    SkippedLeaseRunActive,
+    /// TASK-1466: retained lease skipped — the journal row could not be read,
+    /// so terminality is unconfirmed (terminal-env leg only; fail safe).
+    SkippedLeaseRunUnknown,
+    /// TASK-1466: terminal run is still inside the teardown grace floor, so
+    /// the normal owner-driven teardown gets first chance (terminal-env leg
+    /// only).
+    TerminalLeaseWithinGrace,
 }
 
 impl ReconcileDecision {
@@ -101,6 +119,11 @@ impl ReconcileDecision {
             ReconcileDecision::SkippedBlockedResume => "skipped-blocked-resume",
             ReconcileDecision::NotResumable => "not-resumable",
             ReconcileDecision::CancelledOrphan => "cancelled-orphan",
+            ReconcileDecision::TeardownTerminalLease => "teardown-terminal-lease",
+            ReconcileDecision::TerminalLeaseTeardownFailed => "terminal-lease-teardown-failed",
+            ReconcileDecision::SkippedLeaseRunActive => "skipped-lease-run-active",
+            ReconcileDecision::SkippedLeaseRunUnknown => "skipped-lease-run-unknown",
+            ReconcileDecision::TerminalLeaseWithinGrace => "terminal-lease-within-grace",
         }
     }
 
@@ -113,6 +136,8 @@ impl ReconcileDecision {
                 | ReconcileDecision::SkippedDelegated
                 | ReconcileDecision::TerminalizeDeadDelegate
                 | ReconcileDecision::RedispatchCandidate
+                | ReconcileDecision::TeardownTerminalLease
+                | ReconcileDecision::TerminalLeaseTeardownFailed
         )
     }
 }
@@ -907,12 +932,18 @@ pub async fn recover_orphaned_running_workflows(
             ReconcileDecision::MergeConflict
             | ReconcileDecision::WaitingManual
             | ReconcileDecision::WithinGrace
-            // These variants never arise on the cancel leg (redispatch-only), but
-            // are matched exhaustively; they are no-ops here.
+            // These variants never arise on the cancel leg (redispatch- and
+            // terminal-env-only), but are matched exhaustively; they are no-ops
+            // here.
             | ReconcileDecision::RedispatchCandidate
             | ReconcileDecision::SkippedLiveOrphan
             | ReconcileDecision::SkippedBlockedResume
-            | ReconcileDecision::NotResumable => {}
+            | ReconcileDecision::NotResumable
+            | ReconcileDecision::TeardownTerminalLease
+            | ReconcileDecision::TerminalLeaseTeardownFailed
+            | ReconcileDecision::SkippedLeaseRunActive
+            | ReconcileDecision::SkippedLeaseRunUnknown
+            | ReconcileDecision::TerminalLeaseWithinGrace => {}
             ReconcileDecision::PreservedResumable => {
                 // BU-4: with the durable journal active (kill-switch off), do NOT
                 // destroy resumable in-flight work on daemon restart/redeploy.
@@ -1222,7 +1253,8 @@ pub(crate) async fn resumable_orphans_for_redispatch(
             // All other outcomes exclude the run from re-dispatch (no-op). A
             // dead delegate normally gets terminalized by the cancel leg first,
             // but this leg independently applies the same gate so callers
-            // cannot re-dispatch-and-leak when invoked on its own.
+            // cannot re-dispatch-and-leak when invoked on its own. The
+            // terminal-env-only variants never arise here either.
             ReconcileDecision::MergeConflict
             | ReconcileDecision::WaitingManual
             | ReconcileDecision::SkippedLiveOrphan
@@ -1230,7 +1262,12 @@ pub(crate) async fn resumable_orphans_for_redispatch(
             | ReconcileDecision::WithinGrace
             | ReconcileDecision::NotResumable
             | ReconcileDecision::PreservedResumable
-            | ReconcileDecision::CancelledOrphan => {}
+            | ReconcileDecision::CancelledOrphan
+            | ReconcileDecision::TeardownTerminalLease
+            | ReconcileDecision::TerminalLeaseTeardownFailed
+            | ReconcileDecision::SkippedLeaseRunActive
+            | ReconcileDecision::SkippedLeaseRunUnknown
+            | ReconcileDecision::TerminalLeaseWithinGrace => {}
         }
     }
     emit_reconcile_sweep_summary(
@@ -1341,6 +1378,305 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
     }
 
     Ok(reconciled)
+}
+
+// ---------------------------------------------------------------------------
+// TASK-1466: terminal-run environment teardown sweep.
+//
+// Node teardown on workflow completion is driven by the OWNING runner/plugin
+// (terminal projection -> `ProcessManager::teardown_environment_if_terminal`
+// -> `EnvironmentBroker::teardown`). When that owner DIES with the run — a
+// phase failure kills the runner, the plugin restarts, or the daemon dies
+// between terminal projection and teardown — nothing ever tears the node
+// down: the broker retries a failed teardown record only at daemon STARTUP
+// (`reap_prior_daemon_records`), so at steady state the node stays alive on
+// the provider and burns compute indefinitely.
+//
+// This leg closes the gap: enumerate every durable UNTORN-DOWN environment
+// lease (broker lease records AND phase-session checkpoint bindings), look up
+// the owning run in the journal, and when the row is TERMINAL drive teardown
+// through the environment plugin exactly as the runner would have
+// (`EnvironmentClient::resolve` + `client.teardown(&handle)` — the plugin's
+// pre-teardown cleanup/publish hook is preserved; no direct node deletion).
+// On teardown/plugin failure the durable record is left in place so the NEXT
+// sweep retries, and a `reconcile-decision` line carries the reason.
+//
+// Double-teardown safety: the leg acts ONLY on a journal-confirmed terminal
+// row, and only after [`TERMINAL_ENV_TEARDOWN_GRACE_SECS`] has elapsed since
+// `completed_at` — the normal owner-driven teardown fires synchronously as
+// the run lands terminal, so the floor keeps the sweep from doubling an
+// in-flight teardown. Past the floor a terminal run has no live owner left to
+// race. Teardown itself is dispose-by-id idempotent and the broker tolerates
+// torn-down leases, so a residual race is safe.
+// ---------------------------------------------------------------------------
+
+/// Grace after a run lands TERMINAL in the journal before this sweep drives
+/// teardown itself (see the block comment above).
+const TERMINAL_ENV_TEARDOWN_GRACE_SECS: i64 = 90;
+
+/// One untorn-down environment lease attributed to a workflow run, assembled
+/// from the durable broker lease records and/or the phase-session checkpoint
+/// bindings (deduplicated by exact handle).
+struct RetainedEnvironmentLease {
+    run_id: String,
+    environment_id: String,
+    handle: EnvironmentHandle,
+    /// Root the environment client resolves against (the broker record's own
+    /// `project_root`, or the sweep's root for checkpoint-only leases).
+    resolve_root: String,
+    /// Checkpoint phases referencing this exact handle (marked torn down
+    /// after a successful teardown).
+    phase_ids: Vec<String>,
+    /// Whether a durable broker lease record exists for this run (deleted
+    /// after a successful teardown).
+    broker_record: bool,
+    /// Where the lease was found, for the decision log.
+    source: &'static str,
+    /// Broker record state or checkpoint status, for the decision log.
+    record_state: String,
+    /// Best available lease timestamp (record `updated_at` / binding
+    /// `bound_at`); the grace-floor fallback when the terminal journal row
+    /// has no `completed_at`.
+    reference_ts: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn parse_rfc3339(ts: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(ts).map(|dt| dt.with_timezone(&chrono::Utc)).ok()
+}
+
+/// Enumerate every durable untorn-down environment lease: broker lease
+/// records in any non-`TornDown` state with a persisted handle, plus
+/// phase-session checkpoint bindings with `torn_down == false`. The two
+/// sources overlap (the broker binds the Running phase checkpoint at
+/// acquire); entries are merged by exact handle so one node is torn down
+/// once per sweep.
+fn retained_environment_leases(scoped_root: &Path, project_root: &str) -> Vec<RetainedEnvironmentLease> {
+    let mut leases: Vec<RetainedEnvironmentLease> = Vec::new();
+    for record in orchestrator_daemon_runtime::list_environment_lease_records(project_root) {
+        if matches!(record.state, orchestrator_daemon_runtime::BrokerLeaseState::TornDown) {
+            continue;
+        }
+        let Some(handle) = record.handle else { continue };
+        leases.push(RetainedEnvironmentLease {
+            run_id: record.run_id,
+            environment_id: record.environment_id,
+            handle,
+            resolve_root: record.project_root,
+            phase_ids: Vec::new(),
+            broker_record: true,
+            source: "broker-lease",
+            record_state: record.state.label().to_string(),
+            reference_ts: parse_rfc3339(&record.updated_at),
+        });
+    }
+    let checkpoints = match list_checkpoints_with_retained_environment(scoped_root) {
+        Ok(checkpoints) => checkpoints,
+        Err(error) => {
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                %error,
+                "failed to list phase checkpoints for terminal environment teardown sweep; broker leases only this sweep"
+            );
+            Vec::new()
+        }
+    };
+    for (_, checkpoint) in checkpoints {
+        let Some(binding) = checkpoint.environment.filter(|binding| !binding.torn_down) else { continue };
+        if let Some(lease) = leases.iter_mut().find(|lease| {
+            lease.run_id == checkpoint.workflow_id
+                && lease.environment_id == binding.environment_id
+                && lease.handle == binding.handle
+        }) {
+            lease.phase_ids.push(checkpoint.phase_id);
+            lease.source = "broker-lease+phase-checkpoint";
+            continue;
+        }
+        leases.push(RetainedEnvironmentLease {
+            run_id: checkpoint.workflow_id,
+            environment_id: binding.environment_id,
+            handle: binding.handle,
+            resolve_root: project_root.to_string(),
+            phase_ids: vec![checkpoint.phase_id],
+            broker_record: false,
+            source: "phase-checkpoint",
+            record_state: format!("{:?}", checkpoint.status),
+            reference_ts: parse_rfc3339(&binding.bound_at),
+        });
+    }
+    leases
+}
+
+/// Emit one greppable single-line `reconcile-decision` record for the
+/// terminal-env sweep (same key=value shape as the other sweeps).
+fn emit_terminal_env_decision(
+    lease: &RetainedEnvironmentLease,
+    run_status: Option<WorkflowStatus>,
+    age_secs: i64,
+    decision: ReconcileDecision,
+    reason: &str,
+) {
+    let reason = reason.replace(['\n', '\r'], " ");
+    println!(
+        "reconcile-decision ts={ts} sweep=terminal-env workflow_id={workflow_id} run_status={run_status} \
+         source={source} record_state={record_state} environment_id={environment_id} handle_id={handle_id} \
+         age_secs={age_secs} decision={decision} reason={reason}",
+        ts = chrono::Utc::now().to_rfc3339(),
+        workflow_id = log_field(&lease.run_id),
+        run_status = run_status.map(|status| format!("{status:?}")).unwrap_or_else(|| "-".to_string()),
+        source = lease.source,
+        record_state = log_field(&lease.record_state),
+        environment_id = log_field(&lease.environment_id),
+        handle_id = log_field(&lease.handle.id),
+        decision = decision.label(),
+    );
+}
+
+/// TASK-1466: tear down environment leases whose owning workflow run is
+/// TERMINAL in the journal but was never torn down (owner died before
+/// teardown). Returns the number of leases torn down this sweep. See the
+/// block comment above for the model and safety arguments.
+pub async fn reconcile_terminal_environment_leases(hub: Arc<dyn ServiceHub>, project_root: &str) -> usize {
+    reconcile_terminal_environment_leases_with(hub, project_root, |resolve_root, environment_id, handle| {
+        let client = EnvironmentClient::resolve(Path::new(resolve_root), environment_id).with_context(|| {
+            format!("cannot resolve environment plugin '{environment_id}' to tear down retained node {}", handle.id)
+        })?;
+        client.teardown(handle).with_context(|| {
+            format!(
+                "failed to teardown retained node {handle_id} in environment '{environment_id}'",
+                handle_id = handle.id
+            )
+        })
+    })
+    .await
+}
+
+/// The sweep with the environment teardown call injected, so tests can drive
+/// it without an installed environment plugin (mirrors
+/// [`teardown_retained_environment_with`]).
+async fn reconcile_terminal_environment_leases_with<F>(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    teardown: F,
+) -> usize
+where
+    F: FnMut(&str, &str, &EnvironmentHandle) -> anyhow::Result<()>,
+{
+    let mut teardown = teardown;
+    let Some(scoped_root) = protocol::scoped_state_root(Path::new(project_root)) else {
+        return 0;
+    };
+    let candidates = retained_environment_leases(&scoped_root, project_root);
+    if candidates.is_empty() {
+        return 0;
+    }
+    let trace = reconcile_trace_enabled();
+    let now = chrono::Utc::now();
+    let mut torn_down = 0usize;
+    for lease in candidates {
+        let workflow = match hub.workflows().get(&lease.run_id).await {
+            Ok(workflow) => workflow,
+            Err(error) => {
+                // Fail safe: without a journal row terminality cannot be
+                // confirmed, so the lease stays a retryable obligation.
+                if trace {
+                    emit_terminal_env_decision(
+                        &lease,
+                        None,
+                        -1,
+                        ReconcileDecision::SkippedLeaseRunUnknown,
+                        &format!("workflow lookup failed: {error:#}"),
+                    );
+                }
+                continue;
+            }
+        };
+        if !orchestrator_core::is_terminal_workflow_run_status(workflow.status) {
+            // A live (or merely non-terminal) owner may still tear this lease
+            // down itself; never race it.
+            if trace {
+                emit_terminal_env_decision(
+                    &lease,
+                    Some(workflow.status),
+                    -1,
+                    ReconcileDecision::SkippedLeaseRunActive,
+                    "run is not terminal",
+                );
+            }
+            continue;
+        }
+        let terminal_at = workflow.completed_at.or(lease.reference_ts);
+        let age_secs = terminal_at.map(|ts| (now - ts).num_seconds()).unwrap_or(i64::MAX);
+        if age_secs < TERMINAL_ENV_TEARDOWN_GRACE_SECS {
+            // The normal owner-driven teardown fires as the run lands
+            // terminal; give it first chance before doubling it.
+            if trace {
+                emit_terminal_env_decision(
+                    &lease,
+                    Some(workflow.status),
+                    age_secs,
+                    ReconcileDecision::TerminalLeaseWithinGrace,
+                    "terminal run within teardown grace floor",
+                );
+            }
+            continue;
+        }
+        match teardown(&lease.resolve_root, &lease.environment_id, &lease.handle) {
+            Ok(()) => {
+                // Mark every checkpoint binding torn down FIRST; only when all
+                // marks landed is the broker record deleted, so a mark failure
+                // keeps a durable retry obligation (the retried teardown is
+                // idempotent).
+                let mut all_marked = true;
+                for phase_id in &lease.phase_ids {
+                    if let Err(error) = mark_environment_torn_down(&scoped_root, &lease.run_id, phase_id) {
+                        all_marked = false;
+                        warn!(
+                            actor = protocol::ACTOR_DAEMON,
+                            workflow_id = %lease.run_id,
+                            node = %lease.handle.id,
+                            %error,
+                            "node was torn down but its checkpoint could not be marked; idempotent teardown will retry"
+                        );
+                    }
+                }
+                if all_marked && lease.broker_record {
+                    orchestrator_daemon_runtime::remove_environment_lease_record(project_root, &lease.run_id);
+                }
+                info!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %lease.run_id,
+                    node = %lease.handle.id,
+                    source = lease.source,
+                    "tore down terminal workflow's retained environment node (TASK-1466)"
+                );
+                emit_terminal_env_decision(
+                    &lease,
+                    Some(workflow.status),
+                    age_secs,
+                    ReconcileDecision::TeardownTerminalLease,
+                    "terminal run retained an untorn-down environment lease",
+                );
+                torn_down = torn_down.saturating_add(1);
+            }
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    workflow_id = %lease.run_id,
+                    node = %lease.handle.id,
+                    %error,
+                    "terminal-run environment teardown failed; retaining the durable record for the next sweep"
+                );
+                emit_terminal_env_decision(
+                    &lease,
+                    Some(workflow.status),
+                    age_secs,
+                    ReconcileDecision::TerminalLeaseTeardownFailed,
+                    &format!("{error:#}"),
+                );
+            }
+        }
+    }
+    torn_down
 }
 
 #[cfg(test)]
@@ -2184,6 +2520,278 @@ mod tests {
             !checkpoint.environment.expect("binding").torn_down,
             "failed teardown must leave the durable hold available for retry"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // TASK-1466: terminal-run environment teardown sweep
+    // -----------------------------------------------------------------
+
+    /// TASK-1466 fixture: the backdated fixture run moved to a terminal
+    /// status, with `completed_at` backdated past the teardown grace floor.
+    async fn terminal_workflow_fixture(
+        temp: &TempDir,
+        status: WorkflowStatus,
+    ) -> (Arc<dyn ServiceHub>, String, String, Box<dyn std::any::Any>) {
+        let (hub, project_root, workflow_id, guards) = backdated_running_workflow_fixture(temp).await;
+        let manager = WorkflowStateManager::new(temp.path());
+        let mut stored = manager.load(&workflow_id).expect("workflow should load");
+        stored.status = status;
+        stored.completed_at = Some(chrono::Utc::now() - chrono::Duration::hours(1));
+        manager.save(&stored).expect("terminal workflow should save");
+        (hub, project_root, workflow_id, guards)
+    }
+
+    /// Write a durable broker lease record for `workflow_id` exactly as the
+    /// broker persists it, without constructing a broker.
+    fn write_broker_lease_record(project_root: &str, workflow_id: &str, node_id: &str) -> std::path::PathBuf {
+        let scoped_root = protocol::scoped_state_root(std::path::Path::new(project_root)).expect("scope");
+        let records_dir = scoped_root.join("workflow-environments");
+        std::fs::create_dir_all(&records_dir).expect("records dir");
+        let path = records_dir.join(format!("{}.json", protocol::sanitize_identifier(workflow_id, "run")));
+        let old = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let record = serde_json::json!({
+            "run_id": workflow_id,
+            "daemon_instance_id": "dead-daemon",
+            "environment_id": "animus-environment-railway",
+            "project_root": project_root,
+            "state": "tearing-down",
+            "handle": { "id": node_id, "workspace_root": "/work", "metadata": { "railway_service_id": "svc-1" } },
+            "created_at": old,
+            "updated_at": old,
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&record).expect("record json")).expect("write record");
+        path
+    }
+
+    // Core: a Completed run whose checkpoint binding was never torn down
+    // (owner died between terminal projection and teardown) gets torn down
+    // exactly once; a second sweep is inert.
+    #[tokio::test]
+    async fn terminal_completed_run_retained_binding_is_torn_down_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) =
+            terminal_workflow_fixture(&temp, WorkflowStatus::Completed).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-terminal")).await;
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn =
+            super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |root, env, handle| {
+                assert_eq!(root, project_root.as_str());
+                assert_eq!(env, "animus-environment-railway");
+                assert_eq!(handle.id, "node-terminal");
+                teardown_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        assert_eq!(torn, 1, "the terminal run's retained node must be torn down");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1);
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "successful teardown marks the binding");
+
+        let torn_again = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn_again, 0, "a torn-down lease is not re-torn-down");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "teardown ran exactly once across sweeps");
+    }
+
+    // A Failed run (phase failure killed the runner before teardown) gets the
+    // same treatment as Completed.
+    #[tokio::test]
+    async fn terminal_failed_run_retained_binding_is_torn_down() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = terminal_workflow_fixture(&temp, WorkflowStatus::Failed).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-failed")).await;
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, handle| {
+            assert_eq!(handle.id, "node-failed");
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn, 1, "a failed run's retained node must be torn down");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down);
+    }
+
+    // A NON-terminal run's retained lease is never touched: a live owner may
+    // still tear it down itself, and the sweep must not race it.
+    #[tokio::test]
+    async fn non_terminal_run_retained_binding_is_untouched() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) = backdated_running_workflow_fixture(&temp).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-live")).await;
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn, 0, "a Running run's lease is left to its live owner");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 0, "teardown must not run for a Running row");
+
+        hub.workflows().pause(&workflow_id).await.expect("workflow should pause");
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn, 0, "a Paused run's lease is left alone too");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 0, "teardown must not run for a Paused row");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(!checkpoint.environment.expect("binding").torn_down, "non-terminal binding stays retained");
+    }
+
+    // Retry semantics: a failed teardown keeps the durable obligation and the
+    // NEXT sweep drives teardown again (this is the steady-state retry the
+    // broker alone only performs at startup).
+    #[tokio::test]
+    async fn failed_teardown_is_retained_and_retried_next_sweep() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) =
+            terminal_workflow_fixture(&temp, WorkflowStatus::Completed).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-flaky")).await;
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("relay unavailable")
+        })
+        .await;
+        assert_eq!(torn, 0, "a failed teardown tears nothing down");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(!checkpoint.environment.expect("binding").torn_down, "failure keeps the binding retryable");
+
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn, 1, "the next sweep retries the retained lease");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 2, "teardown was attempted once per sweep");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "the retry completes the cleanup");
+    }
+
+    // Broker lease records are swept too (a TearingDown record retained after
+    // a failed broker teardown, or a Ready record whose teardown never ran):
+    // torn down by handle and the durable record removed on success.
+    #[tokio::test]
+    async fn terminal_run_broker_lease_record_is_torn_down_and_removed() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) =
+            terminal_workflow_fixture(&temp, WorkflowStatus::Completed).await;
+        let record_path = write_broker_lease_record(&project_root, &workflow_id, "node-leased");
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn =
+            super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |root, env, handle| {
+                assert_eq!(root, project_root.as_str());
+                assert_eq!(env, "animus-environment-railway");
+                assert_eq!(handle.id, "node-leased");
+                teardown_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        assert_eq!(torn, 1, "the terminal run's broker lease must be torn down");
+        assert!(!record_path.exists(), "the durable lease record is removed after a successful teardown");
+
+        let torn_again = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn_again, 0, "no record remains for the next sweep");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "teardown ran exactly once");
+    }
+
+    // When the SAME handle is held by both a broker record and a phase
+    // checkpoint, the sweep tears it down once and cleans up both records.
+    #[tokio::test]
+    async fn broker_record_and_checkpoint_for_one_handle_teardown_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) =
+            terminal_workflow_fixture(&temp, WorkflowStatus::Completed).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-shared")).await;
+        let record_path = write_broker_lease_record(&project_root, &workflow_id, "node-shared");
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, handle| {
+            assert_eq!(handle.id, "node-shared");
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn, 1, "one shared node is torn down once");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 1, "no duplicate teardown for the same handle");
+        assert!(!record_path.exists(), "broker record removed");
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(checkpoint.environment.expect("binding").torn_down, "checkpoint binding marked");
+    }
+
+    // The grace floor: a run that JUST landed terminal is skipped so the
+    // normal owner-driven teardown (which fires as the journal lands
+    // terminal) gets first chance; the sweep is the backstop, not the racer.
+    #[tokio::test]
+    async fn terminal_run_within_teardown_grace_is_skipped() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let (hub, project_root, workflow_id, _guards) =
+            terminal_workflow_fixture(&temp, WorkflowStatus::Completed).await;
+        let (scoped_root, phase_id) =
+            bind_delegate(&hub, &project_root, &workflow_id, sample_binding("node-fresh")).await;
+        // Re-terminalize with a FRESH completed_at (inside the grace floor).
+        let manager = WorkflowStateManager::new(temp.path());
+        let mut stored = manager.load(&workflow_id).expect("workflow should load");
+        stored.completed_at = Some(chrono::Utc::now());
+        manager.save(&stored).expect("workflow should save");
+        let teardown_calls = AtomicUsize::new(0);
+
+        let torn = super::reconcile_terminal_environment_leases_with(hub.clone(), &project_root, |_, _, _| {
+            teardown_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(torn, 0, "a just-terminal run is left to the normal teardown path this sweep");
+        assert_eq!(teardown_calls.load(Ordering::SeqCst), 0);
+        let checkpoint =
+            read_checkpoint(&scoped_root, &workflow_id, &phase_id).expect("read").expect("checkpoint present");
+        assert!(!checkpoint.environment.expect("binding").torn_down, "the lease is retained for a later sweep");
     }
 }
 

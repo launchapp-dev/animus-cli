@@ -270,48 +270,11 @@ pub fn read_path(path: &Path) -> io::Result<Option<SessionCheckpoint>> {
     }
 }
 
-pub fn list_running_checkpoints(scoped_root: &Path) -> io::Result<Vec<(PathBuf, SessionCheckpoint)>> {
+/// Walk EVERY session checkpoint under the scoped runs root, regardless of
+/// status. Shared by the status-filtered list helpers below.
+fn walk_session_checkpoints(scoped_root: &Path) -> io::Result<Vec<(PathBuf, SessionCheckpoint)>> {
     let runs_dir = scoped_root.join("runs");
     let mut out = Vec::new();
-    let entries = match fs::read_dir(&runs_dir) {
-        Ok(e) => e,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(err),
-    };
-    for run_entry in entries {
-        let run_entry = run_entry?;
-        let phases_dir = run_entry.path().join("phases");
-        let phase_entries = match fs::read_dir(&phases_dir) {
-            Ok(e) => e,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(err),
-        };
-        for phase_entry in phase_entries {
-            let phase_entry = phase_entry?;
-            let path = phase_entry.path();
-            if !path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".session.json")) {
-                continue;
-            }
-            if let Some(checkpoint) = read_path(&path)? {
-                if matches!(checkpoint.status, SessionCheckpointStatus::Running) {
-                    out.push((path, checkpoint));
-                }
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Workflow ids that have at least one session checkpoint in `Blocked` state.
-///
-/// A `Blocked` checkpoint marks a mid-phase resume that was intentionally held
-/// (e.g. the provider plugin is not installed, or `resume_agent` returned a
-/// failure) and is waiting on an operator `animus workflow resume --force`. The
-/// daemon's journal-resume re-dispatch consults this so it does NOT spawn a
-/// fresh runner for such a run and bypass the hold.
-pub fn blocked_checkpoint_workflow_ids(scoped_root: &Path) -> io::Result<std::collections::HashSet<String>> {
-    let runs_dir = scoped_root.join("runs");
-    let mut out = std::collections::HashSet::new();
     let entries = match fs::read_dir(&runs_dir) {
         Ok(e) => e,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(out),
@@ -332,13 +295,45 @@ pub fn blocked_checkpoint_workflow_ids(scoped_root: &Path) -> io::Result<std::co
                 continue;
             }
             if let Some(checkpoint) = read_path(&path)? {
-                if matches!(checkpoint.status, SessionCheckpointStatus::Blocked) {
-                    out.insert(checkpoint.workflow_id);
-                }
+                out.push((path, checkpoint));
             }
         }
     }
     Ok(out)
+}
+
+pub fn list_running_checkpoints(scoped_root: &Path) -> io::Result<Vec<(PathBuf, SessionCheckpoint)>> {
+    Ok(walk_session_checkpoints(scoped_root)?
+        .into_iter()
+        .filter(|(_, checkpoint)| matches!(checkpoint.status, SessionCheckpointStatus::Running))
+        .collect())
+}
+
+/// TASK-1466: every checkpoint (ANY status) carrying an environment binding
+/// that has NOT been torn down. The steady-state terminal-teardown sweep uses
+/// this to find nodes whose owning runner/plugin died before teardown: unlike
+/// [`list_running_checkpoints`], a terminal phase (Completed/Failed) whose
+/// teardown never ran must still surface here.
+pub fn list_checkpoints_with_retained_environment(scoped_root: &Path) -> io::Result<Vec<(PathBuf, SessionCheckpoint)>> {
+    Ok(walk_session_checkpoints(scoped_root)?
+        .into_iter()
+        .filter(|(_, checkpoint)| checkpoint.environment.as_ref().is_some_and(|binding| !binding.torn_down))
+        .collect())
+}
+
+/// Workflow ids that have at least one session checkpoint in `Blocked` state.
+///
+/// A `Blocked` checkpoint marks a mid-phase resume that was intentionally held
+/// (e.g. the provider plugin is not installed, or `resume_agent` returned a
+/// failure) and is waiting on an operator `animus workflow resume --force`. The
+/// daemon's journal-resume re-dispatch consults this so it does NOT spawn a
+/// fresh runner for such a run and bypass the hold.
+pub fn blocked_checkpoint_workflow_ids(scoped_root: &Path) -> io::Result<std::collections::HashSet<String>> {
+    Ok(walk_session_checkpoints(scoped_root)?
+        .into_iter()
+        .filter(|(_, checkpoint)| matches!(checkpoint.status, SessionCheckpointStatus::Blocked))
+        .map(|(_, checkpoint)| checkpoint.workflow_id)
+        .collect())
 }
 
 fn mutate(
@@ -636,5 +631,36 @@ mod tests {
             serde_json::from_value(legacy).expect("legacy checkpoint without `environment` must deserialize");
         assert!(cp.environment.is_none(), "missing environment field defaults to None");
         assert_eq!(cp.status, SessionCheckpointStatus::Running);
+    }
+
+    // TASK-1466: the terminal-teardown sweep enumerates retained bindings
+    // across ALL checkpoint statuses (a Failed/Completed checkpoint whose
+    // teardown never ran must still surface), and stops surfacing a binding
+    // once it is marked torn down.
+    #[test]
+    fn retained_environment_listing_covers_terminal_checkpoints_until_marked() {
+        let temp = tempdir().expect("tempdir");
+        let scoped_root = temp.path();
+        write_session_pending(scoped_root, "wf-env-5", "phase-a", "claude", "run-5", None).expect("pending");
+        update_session_environment(scoped_root, "wf-env-5", "phase-a", sample_binding()).expect("persist binding");
+        update_session_failed(scoped_root, "wf-env-5", "phase-a", "owner died before teardown")
+            .expect("fail checkpoint");
+
+        // A Failed (non-Running) checkpoint with an untorn binding is exactly
+        // the leak the sweep exists for; list_running_checkpoints hides it.
+        assert!(
+            list_running_checkpoints(scoped_root).expect("running list").is_empty(),
+            "a failed checkpoint is not Running"
+        );
+        let retained = list_checkpoints_with_retained_environment(scoped_root).expect("retained list");
+        assert_eq!(retained.len(), 1, "the untorn terminal binding must surface for the sweep");
+        assert_eq!(retained[0].1.workflow_id, "wf-env-5");
+        assert_eq!(retained[0].1.phase_id, "phase-a");
+
+        mark_environment_torn_down(scoped_root, "wf-env-5", "phase-a").expect("mark torn down");
+        assert!(
+            list_checkpoints_with_retained_environment(scoped_root).expect("retained list").is_empty(),
+            "a torn-down binding no longer surfaces"
+        );
     }
 }
