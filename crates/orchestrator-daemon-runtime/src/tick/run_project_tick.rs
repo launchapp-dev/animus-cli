@@ -55,12 +55,17 @@ where
     // Completed-process reaping always runs: it frees pool headroom that the
     // dispatch legs below depend on, so an event wake triggered by a workflow
     // completion can immediately dispatch follow-on work. The heavier
-    // reconciliation legs (manual timeouts, zombie workflows, stale
-    // in-progress tasks) are housekeeping: the daemon loop runs them on
-    // heartbeat cadence only (`mode.housekeeping`), never per-nudge.
+    // reconciliation legs (manual timeouts, zombie workflows, terminal
+    // environment teardown, stale in-progress tasks) are housekeeping: the
+    // daemon loop runs them on heartbeat cadence only (`mode.housekeeping`),
+    // never per-nudge.
     let reconciled_workflows = if mode.housekeeping { hooks.reconcile_manual_timeouts(root).await? } else { 0 };
     let completed_reconciliation = hooks.reconcile_completed_processes(root).await?;
     let reconciled_zombie_workflows = if mode.housekeeping { hooks.reconcile_zombie_workflows(root).await? } else { 0 };
+    // TASK-1466: steady-state retry of environment teardown for terminal runs
+    // whose owner died before teardown ran (startup-only retry otherwise).
+    let torn_down_terminal_environments =
+        if mode.housekeeping { hooks.reconcile_terminal_environment_leases(root).await? } else { 0 };
     if mode.housekeeping && args.reconcile_stale {
         hooks.reconcile_stale_in_progress_tasks(root, args.stale_threshold_hours).await?;
     }
@@ -69,7 +74,7 @@ where
     // not multiply cost scans.
     let budget_breaches = if mode.housekeeping { hooks.enforce_budget_caps(root).await? } else { Vec::new() };
     let mut execution_outcome = ProjectTickExecutionOutcome {
-        reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
+        reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows + torn_down_terminal_environments,
         executed_workflow_phases: completed_reconciliation.executed_workflow_phases,
         failed_workflow_phases: completed_reconciliation.failed_workflow_phases,
         workflow_failures: completed_reconciliation.workflow_failures,

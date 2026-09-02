@@ -43,6 +43,15 @@ pub trait ProjectTickHooks {
         Ok(0)
     }
 
+    /// TASK-1466: tear down environment leases whose workflow run is TERMINAL
+    /// in the journal but whose owner died before teardown ran (the broker
+    /// only retries those at startup otherwise). Housekeeping cadence, like
+    /// the other reconciliation legs. Returns the number of leases torn down
+    /// this sweep. Default is a no-op.
+    async fn reconcile_terminal_environment_leases(&mut self, _root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn reconcile_manual_timeouts(&mut self, _root: &str) -> Result<usize> {
         Ok(0)
     }

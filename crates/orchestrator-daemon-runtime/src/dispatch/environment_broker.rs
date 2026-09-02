@@ -1170,6 +1170,112 @@ fn write_record_atomic(path: &Path, record: &LeaseRecord) -> std::io::Result<()>
     std::fs::rename(&tmp, path)
 }
 
+// ---------------------------------------------------------------------------
+// Durable lease-record read surface for steady-state reconciliation
+// (TASK-1466). The broker itself only retries a failed teardown at STARTUP
+// (`reap_prior_daemon_records`); the daemon's terminal-teardown sweep uses
+// these to find, at steady state, leases whose workflow is already TERMINAL
+// in the journal but whose owner died before teardown ran.
+// ---------------------------------------------------------------------------
+
+/// Persisted broker lease state as read by an outside reconciler. Mirrors the
+/// on-disk `LeaseState` (kept separate so the wire format stays private).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerLeaseState {
+    Preparing,
+    Ready,
+    TearingDown,
+    TornDown,
+    Failed,
+}
+
+impl BrokerLeaseState {
+    /// Stable kebab-case label for log lines (matches the on-disk serde form).
+    pub fn label(self) -> &'static str {
+        match self {
+            BrokerLeaseState::Preparing => "preparing",
+            BrokerLeaseState::Ready => "ready",
+            BrokerLeaseState::TearingDown => "tearing-down",
+            BrokerLeaseState::TornDown => "torn-down",
+            BrokerLeaseState::Failed => "failed",
+        }
+    }
+}
+
+impl From<LeaseState> for BrokerLeaseState {
+    fn from(state: LeaseState) -> Self {
+        match state {
+            LeaseState::Preparing => BrokerLeaseState::Preparing,
+            LeaseState::Ready => BrokerLeaseState::Ready,
+            LeaseState::TearingDown => BrokerLeaseState::TearingDown,
+            LeaseState::TornDown => BrokerLeaseState::TornDown,
+            LeaseState::Failed => BrokerLeaseState::Failed,
+        }
+    }
+}
+
+/// A durable broker lease record as persisted under the scoped
+/// `workflow-environments/` directory.
+#[derive(Debug, Clone)]
+pub struct EnvironmentLeaseSnapshot {
+    pub run_id: String,
+    pub environment_id: String,
+    pub project_root: String,
+    pub state: BrokerLeaseState,
+    pub handle: Option<EnvironmentHandle>,
+    pub updated_at: String,
+}
+
+/// The scoped (cross-restart) records directory, or `None` when the project
+/// has no scope. The per-pid `$TMPDIR` fallback in [`broker_records_dir`] is
+/// intentionally NOT consulted here: a dead daemon's pid-scoped dir is not
+/// discoverable, and this reader exists for cross-restart reconciliation.
+fn scoped_records_dir(project_root: &str) -> Option<PathBuf> {
+    protocol::scoped_state_root(Path::new(project_root)).map(|root| root.join("workflow-environments"))
+}
+
+/// Read every parseable durable lease record for `project_root`. Unparseable
+/// records are skipped (left in place for the broker's own startup reap,
+/// which deletes them).
+pub fn list_environment_lease_records(project_root: &str) -> Vec<EnvironmentLeaseSnapshot> {
+    let Some(records_dir) = scoped_records_dir(project_root) else {
+        return Vec::new();
+    };
+    let entries = match std::fs::read_dir(&records_dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                return None;
+            }
+            let record: LeaseRecord =
+                std::fs::read_to_string(&path).ok().and_then(|raw| serde_json::from_str(&raw).ok())?;
+            Some(EnvironmentLeaseSnapshot {
+                run_id: record.run_id,
+                environment_id: record.environment_id,
+                project_root: record.project_root,
+                state: BrokerLeaseState::from(record.state),
+                handle: record.handle,
+                updated_at: record.updated_at,
+            })
+        })
+        .collect()
+}
+
+/// Delete the durable lease record for `run_id` after a successful out-of-band
+/// teardown (the steady-state terminal-teardown sweep). Mirrors the broker's
+/// own `delete_record` path construction. Best-effort, like the broker's.
+pub fn remove_environment_lease_record(project_root: &str, run_id: &str) {
+    if let Some(records_dir) = scoped_records_dir(project_root) {
+        let _ =
+            std::fs::remove_file(records_dir.join(format!("{}.json", protocol::sanitize_identifier(run_id, "run"))));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,6 +1512,54 @@ mod tests {
             non_ready.state = state;
             assert!(!prior_record_is_claimed_for_resume(&non_ready, None), "{state:?} record was claimed");
         }
+    }
+
+    // TASK-1466: the steady-state terminal-teardown sweep reads durable lease
+    // records through the pub snapshot surface and removes them after a
+    // successful out-of-band teardown.
+    #[test]
+    fn lease_record_snapshots_list_and_remove() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let records_dir = protocol::repository_scope::scoped_state_root(temp.path())
+            .expect("scoped project state root")
+            .join("workflow-environments");
+        std::fs::create_dir_all(&records_dir).expect("records dir");
+        let handle = EnvironmentHandle {
+            id: "node-snap".to_string(),
+            workspace_root: "/workspace".to_string(),
+            metadata: json!({"relay": "opaque"}),
+        };
+        let record = LeaseRecord {
+            run_id: "wf-snap".to_string(),
+            daemon_instance_id: "dead-daemon".to_string(),
+            environment_id: "railway".to_string(),
+            project_root: project_root.clone(),
+            state: LeaseState::TearingDown,
+            handle: Some(handle.clone()),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-01T00:00:01Z".to_string(),
+        };
+        let path = records_dir.join(format!("{}.json", protocol::sanitize_identifier("wf-snap", "run")));
+        write_record_atomic(&path, &record).expect("write record");
+        // An unparseable sibling is skipped, not fatal.
+        std::fs::write(records_dir.join("garbage.json"), "not json").expect("write garbage");
+
+        let snapshots = list_environment_lease_records(&project_root);
+        assert_eq!(snapshots.len(), 1, "exactly the parseable record is returned");
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.run_id, "wf-snap");
+        assert_eq!(snapshot.environment_id, "railway");
+        assert_eq!(snapshot.project_root, project_root);
+        assert_eq!(snapshot.state, BrokerLeaseState::TearingDown);
+        assert_eq!(snapshot.state.label(), "tearing-down");
+        assert_eq!(snapshot.handle.as_ref(), Some(&handle));
+        assert_eq!(snapshot.updated_at, "2026-01-01T00:00:01Z");
+
+        remove_environment_lease_record(&project_root, "wf-snap");
+        assert!(!path.exists(), "the durable record is deleted after teardown");
+        // Best-effort removal of an unknown run is a no-op.
+        remove_environment_lease_record(&project_root, "wf-unknown");
     }
 
     #[test]

@@ -49,6 +49,13 @@ pub trait DefaultProjectTickServices {
         Ok(0)
     }
 
+    /// TASK-1466: steady-state teardown of environment leases owned by
+    /// TERMINAL workflow runs whose teardown never ran. Default is a no-op;
+    /// the CLI tick services wire the reconciler in here.
+    async fn reconcile_terminal_environment_leases(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
     async fn reconcile_manual_timeouts(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
         Ok(0)
     }
@@ -319,6 +326,11 @@ where
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         let active_subject_ids = self.process_manager.active_subject_ids();
         self.services.reconcile_zombie_workflows(hub, root, &active_subject_ids).await
+    }
+
+    async fn reconcile_terminal_environment_leases(&mut self, root: &str) -> Result<usize> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        self.services.reconcile_terminal_environment_leases(hub, root).await
     }
 
     async fn reconcile_manual_timeouts(&mut self, root: &str) -> Result<usize> {
