@@ -85,13 +85,19 @@ const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] = &[
 /// warning; the runner then resolves skills locally (its no-payload
 /// fallback), so nothing is lost beyond the daemon-side resolution log.
 /// Windows caps the entire process environment block at ~32 KiB, so the cap
-/// there must leave headroom for the inherited daemon environment; Unix
-/// limits (ARG_MAX-style, typically >= 1 MiB shared) allow a roomier cap.
-/// (codex P2.)
+/// there must leave headroom for the inherited daemon environment.
+///
+/// On Linux the binding limit is NOT ARG_MAX (the ~2 MiB total) but
+/// MAX_ARG_STRLEN: 128 KiB (32 × PAGE_SIZE) for any SINGLE argv/envp string,
+/// set by execve regardless of total size. A 512 KiB cap therefore admitted
+/// payloads that execve always rejects with E2BIG — observed in production as
+/// every queue dispatch dying at runner spawn with "Argument list too long"
+/// (TASK-001, 2026-09-02). Cap below 128 KiB with headroom for the key name.
+/// (codex P2, TASK-001.)
 #[cfg(windows)]
 const PHASE_SKILLS_ENV_MAX_BYTES: usize = 16 * 1024;
 #[cfg(not(windows))]
-const PHASE_SKILLS_ENV_MAX_BYTES: usize = 512 * 1024;
+const PHASE_SKILLS_ENV_MAX_BYTES: usize = 112 * 1024;
 
 /// Resolve the project's phase/profile skill declarations (same scoped
 /// sources and trust rules as the ad-hoc `--skill` path) and serialize the
