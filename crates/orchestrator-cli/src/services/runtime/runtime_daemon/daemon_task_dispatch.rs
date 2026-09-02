@@ -11,6 +11,14 @@ use tracing::warn;
 
 use crate::services::plugin_clients;
 
+/// `tracing::warn!` output never reaches Railway-hosted logs (no subscriber is
+/// installed on the daemon's stderr), which left every dispatch-leg failure
+/// invisible in production (TASK-001). Surface each failure on STDOUT too —
+/// same pattern as `emit_reconcile_suppressed` in daemon_reconciliation.rs.
+fn dispatch_warn_stdout(msg: &str) {
+    println!("dispatch-warn ts={} {msg}", chrono::Utc::now().to_rfc3339());
+}
+
 pub async fn dispatch_queued_entries_via_runner(
     root: &str,
     process_manager: &mut ProcessManager,
@@ -46,6 +54,12 @@ pub async fn dispatch_queued_entries_via_runner(
             conflict_workflow_id = block.conflicts_with.as_ref().map(|fence| fence.workflow_id.as_str()),
             "queue/v2/lease left a candidate blocked without consuming a coding slot"
         );
+        dispatch_warn_stdout(&format!(
+            "entry_id={} reason={:?} conflict_workflow_id={} queue/v2/lease left a candidate blocked without consuming a coding slot",
+            block.entry_id,
+            block.reason,
+            block.conflicts_with.as_ref().map(|fence| fence.workflow_id.as_str()).unwrap_or("none"),
+        ));
     }
 
     let mut planned_starts = Vec::new();
@@ -58,6 +72,10 @@ pub async fn dispatch_queued_entries_via_runner(
                 error = %error,
                 "queue/v2/lease returned an invalid fleet fence; leaving it assigned for explicit recovery"
             );
+            dispatch_warn_stdout(&format!(
+                "entry_id={} error={} queue/v2/lease returned an invalid fleet fence; leaving it assigned for explicit recovery",
+                fenced.entry.entry_id, error,
+            ));
             continue;
         }
         let queue = fenced.execution.queue_lease.as_ref().expect("validated queue-backed lease");
@@ -69,6 +87,10 @@ pub async fn dispatch_queued_entries_via_runner(
                 actual_owner = %queue.owner_id,
                 "queue/v2/lease returned a different owner; leaving entry assigned and refusing spawn"
             );
+            dispatch_warn_stdout(&format!(
+                "entry_id={} expected_owner={} actual_owner={} queue/v2/lease returned a different owner; leaving entry assigned and refusing spawn",
+                fenced.entry.entry_id, owner_id, queue.owner_id,
+            ));
             continue;
         }
 
@@ -81,6 +103,10 @@ pub async fn dispatch_queued_entries_via_runner(
                     error = %error,
                     "queue/v2/lease returned an undecodable dispatch"
                 );
+                dispatch_warn_stdout(&format!(
+                    "entry_id={} error={} queue/v2/lease returned an undecodable dispatch; completing failed",
+                    fenced.entry.entry_id, error,
+                ));
                 complete_failed(project_root, coding_scheduler, &fenced.execution, None).await;
                 continue;
             }
@@ -94,6 +120,10 @@ pub async fn dispatch_queued_entries_via_runner(
                     error = %error,
                     "queue/v2/lease subject dispatch drifted from the kernel protocol"
                 );
+                dispatch_warn_stdout(&format!(
+                    "entry_id={} error={} queue/v2/lease subject dispatch drifted from the kernel protocol; completing failed",
+                    fenced.entry.entry_id, error,
+                ));
                 complete_failed(project_root, coding_scheduler, &fenced.execution, None).await;
                 continue;
             }
@@ -113,6 +143,10 @@ pub async fn dispatch_queued_entries_via_runner(
                     collision = ?reason,
                     "local fleet projection rejected queue-owned lease; returning exact lease to pending"
                 );
+                dispatch_warn_stdout(&format!(
+                    "entry_id={} collision={:?} local fleet projection rejected queue-owned lease; returning exact lease to pending",
+                    fenced.entry.entry_id, reason,
+                ));
                 release_to_pending(project_root, coding_scheduler, &fenced.execution, "local-fleet-collision").await;
                 continue;
             }
@@ -149,6 +183,18 @@ pub async fn dispatch_queued_entries_via_runner(
                 .await;
             }
         }
+    }
+    // TASK-001: a leased-but-never-started dispatch used to be indistinguishable
+    // from "the dispatch leg never ran" in hosted logs. Print one summary line
+    // whenever the queue lease returned work.
+    if !leased.is_empty() || !planned_starts.is_empty() {
+        println!(
+            "dispatch-tick ts={} leased={} planned={} started={}",
+            chrono::Utc::now().to_rfc3339(),
+            leased.len(),
+            planned_starts.len(),
+            summary.started,
+        );
     }
     Ok(summary)
 }
@@ -299,6 +345,10 @@ async fn complete_failed(
             error = %error,
             "queue/v2/completion failed; retaining local reservation for recovery"
         );
+        dispatch_warn_stdout(&format!(
+            "workflow_id={} error={} queue/v2/completion failed; retaining local reservation for recovery",
+            execution.workflow_id, error,
+        ));
     }
 }
 
@@ -323,6 +373,12 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
                     error = %error,
                     "failed to start workflow runner"
                 );
+                dispatch_warn_stdout(&format!(
+                    "subject_id={} workflow_ref={} error={} failed to start workflow runner",
+                    dispatch.subject_id().unwrap_or_default(),
+                    dispatch.workflow_ref,
+                    error,
+                ));
                 self.outcomes.push(DispatchEntryOutcome::Failed);
             }
             DispatchNotice::Deferred { dispatch, reason } => {
@@ -332,6 +388,12 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
                     reason = %reason,
                     "workflow runner spawn deferred; exact queue fence returns to pending"
                 );
+                dispatch_warn_stdout(&format!(
+                    "subject_id={} workflow_ref={} reason={} workflow runner spawn deferred; exact queue fence returns to pending",
+                    dispatch.subject_id().unwrap_or_default(),
+                    dispatch.workflow_ref,
+                    reason,
+                ));
                 self.outcomes.push(DispatchEntryOutcome::Deferred);
             }
             _ => {}
