@@ -54,7 +54,10 @@ where
                 } else {
                     notice_sink.notice(DispatchNotice::Failed {
                         dispatch: planned_start.dispatch.clone(),
-                        error: error.to_string(),
+                        // TASK-001: keep the full cause chain — the OS-level
+                        // spawn error (ENOENT/E2BIG/...) lives one level below
+                        // anyhow's top context and is the only useful part.
+                        error: format!("{error:#}"),
                     });
                 }
             }
