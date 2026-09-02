@@ -397,11 +397,20 @@ impl ProcessManager {
         let command_line: Vec<String> = std::iter::once(std_cmd.get_program().to_string_lossy().into_owned())
             .chain(std_cmd.get_args().map(|a| a.to_string_lossy().into_owned()))
             .collect();
+        let args_bytes: usize = command_line.iter().map(|a| a.len()).sum();
+        let builder_env_bytes: usize = std_cmd.get_envs().map(|(k, v)| k.len() + v.map(|v| v.len()).unwrap_or(0)).sum();
+        let program_path = std_cmd.get_program().to_string_lossy().into_owned();
         let mut command = Command::from(std_cmd);
         command.stdout(Stdio::null()).stderr(Stdio::piped());
+        // TASK-001: execve E2BIG ("Argument list too long") gives no hint which
+        // component overflowed. Track every injected block's size so a failed
+        // spawn reports the breakdown in its error context.
+        let mut injected_bytes: usize = 0;
         command.env_remove(ANIMUS_EXECUTION_FENCE_JSON_ENV);
         if let Some(execution) = execution_fence {
-            command.env(ANIMUS_EXECUTION_FENCE_JSON_ENV, serde_json::to_string(execution)?);
+            let fence_json = serde_json::to_string(execution)?;
+            injected_bytes += ANIMUS_EXECUTION_FENCE_JSON_ENV.len() + fence_json.len();
+            command.env(ANIMUS_EXECUTION_FENCE_JSON_ENV, fence_json);
         }
 
         // v0.5.1 P2 #6.2: pre-allocate the agent session id BEFORE spawn so
@@ -444,6 +453,7 @@ impl ProcessManager {
         // the runner when this dispatch produces none. (codex P2.)
         command.env_remove(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV);
         if let Some(skills_json) = workflow_skills_env_payload(project_root) {
+            injected_bytes += animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV.len() + skills_json.len();
             command.env(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV, skills_json);
         }
         // v0.5.8 secrets: inject keychain entries into the runner env so
@@ -492,6 +502,7 @@ impl ProcessManager {
                 command.env(&key, value);
                 total = next;
             }
+            injected_bytes += total;
         }
         #[cfg(unix)]
         let reattach_socket_path = reattach_socket_path_for(&project_root_path, &pending_session_id);
@@ -527,7 +538,15 @@ impl ProcessManager {
             command.env("ANIMUS_HOST_CLI_PATH", host_cli);
         }
 
-        let mut child = command.spawn().context("failed to spawn animus-workflow-runner")?;
+        let daemon_env_bytes: usize = std::env::vars_os().map(|(k, v)| k.len() + v.len() + 2).sum();
+        let mut child = command
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "failed to spawn animus-workflow-runner (program={} args_bytes={} builder_env_bytes={} injected_env_bytes={} daemon_env_bytes={})",
+                    program_path, args_bytes, builder_env_bytes, injected_bytes, daemon_env_bytes,
+                )
+            })?;
 
         let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let stderr_reader = if let Some(stderr) = child.stderr.take() {
