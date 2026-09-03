@@ -951,6 +951,22 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut runtime_options = runtime_options_from_cli(&args, project_root);
     let start_config = DaemonStartConfig { pool_size: runtime_options.pool_size };
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
+    // TASK-001: a failed config load silently degrades the daemon to the
+    // builtin default (no workflows, no environment map, no broker gating —
+    // runners then self-prepare nodes with no daemon coordination). Make the
+    // loaded source and the broker-gating map visible at boot.
+    println!(
+        "daemon-config ts={} source={:?} workflows={} environment_map={:?}",
+        chrono::Utc::now().to_rfc3339(),
+        workflow_config.metadata.source,
+        workflow_config.config.workflows.len(),
+        workflow_config
+            .config
+            .workflows
+            .iter()
+            .filter_map(|workflow| workflow.environment.as_ref().map(|env| (workflow.id.as_str(), env.as_str())))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    );
     let daemon_config = workflow_config.config.daemon.as_ref();
     // Install the process-wide RuntimeQuotas BEFORE constructing
     // `ProcessManager`. `ProcessManager::new()` reads

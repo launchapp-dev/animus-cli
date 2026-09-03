@@ -738,6 +738,14 @@ impl ProcessManager {
         command.env(ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV, broker.token());
         command.env(ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, &run_id);
         command.env(ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV, &environment_id);
+        // TASK-001: broker engagement used to be invisible in hosted logs.
+        println!(
+            "env-broker ts={} run={} environment={} skills_sync_dir={}",
+            chrono::Utc::now().to_rfc3339(),
+            run_id,
+            environment_id,
+            skills_sync_dir.unwrap_or("none"),
+        );
         Some(run_id)
     }
 
