@@ -1,8 +1,5 @@
 use std::collections::HashSet;
-#[cfg(unix)]
-use std::path::Path;
-#[cfg(unix)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 
@@ -80,50 +77,107 @@ const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] = &[
     ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
 ];
 
-/// Upper bound on the serialized phase-skills payload the daemon will put on
-/// the runner spawn environment. Oversized payloads are dropped with a
-/// warning; the runner then resolves skills locally (its no-payload
-/// fallback), so nothing is lost beyond the daemon-side resolution log.
-/// Windows caps the entire process environment block at ~32 KiB, so the cap
-/// there must leave headroom for the inherited daemon environment.
-///
-/// On Linux the binding limit is NOT ARG_MAX (the ~2 MiB total) but
-/// MAX_ARG_STRLEN: 128 KiB (32 × PAGE_SIZE) for any SINGLE argv/envp string,
-/// set by execve regardless of total size. A 512 KiB cap therefore admitted
-/// payloads that execve always rejects with E2BIG — observed in production as
-/// every queue dispatch dying at runner spawn with "Argument list too long"
-/// (TASK-001, 2026-09-02). Cap below 128 KiB with headroom for the key name.
-/// (codex P2, TASK-001.)
-#[cfg(windows)]
-const PHASE_SKILLS_ENV_MAX_BYTES: usize = 16 * 1024;
-#[cfg(not(windows))]
-const PHASE_SKILLS_ENV_MAX_BYTES: usize = 112 * 1024;
+/// Accounting for one [`materialize_phase_skills`] pass, returned alongside
+/// the sync dir so the dispatch log line and tests share the same numbers.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct PhaseSkillsSyncCounts {
+    phases: usize,
+    written: usize,
+    skipped_identical: usize,
+}
 
-/// Resolve the project's phase/profile skill declarations (same scoped
-/// sources and trust rules as the ad-hoc `--skill` path) and serialize the
-/// result for the runner spawn env. Returns `None` when no phase declares
-/// skills. Missing skill names have already been logged by the resolver;
-/// they ride along in the payload's `missing` lists so the runner records
-/// them on phase metadata.
-fn workflow_skills_env_payload(project_root: &str) -> Option<String> {
+/// SPEC-001 / TASK-001: the runner never consumed the env-var skills payload
+/// (and a >128 KiB payload E2BIG-ed every spawn under Linux MAX_ARG_STRLEN);
+/// it resolves skills ONLY from local file sources. The daemon therefore
+/// materializes the resolved phase skills as USER-TIER YAML definitions at
+/// `<$HOME>/.animus/config/skill_definitions/<name>.yaml` — the exact dir the
+/// runner's [`orchestrator_config::skill_scoping::user_skills_dir`] tier
+/// scans — before spawn, so a local runner finds them directly and a remote
+/// run gets them via the broker's `skills_sync_dir` metadata + node file sync.
+///
+/// Writes are atomic (tmp file + rename) so concurrent dispatches materializing
+/// identical content cannot leave a torn file; a file whose content already
+/// matches is left untouched. Returns the sync dir plus counters, or `None`
+/// when no phase declares skills (nothing written).
+fn sync_phase_skills_to_user_dir(project_root: &str) -> Option<(PathBuf, PhaseSkillsSyncCounts)> {
     let payload = animus_runtime_shared::phase_skills::resolve_workflow_skills_payload(project_root);
     if payload.phases.is_empty() {
         return None;
     }
-    match serde_json::to_string(&payload) {
-        Ok(json) if json.len() > PHASE_SKILLS_ENV_MAX_BYTES => {
-            tracing::warn!(
-                bytes = json.len(),
-                "phase-skills payload exceeds env size cap; runner falls back to local skill resolution"
-            );
-            None
-        }
-        Ok(json) => Some(json),
-        Err(error) => {
-            tracing::warn!(%error, "failed to serialize phase-skills payload; runner falls back to local skill resolution");
-            None
+    // Dedupe by skill name: resolution is deterministic per project, so a
+    // name resolves to the same definition in every phase that declares it.
+    let mut definitions: std::collections::BTreeMap<String, orchestrator_config::SkillDefinition> =
+        std::collections::BTreeMap::new();
+    for resolution in payload.phases.values() {
+        for skill in &resolution.resolved {
+            definitions.entry(skill.definition.name.clone()).or_insert_with(|| skill.definition.clone());
         }
     }
+    if definitions.is_empty() {
+        return None;
+    }
+
+    let dir = orchestrator_config::skill_scoping::user_skills_dir();
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(%error, dir = %dir.display(), "failed to create user skill sync dir; runner resolves skills locally");
+        return None;
+    }
+
+    let mut counts = PhaseSkillsSyncCounts { phases: payload.phases.len(), ..Default::default() };
+    for (name, definition) in &definitions {
+        let slug = match orchestrator_config::skill_scoping::validate_skill_slug(name) {
+            Ok(slug) => slug,
+            Err(error) => {
+                tracing::warn!(%error, skill = %name, "phase skill name is not a safe slug; skipping sync write");
+                continue;
+            }
+        };
+        let yaml = match serde_yaml::to_string(definition) {
+            Ok(yaml) => yaml,
+            Err(error) => {
+                tracing::warn!(%error, skill = %name, "failed to serialize phase skill to YAML; skipping sync write");
+                continue;
+            }
+        };
+        // Same round-trip guarantee as `write_skill_yaml`: never leave a file
+        // on disk that the runner's parser would reject.
+        if let Err(error) = orchestrator_config::skill_definition::parse_skill_definition(&yaml) {
+            tracing::warn!(%error, skill = %name, "serialized phase skill failed round-trip validation; skipping sync write");
+            continue;
+        }
+        let path = dir.join(format!("{slug}.yaml"));
+        if std::fs::read(&path).is_ok_and(|existing| existing == yaml.as_bytes()) {
+            counts.skipped_identical += 1;
+            continue;
+        }
+        let tmp = dir.join(format!("{slug}.yaml.tmp-{}", std::process::id()));
+        let written = std::fs::write(&tmp, yaml.as_bytes()).and_then(|()| std::fs::rename(&tmp, &path));
+        match written {
+            Ok(()) => counts.written += 1,
+            Err(error) => {
+                let _ = std::fs::remove_file(&tmp);
+                tracing::warn!(%error, skill = %name, path = %path.display(), "failed to write phase skill sync file");
+            }
+        }
+    }
+    Some((dir, counts))
+}
+
+/// Materialize the resolved phase skills as user-tier YAML files and log one
+/// stdout summary line (`tracing::warn!` never reaches Railway-hosted logs —
+/// same stdout-visibility pattern as `dispatch_warn_stdout`). Returns the sync
+/// dir so the environment broker can hand it to the node file sync.
+fn materialize_phase_skills(project_root: &str, run_label: &str) -> Option<PathBuf> {
+    let (dir, counts) = sync_phase_skills_to_user_dir(project_root)?;
+    println!(
+        "skills-sync ts={} run={} phases={} written={} skipped-identical={}",
+        chrono::Utc::now().to_rfc3339(),
+        run_label,
+        counts.phases,
+        counts.written,
+        counts.skipped_identical
+    );
+    Some(dir)
 }
 
 fn runner_secret_allowlist() -> Vec<String> {
@@ -447,21 +501,18 @@ impl ProcessManager {
             command
                 .env("TOKIO_WORKER_THREADS", animus_runtime_shared::cgroup_threads::tokio_worker_threads().to_string());
         }
-        // Phase skills pass-down: resolve the union of phase-level `skills:`
-        // and the executing agent profile's `skills:` daemon-side (scoped
-        // sources + trust stripping, identical to the ad-hoc `--skill`
-        // path) and ship the resolved definitions on the spawn env. Older
-        // runners ignore the env var; newer runners apply activation gating
-        // at phase execution where the selected tool/model is known, and
-        // fall back to resolving locally when the var is absent.
-        // Clear any inherited value first: `Command` inherits the daemon's
-        // environment, so a stale parent-process payload must never reach
-        // the runner when this dispatch produces none. (codex P2.)
+        // Phase skills pass-down (SPEC-001 / TASK-001): resolve the union of
+        // phase-level `skills:` and the executing agent profile's `skills:`
+        // daemon-side (scoped sources + trust stripping, identical to the
+        // ad-hoc `--skill` path) and materialize the resolved definitions as
+        // USER-TIER skill YAML files the runner's local file sources pick up.
+        // The former env-var payload is gone: no released runner consumed it,
+        // and an oversized payload E2BIG-ed every spawn under Linux
+        // MAX_ARG_STRLEN. Clear any inherited value first: `Command` inherits
+        // the daemon's environment, so a stale parent-process payload must
+        // never reach the runner. (codex P2.)
         command.env_remove(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV);
-        if let Some(skills_json) = workflow_skills_env_payload(project_root) {
-            injected_bytes += animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV.len() + skills_json.len();
-            command.env(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV, skills_json);
-        }
+        let skills_sync_dir = materialize_phase_skills(project_root, target_workflow_id.unwrap_or(&pending_session_id));
         // v0.5.8 secrets: inject keychain entries into the runner env so
         // workflow runs see the same secret values as
         // `PluginHost::spawn_with_options` would. The runner is a
@@ -525,8 +576,13 @@ impl ProcessManager {
         // the four `ANIMUS_ENVIRONMENT_BROKER_*` env vars so the runner acquires
         // the run's SHARED node from the daemon instead of preparing its own.
         // Returns the broker run_id so the completion path can tear it down.
-        let environment_run_id =
-            self.configure_environment_broker(dispatch, project_root, target_workflow_id, &mut command);
+        let environment_run_id = self.configure_environment_broker(
+            dispatch,
+            project_root,
+            target_workflow_id,
+            skills_sync_dir.as_deref().and_then(Path::to_str),
+            &mut command,
+        );
 
         // Bind the subprocess workflow_events back-channel before fork so the
         // env var we set on the child points to a listener that's already
@@ -643,6 +699,7 @@ impl ProcessManager {
         dispatch: &SubjectDispatch,
         project_root: &str,
         target_workflow_id: Option<&str>,
+        skills_sync_dir: Option<&str>,
         command: &mut Command,
     ) -> Option<String> {
         let broker = self.environment_broker.as_ref()?;
@@ -676,7 +733,7 @@ impl ProcessManager {
                 dispatch.subject_id().filter(|subject| !subject.is_empty()).map(|subject| format!("run-{subject}"))
             })
             .unwrap_or_else(|| format!("wf-{}", uuid::Uuid::new_v4().simple()));
-        broker.register_run(&run_id, project_root, &environment_id);
+        broker.register_run(&run_id, project_root, &environment_id, skills_sync_dir.map(str::to_string));
         command.env(ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, broker.socket_path());
         command.env(ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV, broker.token());
         command.env(ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, &run_id);
@@ -1631,45 +1688,179 @@ mod tests {
         assert_eq!(completed[0].subject_kind.as_deref(), Some("pack.review"));
     }
 
-    #[test]
-    fn workflow_skills_env_payload_resolves_declared_phase_skills() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    /// Pin HOME to a fresh tempdir so skill-sync writes land in an isolated
+    /// user tier. Calls `stable_test_home` first so the process-wide OnceLock
+    /// pin cannot land on the tempdir mid-test.
+    fn pin_isolated_home() -> (EnvVarGuard, TempDir) {
         crate::test_env::stable_test_home();
+        let home = TempDir::new().expect("temp home");
+        let guard = EnvVarGuard::set("HOME", Some(home.path().to_str().expect("utf-8 home")));
+        (guard, home)
+    }
+
+    /// Author a project with the given project-tier skill files plus a
+    /// workflows.yaml declaring `research` (deep-search + shared) and `review`
+    /// (shared) phases, and expose it through the config-source test seam.
+    fn write_skill_project(project_root: &Path) {
+        let animus = project_root.join(".animus");
+        let skills_dir = animus.join("config").join("skill_definitions");
+        fs::create_dir_all(&skills_dir).expect("create skills dir");
+        fs::write(skills_dir.join("deep-search.yaml"), "name: deep-search\nprompt:\n  prefix: deep-search prefix\n")
+            .expect("write deep-search skill");
+        fs::write(skills_dir.join("shared.yaml"), "name: shared\nprompt:\n  suffix: shared suffix\n")
+            .expect("write shared skill");
+        fs::write(
+            animus.join("workflows.yaml"),
+            "phases:\n  research:\n    mode: agent\n    skills:\n      - deep-search\n      - shared\n  review:\n    mode: agent\n    skills:\n      - shared\nworkflows:\n  - id: demo\n    name: Demo\n    phases:\n      - research\n      - review\n",
+        )
+        .expect("write workflows.yaml");
+    }
+
+    #[test]
+    fn materialize_phase_skills_skips_vanilla_project() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (_home_guard, home) = pin_isolated_home();
 
         let temp_dir = TempDir::new().expect("temp directory");
         let project_root = temp_dir.path().to_str().expect("utf-8 tempdir");
 
         // No `.animus` config at all: only the builtin agent-profile skill
         // defaults (which reference the extracted `animus.core-skills`
-        // pack) can appear, and none of them resolve in a vanilla project.
-        if let Some(json) = super::workflow_skills_env_payload(project_root) {
-            let payload: animus_runtime_shared::phase_skills::WorkflowSkillsPayload =
-                serde_json::from_str(&json).expect("vanilla payload must parse");
-            assert!(
-                payload.phases.values().all(|resolution| resolution.resolved.is_empty()),
-                "vanilla project must not resolve any skill: {json}"
-            );
+        // pack) can appear, and none of them resolve in a vanilla project —
+        // so nothing is written and the user tier is never created.
+        assert!(super::sync_phase_skills_to_user_dir(project_root).is_none());
+        assert!(
+            !home.path().join(".animus").join("config").join("skill_definitions").exists(),
+            "vanilla project must not create the user skill sync dir"
+        );
+    }
+
+    #[test]
+    fn materialize_phase_skills_writes_deduped_yaml_and_skips_identical() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (_home_guard, _home) = pin_isolated_home();
+
+        let temp_dir = TempDir::new().expect("temp directory");
+        let project_root = temp_dir.path().to_str().expect("utf-8 tempdir");
+        write_skill_project(temp_dir.path());
+        let _config = crate::test_env::install_yaml_config_source_fixture(temp_dir.path());
+
+        let user_dir = orchestrator_config::skill_scoping::user_skills_dir();
+        let (dir, counts) = super::sync_phase_skills_to_user_dir(project_root).expect("declared skills materialize");
+        assert_eq!(dir, user_dir, "sync dir must be the runner's user-tier YAML dir");
+        // `shared` is declared by both phases but written once; builtin
+        // implicit persona defaults may add all-missing phase entries, so the
+        // phase count is a lower bound.
+        assert!(counts.phases >= 2, "both declaring phases must be covered: {counts:?}");
+        assert_eq!(counts.written, 2, "two unique skills written: {counts:?}");
+        assert_eq!(counts.skipped_identical, 0, "nothing pre-existed: {counts:?}");
+        assert!(user_dir.join("deep-search.yaml").is_file());
+        assert!(user_dir.join("shared.yaml").is_file());
+
+        // The written YAML re-parses through the same parser the runner's
+        // user-tier scan uses, into the exact resolved definition.
+        let sources = orchestrator_config::skill_scoping::load_skill_sources(temp_dir.path(), None).expect("sources");
+        for name in ["deep-search", "shared"] {
+            let resolved = orchestrator_config::skill_resolution::resolve_skill(name, &sources).expect("resolve");
+            let raw = fs::read_to_string(user_dir.join(format!("{name}.yaml"))).expect("read synced skill");
+            let reparsed = orchestrator_config::skill_definition::parse_skill_definition(&raw).expect("re-parse");
+            assert_eq!(reparsed, resolved.definition, "synced {name} must round-trip to the resolved definition");
         }
 
+        // Second pass: identical content on disk is skipped, not rewritten.
+        let (_, counts) = super::sync_phase_skills_to_user_dir(project_root).expect("second pass");
+        assert_eq!(counts.written, 0, "identical files must not be rewritten: {counts:?}");
+        assert_eq!(counts.skipped_identical, 2, "both files skipped as identical: {counts:?}");
+    }
+
+    #[test]
+    fn materialize_phase_skills_overwrites_changed_content_atomically() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (_home_guard, _home) = pin_isolated_home();
+
+        let temp_dir = TempDir::new().expect("temp directory");
+        let project_root = temp_dir.path().to_str().expect("utf-8 tempdir");
+        write_skill_project(temp_dir.path());
+        let _config = crate::test_env::install_yaml_config_source_fixture(temp_dir.path());
+
+        let user_dir = orchestrator_config::skill_scoping::user_skills_dir();
+        super::sync_phase_skills_to_user_dir(project_root).expect("first pass");
+
+        // Simulate a stale/tampered user-tier file: different content under
+        // the same skill name must be replaced by the fresh resolution.
+        fs::write(user_dir.join("deep-search.yaml"), "name: deep-search\nprompt:\n  prefix: tampered\n")
+            .expect("tamper synced file");
+        let (_, counts) = super::sync_phase_skills_to_user_dir(project_root).expect("second pass");
+        assert_eq!(counts.written, 1, "only the changed file is rewritten: {counts:?}");
+        assert_eq!(counts.skipped_identical, 1, "the untouched file is skipped: {counts:?}");
+        let raw = fs::read_to_string(user_dir.join("deep-search.yaml")).expect("read rewritten skill");
+        assert!(raw.contains("deep-search prefix"), "fresh content restored: {raw}");
+        assert!(!raw.contains("tampered"));
+
+        // Atomic tmp+rename leaves no partial files behind.
+        let leftovers: Vec<_> = fs::read_dir(&user_dir)
+            .expect("read sync dir")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "no tmp files may survive the rename: {leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_drops_env_payload_and_materializes_large_skill_set_on_disk() {
+        // TASK-001 regression: a >128 KiB skill set must NOT ride the spawn
+        // env (Linux MAX_ARG_STRLEN E2BIG) — it lands on disk instead.
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (_home_guard, _home) = pin_isolated_home();
+
+        let temp_dir = TempDir::new().expect("temp directory");
+        let project_root = temp_dir.path().to_str().expect("utf-8 tempdir");
         let animus = temp_dir.path().join(".animus");
         let skills_dir = animus.join("config").join("skill_definitions");
         fs::create_dir_all(&skills_dir).expect("create skills dir");
-        fs::write(skills_dir.join("deep-search.yaml"), "name: deep-search\nprompt:\n  prefix: deep-search prefix\n")
-            .expect("write skill");
+        let big_prefix = "x".repeat(200 * 1024);
+        fs::write(skills_dir.join("big-skill.yaml"), format!("name: big-skill\nprompt:\n  prefix: {big_prefix}\n"))
+            .expect("write big skill");
         fs::write(
             animus.join("workflows.yaml"),
-            "phases:\n  research:\n    mode: agent\n    skills:\n      - deep-search\n      - ghost-skill\nworkflows:\n  - id: research-only\n    name: Research Only\n    phases:\n      - research\n",
+            "phases:\n  research:\n    mode: agent\n    skills:\n      - big-skill\nworkflows:\n  - id: demo\n    name: Demo\n    phases:\n      - research\n",
         )
         .expect("write workflows.yaml");
         let _config = crate::test_env::install_yaml_config_source_fixture(temp_dir.path());
 
-        let json = super::workflow_skills_env_payload(project_root)
-            .expect("project with declared phase skills must produce a payload");
-        let payload: animus_runtime_shared::phase_skills::WorkflowSkillsPayload =
-            serde_json::from_str(&json).expect("payload must round-trip");
-        let research = payload.phases.get("research").expect("research phase entry");
-        assert_eq!(research.resolved.len(), 1);
-        assert_eq!(research.resolved[0].definition.name, "deep-search");
-        assert_eq!(research.missing, vec!["ghost-skill"]);
+        let env_dump = temp_dir.path().join("spawn-env.txt");
+        let runner_path = temp_dir.path().join("animus-workflow-runner");
+        fs::write(&runner_path, format!("#!/bin/sh\nenv > {}\nexit 0\n", env_dump.display()))
+            .expect("mock runner should be written");
+        let mut permissions = fs::metadata(&runner_path).expect("mock runner metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&runner_path, permissions).expect("mock runner should be executable");
+        let runner_override = runner_path.to_string_lossy();
+        let _runner_guard = EnvVarGuard::set("ANIMUS_WORKFLOW_RUNNER_BIN", Some(runner_override.as_ref()));
+
+        let mut manager = ProcessManager::new();
+        let dispatch = SubjectDispatch::for_task("TASK-SKILLS-SYNC", "demo");
+        manager.spawn_workflow_runner(&dispatch, project_root).expect("spawn with a >128KiB skill set must succeed");
+
+        let mut completed = Vec::new();
+        for _ in 0..100 {
+            completed = manager.check_running().await;
+            if !completed.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        assert_eq!(completed.len(), 1, "mock runner completes");
+
+        let spawn_env = fs::read_to_string(&env_dump).expect("runner env dump");
+        assert!(
+            !spawn_env.contains(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV),
+            "spawn env must not carry the phase-skills payload"
+        );
+        let synced = orchestrator_config::skill_scoping::user_skills_dir().join("big-skill.yaml");
+        let content = fs::read_to_string(&synced).expect("materialized big-skill file");
+        assert!(content.len() > 128 * 1024, "full >128KiB skill definition lands on disk");
+        assert!(content.contains(&big_prefix), "skill content survives the file sync intact");
     }
 }

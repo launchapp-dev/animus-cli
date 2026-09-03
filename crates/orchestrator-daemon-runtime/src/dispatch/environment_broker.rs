@@ -67,6 +67,13 @@ pub fn is_local_environment(environment_id: &str) -> bool {
 /// the spec before `prepare` so every phase of a run maps to the same node name.
 const ANIMUS_RUN_ID_METADATA_KEY: &str = "animus_run_id";
 
+/// SPEC-001 / TASK-001: free-form spec metadata key carrying the daemon-host
+/// directory where `materialize_phase_skills` wrote the run's resolved skill
+/// definitions (user-tier YAML). A remote environment plugin that supports
+/// node file sync reads it to ship the dir to the ephemeral node; plugins that
+/// predate it ignore the unknown key.
+pub const SKILLS_SYNC_DIR_METADATA_KEY: &str = "skills_sync_dir";
+
 // ---------------------------------------------------------------------------
 // Wire types (private daemon<->runner IPC — mirror broker-wire-contract.md).
 // ---------------------------------------------------------------------------
@@ -187,6 +194,9 @@ type ClientResolver = dyn Fn(&Path, &str) -> Result<Arc<dyn EnvironmentLeaseClie
 struct PendingContext {
     project_root: String,
     environment_id: String,
+    /// Daemon-host skill sync dir materialized at spawn (SPEC-001); injected
+    /// into the acquire spec's metadata when it still exists on disk.
+    skills_sync_dir: Option<String>,
 }
 
 struct Inner {
@@ -303,10 +313,22 @@ impl EnvironmentBroker {
     /// Record the spawn-time context for `run_id` so the runner's later
     /// `acquire` resolves the [`EnvironmentClient`] against the daemon-authored
     /// `project_root` (the wire frame never carries it). Idempotent per run.
-    pub fn register_run(&self, run_id: &str, project_root: &str, environment_id: &str) {
+    /// `skills_sync_dir` (SPEC-001) is the daemon-host dir holding the run's
+    /// materialized skill definitions; `acquire` forwards it as spec metadata.
+    pub fn register_run(
+        &self,
+        run_id: &str,
+        project_root: &str,
+        environment_id: &str,
+        skills_sync_dir: Option<String>,
+    ) {
         self.inner.pending.lock().unwrap_or_else(|p| p.into_inner()).insert(
             run_id.to_string(),
-            PendingContext { project_root: project_root.to_string(), environment_id: environment_id.to_string() },
+            PendingContext {
+                project_root: project_root.to_string(),
+                environment_id: environment_id.to_string(),
+                skills_sync_dir,
+            },
         );
     }
 
@@ -435,6 +457,15 @@ impl EnvironmentBroker {
 
         let mut spec = spec;
         set_run_id_metadata(&mut spec, run_id);
+        // SPEC-001: hand the run's materialized skill sync dir to the
+        // environment plugin, but only while it still exists on disk — a stale
+        // path must not send a plugin looking for a deleted directory.
+        // `set_run_id_metadata` guarantees `metadata` is an object here.
+        if let Some(dir) = pending.skills_sync_dir.as_deref().filter(|dir| Path::new(dir).is_dir()) {
+            if let Some(metadata) = spec.metadata.as_object_mut() {
+                metadata.insert(SKILLS_SYNC_DIR_METADATA_KEY.to_string(), json!(dir));
+            }
+        }
         // Preserve the real allocation request across prepare. Its repo/ref and
         // provider metadata must be fenced before the node reaches the runner.
         let allocated_resources = spec.clone();
@@ -1651,7 +1682,7 @@ mod tests {
         let first = EnvironmentBroker::start_with_resolver(&project_root, Some(scheduler.clone()), resolver.clone())
             .await
             .expect("start first broker");
-        first.register_run("wf-restart", &project_root, "railway");
+        first.register_run("wf-restart", &project_root, "railway", None);
         let spec = EnvironmentSpec {
             kind: "railway".to_string(),
             repos: Vec::new(),
@@ -1717,7 +1748,7 @@ mod tests {
         write_session_pending(&scoped_root, "wf-restart", "code-check", "codex", "agent-2", None)
             .expect("second pending checkpoint");
         update_session_running(&scoped_root, "wf-restart", "code-check").expect("second running checkpoint");
-        replacement.register_run("wf-restart", &project_root, "railway");
+        replacement.register_run("wf-restart", &project_root, "railway", None);
         let (_, second_handle) =
             replacement.acquire("wf-restart", "railway", spec).await.expect("second phase acquire");
         assert_eq!(second_handle, "node-h1");
@@ -1761,7 +1792,7 @@ mod tests {
     async fn acquire_rejects_environment_mismatch_with_registration() {
         let temp = tempfile::tempdir().expect("tempdir");
         let broker = EnvironmentBroker::start(temp.path().to_string_lossy().as_ref()).await.expect("start broker");
-        broker.register_run("wf-1", temp.path().to_string_lossy().as_ref(), "railway");
+        broker.register_run("wf-1", temp.path().to_string_lossy().as_ref(), "railway", None);
         let spec = EnvironmentSpec {
             kind: "container".to_string(),
             repos: Vec::new(),
@@ -1772,6 +1803,115 @@ mod tests {
         };
         let err = broker.acquire("wf-1", "container", spec).await.expect_err("must reject mismatch");
         assert!(err.to_string().contains("is bound to environment 'railway'"), "got: {err}");
+    }
+
+    /// Records every spec handed to `prepare` so tests can assert on the
+    /// metadata the broker injects.
+    struct SpecCaptureClient {
+        specs: StdMutex<Vec<EnvironmentSpec>>,
+    }
+
+    impl EnvironmentLeaseClient for SpecCaptureClient {
+        fn prepare(&self, spec: EnvironmentSpec) -> Result<EnvironmentHandle> {
+            self.specs.lock().unwrap_or_else(|p| p.into_inner()).push(spec);
+            Ok(EnvironmentHandle {
+                id: "node-capture".into(),
+                workspace_root: "/workspace".into(),
+                metadata: serde_json::Value::Null,
+            })
+        }
+
+        fn exec_stream(
+            &self,
+            _handle: &EnvironmentHandle,
+            _command: HarnessCommand,
+            _stdin: Option<String>,
+            _timeout: Option<Duration>,
+            _on_output: &(dyn Fn(ExecStream, &str) + Send + Sync),
+        ) -> Result<ExecResponse> {
+            Ok(ExecResponse { exit_code: Some(0), stdout: String::new(), stderr: String::new(), timed_out: false })
+        }
+
+        fn teardown(&self, _handle: &EnvironmentHandle) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn acquire_injects_skills_sync_dir_metadata_only_for_registered_existing_dir() {
+        use animus_runtime_shared::phase_session::{update_session_running, write_session_pending};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().to_string_lossy().into_owned();
+        let scoped_root =
+            protocol::repository_scope::scoped_state_root(temp.path()).expect("scoped project state root");
+        let sync_dir = temp.path().join("skill-sync");
+        std::fs::create_dir_all(&sync_dir).expect("create sync dir");
+        let missing_dir = temp.path().join("deleted-sync-dir");
+
+        let captured = Arc::new(SpecCaptureClient { specs: StdMutex::new(Vec::new()) });
+        let resolver: Arc<ClientResolver> = {
+            let captured = captured.clone();
+            Arc::new(move |_, _| Ok(captured.clone()))
+        };
+        let broker = EnvironmentBroker::start_with_resolver(&project_root, None, resolver).await.expect("start broker");
+
+        async fn register_and_acquire(
+            broker: &EnvironmentBroker,
+            scoped_root: &Path,
+            project_root: &str,
+            run_id: &str,
+            skills_sync_dir: Option<String>,
+        ) {
+            write_session_pending(scoped_root, run_id, "code", "codex", "task-a", None).expect("pending checkpoint");
+            update_session_running(scoped_root, run_id, "code").expect("running checkpoint");
+            broker.register_run(run_id, project_root, "railway", skills_sync_dir);
+            let spec = EnvironmentSpec {
+                kind: "railway".to_string(),
+                repos: Vec::new(),
+                image: None,
+                resources: None,
+                env: std::collections::BTreeMap::new(),
+                metadata: serde_json::Value::Null,
+            };
+            broker.acquire(run_id, "railway", spec).await.expect("acquire");
+        }
+
+        // (a) Registered with a dir that exists on disk -> metadata carries it.
+        register_and_acquire(
+            &broker,
+            &scoped_root,
+            &project_root,
+            "wf-sync-present",
+            Some(sync_dir.to_string_lossy().into_owned()),
+        )
+        .await;
+        // (b) Registered with a dir that no longer exists -> key omitted.
+        register_and_acquire(
+            &broker,
+            &scoped_root,
+            &project_root,
+            "wf-sync-missing",
+            Some(missing_dir.to_string_lossy().into_owned()),
+        )
+        .await;
+        // (c) Legacy registration without a sync dir -> frame unaffected.
+        register_and_acquire(&broker, &scoped_root, &project_root, "wf-sync-none", None).await;
+
+        let specs = captured.specs.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(specs.len(), 3, "each acquire prepares exactly once");
+        assert_eq!(specs[0].metadata[SKILLS_SYNC_DIR_METADATA_KEY], json!(sync_dir.to_string_lossy().as_ref()));
+        assert_eq!(specs[0].metadata["animus_run_id"], json!("wf-sync-present"), "existing metadata keys survive");
+        assert!(
+            specs[1].metadata.get(SKILLS_SYNC_DIR_METADATA_KEY).is_none(),
+            "missing dir must not be injected: {}",
+            specs[1].metadata
+        );
+        assert!(
+            specs[2].metadata.get(SKILLS_SYNC_DIR_METADATA_KEY).is_none(),
+            "legacy registration must not gain the key: {}",
+            specs[2].metadata
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1840,7 +1980,7 @@ mod tests {
             }),
         };
 
-        broker.register_run("wf-a", &project_root, "railway");
+        broker.register_run("wf-a", &project_root, "railway", None);
         broker.acquire("wf-a", "railway", spec.clone()).await.expect("first allocation");
 
         assert_eq!(fake.prepares.load(Ordering::SeqCst), 1, "only the admitted allocation may reach prepare");

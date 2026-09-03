@@ -35,6 +35,9 @@ animus-subject-protocol-wire = { workspace = true }
 protocol = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# SPEC-001: phase-skill materialization serializes resolved SkillDefinitions
+# to user-tier YAML (same version as orchestrator-config's own writer).
+serde_yaml = "0.9"
 thiserror = "1"
 tokio = { version = "1", features = ["io-util", "process", "rt", "macros", "net", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
