@@ -256,6 +256,12 @@ assembler, not by hand, but can be run directly:
 animus-mcp-proxy --server github [--url https://api.githubcopilot.com/mcp/] [--project-root .]
 ```
 
+Runtime assemblers can pass `--oauth-config-json <JSON>` together with
+`--url`. This self-contained handoff skips project workflow-config loading,
+which lets the proxy run inside a provider's restricted environment. The JSON
+uses the same `oauth:` schema documented above; credential values still arrive
+through the named environment variables rather than the argument.
+
 It serves the agent an auth-free stdio MCP endpoint and forwards to the
 upstream with a live bearer token:
 

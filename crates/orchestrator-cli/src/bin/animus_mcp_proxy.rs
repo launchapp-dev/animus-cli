@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use orchestrator_config::workflow_config::OauthConfig;
 
@@ -43,6 +43,9 @@ struct Args {
     #[arg(long = "auth-code")]
     auth_code: bool,
 
+    #[arg(long)]
+    oauth_config_json: Option<String>,
+
     /// Project root. Defaults to the current working directory.
     #[arg(long)]
     project_root: Option<PathBuf>,
@@ -57,6 +60,13 @@ struct BrokerBearerSource {
     server: String,
     project_root: String,
     oauth: OauthConfig,
+}
+
+fn explicit_oauth_config(args: &Args) -> Result<Option<OauthConfig>> {
+    args.oauth_config_json
+        .as_deref()
+        .map(|raw| serde_json::from_str(raw).context("invalid --oauth-config-json value"))
+        .transpose()
 }
 
 impl animus_mcp_oauth::proxy::BearerTokenSource for BrokerBearerSource {
@@ -85,10 +95,26 @@ async fn async_main() -> Result<()> {
     let args = Args::parse();
     let project_root = args
         .project_root
+        .as_ref()
         .map(|p| p.display().to_string())
         .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()))
         .unwrap_or_else(|| ".".to_string());
     let root = std::path::Path::new(&project_root);
+
+    if let Some(oauth) = explicit_oauth_config(&args)? {
+        let url = args
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("--url is required when --oauth-config-json is provided"))?;
+        if oauth.flow == orchestrator_config::workflow_config::OauthFlow::AuthorizationCode {
+            return animus_mcp_oauth::proxy::run_authorization_code(&args.server, url, root).await;
+        }
+        let source =
+            Arc::new(BrokerBearerSource { server: args.server.clone(), project_root: project_root.clone(), oauth });
+        return animus_mcp_oauth::proxy::run_with_bearer_source(&args.server, url, source).await;
+    }
 
     // Fast path: the caller already resolved an `authorization_code` (keychain)
     // server and handed us the upstream `--url`. Trust it and skip the
@@ -117,5 +143,39 @@ async fn async_main() -> Result<()> {
             animus_mcp_oauth::proxy::run_with_bearer_source(&args.server, &resolution.url, source).await
         }
         None => animus_mcp_oauth::proxy::run_authorization_code(&args.server, &resolution.url, root).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use orchestrator_config::workflow_config::OauthFlow;
+
+    #[test]
+    fn explicit_oauth_config_parses_without_loading_project_config() {
+        let args = Args::try_parse_from([
+            "animus-mcp-proxy",
+            "--server",
+            "rental-v1",
+            "--url",
+            "https://example.test/mcp",
+            "--oauth-config-json",
+            r#"{"flow":"manual_bearer","bearer_env":"RENTAL_MCP_BEARER"}"#,
+        ])
+        .expect("args");
+
+        let config = explicit_oauth_config(&args).expect("config").expect("explicit config");
+        assert_eq!(config.flow, OauthFlow::ManualBearer);
+        assert_eq!(config.bearer_env.as_deref(), Some("RENTAL_MCP_BEARER"));
+    }
+
+    #[test]
+    fn explicit_oauth_config_rejects_invalid_json() {
+        let args =
+            Args::try_parse_from(["animus-mcp-proxy", "--server", "rental-v1", "--oauth-config-json", "not-json"])
+                .expect("args");
+
+        assert!(explicit_oauth_config(&args).is_err());
     }
 }
