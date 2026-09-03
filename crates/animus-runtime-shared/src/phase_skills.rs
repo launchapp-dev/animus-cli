@@ -5,11 +5,13 @@
 //! names at dispatch time — using the same scoped skill sources and trust
 //! rules as the ad-hoc `--skill` path (project > user > installed >
 //! agent-host prompt-only, with agent-host structural fields stripped at
-//! load) — and materializes the resolved definitions as user-tier skill YAML
-//! files before spawning the workflow runner (SPEC-001 / TASK-001: no released
-//! runner consumed the former [`ANIMUS_PHASE_SKILLS_ENV`] env payload, and an
-//! oversized payload E2BIG-ed spawns under Linux MAX_ARG_STRLEN). The env
-//! loader below is retained for runners built against the env-var contract.
+//! load) — and materializes the resolved definitions as skill YAML files in
+//! a PER-RUN staging dir before spawning the workflow runner (SPEC-001 /
+//! TASK-001: no released runner consumed the former [`ANIMUS_PHASE_SKILLS_ENV`]
+//! env payload, and an oversized payload E2BIG-ed spawns under Linux
+//! MAX_ARG_STRLEN). The runner learns the dir via
+//! [`ANIMUS_PHASE_SKILLS_DIR_ENV`]. The env payload loader below is retained
+//! for runners built against the env-var contract.
 //!
 //! Activation gating (`activation.tools` / `activation.models`) is applied
 //! at phase-execution time via [`apply_phase_skills`], where the actually
@@ -42,10 +44,19 @@ use crate::runtime_contract::inject_named_mcp_servers;
 /// the daemon to the workflow-runner subprocess. SPEC-001 / TASK-001: the
 /// daemon no longer sets it (no released runner consumed it, and oversized
 /// payloads E2BIG-ed spawns under Linux MAX_ARG_STRLEN) — resolved skills are
-/// materialized as user-tier YAML files instead. The constant stays so the
-/// spawn path can strip stale inherited values and older consumers still
-/// parse a payload when one is present.
+/// materialized as YAML files in a per-run staging dir instead. The constant
+/// stays so the spawn path can strip stale inherited values and older
+/// consumers still parse a payload when one is present.
 pub const ANIMUS_PHASE_SKILLS_ENV: &str = "ANIMUS_PHASE_SKILLS_JSON";
+
+/// Env var the daemon sets on the workflow-runner spawn carrying the ABSOLUTE
+/// PATH of the per-run skills staging dir
+/// (`<scoped_state_root>/runs/<run_id>/skills/definitions`) that holds the
+/// materialized `<name>.yaml` skill definitions for this run. Set only when
+/// materialization wrote at least one file; otherwise the spawn strips any
+/// stale inherited value. Per-run (never the shared user tier) so concurrent
+/// runs and profiles cannot contaminate each other.
+pub const ANIMUS_PHASE_SKILLS_DIR_ENV: &str = "ANIMUS_PHASE_SKILLS_DIR";
 
 /// Schema tag for [`WorkflowSkillsPayload`].
 pub const PHASE_SKILLS_PAYLOAD_SCHEMA: &str = "animus.phase-skills.v1";
@@ -230,8 +241,8 @@ pub fn resolve_phase_skill_names(
 
 /// Resolve every phase's declared skills for a project. Used daemon-side at
 /// workflow dispatch: the daemon materializes the resolved definitions as
-/// user-tier skill YAML files the runner's local file sources pick up
-/// (SPEC-001). Iterates the union of compiled workflow
+/// skill YAML files in a per-run staging dir the runner picks up via
+/// [`ANIMUS_PHASE_SKILLS_DIR_ENV`] (SPEC-001). Iterates the union of compiled workflow
 /// phase definitions and agent-runtime phase definitions so the payload
 /// covers any phase the dispatched workflow ref can reach (including
 /// sub-workflows); phases with no declared skills are omitted.
