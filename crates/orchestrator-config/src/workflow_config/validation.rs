@@ -765,7 +765,7 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 if !definition.args.is_empty() {
                     errors.push(format!("mcp_servers['{}'].args must not be set when transport is \"http\"", name));
                 }
-                if !definition.env.is_empty() {
+                if !definition.env.is_empty() && definition.oauth.is_none() {
                     errors.push(format!("mcp_servers['{}'].env must not be set when transport is \"http\"", name));
                 }
             }

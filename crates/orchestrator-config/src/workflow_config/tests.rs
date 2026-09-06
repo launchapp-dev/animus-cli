@@ -3569,6 +3569,32 @@ fn validation_rejects_client_credentials_missing_client_secret_env() {
 }
 
 #[test]
+fn validation_accepts_http_oauth_proxy_env_but_rejects_direct_http_env() {
+    let mut config = builtin_workflow_config();
+    let mut server = http_oauth_server(OauthConfig {
+        flow: OauthFlow::ManualBearer,
+        token_url: None,
+        client_id_env: None,
+        client_secret_env: None,
+        refresh_token_env: None,
+        bearer_env: Some("RENTAL_MCP_BEARER".to_string()),
+        scopes: vec![],
+        audience: None,
+        cache: true,
+        client_id: None,
+    });
+    server.env.insert("RENTAL_MCP_BEARER".to_string(), "${secret.RENTAL_MCP_BEARER}".to_string());
+    config.mcp_servers.insert("rental-v1".to_string(), server);
+    validate_workflow_config(&config).expect("OAuth proxy must accept its credential environment");
+    let encoded = serde_json::to_string(&config).expect("serialize compiled config");
+    let decoded = serde_json::from_str(&encoded).expect("deserialize compiled config");
+    validate_workflow_config(&decoded).expect("compiled OAuth config must remain valid");
+    config.mcp_servers.get_mut("rental-v1").unwrap().oauth = None;
+    let err = validate_workflow_config(&config).expect_err("direct HTTP has no child environment");
+    assert!(err.to_string().contains("env must not be set"));
+}
+
+#[test]
 fn validation_rejects_manual_bearer_without_bearer_env() {
     let mut config = builtin_workflow_config();
     config.mcp_servers.insert(
