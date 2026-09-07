@@ -178,7 +178,7 @@ pub(crate) enum WorkflowConfigCommand {
     /// Read resolved workflow config.
     Get(WorkflowConfigReadArgs),
     /// Validate workflow config shape and references.
-    Validate(WorkflowConfigReadArgs),
+    Validate(WorkflowConfigValidateArgs),
     /// Validate and resolve YAML workflow files.
     Compile,
     /// Re-run the workflow YAML compile pipeline and (when the daemon is
@@ -213,6 +213,18 @@ pub(crate) enum WorkflowConfigCommand {
 pub(crate) struct WorkflowConfigReadArgs {
     #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
     pub(crate) actor_json: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigValidateArgs {
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP, conflicts_with = "file")]
+    pub(crate) actor_json: Option<String>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Validate candidate WorkflowConfig JSON or YAML without loading or changing live configuration. Use '-' for stdin."
+    )]
+    pub(crate) file: Option<String>,
 }
 
 #[derive(Debug, Args)]

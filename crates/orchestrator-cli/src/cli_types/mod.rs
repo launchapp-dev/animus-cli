@@ -1086,6 +1086,30 @@ mod tests {
     }
 
     #[test]
+    fn workflow_config_validate_candidate_file_and_live_default() {
+        for file in ["candidate.yaml", "-"] {
+            let cli = Cli::try_parse_from(["animus", "workflow", "config", "validate", "--file", file]).unwrap();
+            match cli.command {
+                Command::Workflow {
+                    command: WorkflowCommand::Config { command: WorkflowConfigCommand::Validate(args) },
+                } => assert_eq!(args.file.as_deref(), Some(file)),
+                other => panic!("expected candidate validation, got {other:?}"),
+            }
+        }
+        let cli = Cli::try_parse_from(["animus", "workflow", "config", "validate"]).unwrap();
+        match cli.command {
+            Command::Workflow {
+                command: WorkflowCommand::Config { command: WorkflowConfigCommand::Validate(args) },
+            } => assert!(args.file.is_none()),
+            other => panic!("expected live validation, got {other:?}"),
+        }
+        assert!(Cli::try_parse_from(
+            ["animus", "workflow", "config", "validate", "--file", "-", "--actor-json", "{}",]
+        )
+        .is_err());
+    }
+
+    #[test]
     fn chat_send_parses_actor_json_distinct_from_as_user() {
         let actor_json = r#"{"user_id":"carol","claims":["admin"]}"#;
         let cli =

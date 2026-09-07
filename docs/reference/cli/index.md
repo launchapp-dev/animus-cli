@@ -1932,6 +1932,13 @@ validation errors with rich caret-style line/column indicators. Under
 compile`. The `warnings[]` array reports declared-but-unenforced fields in
 both modes.
 
+Use `animus workflow config validate --file candidate.yaml --json` to validate
+a candidate WorkflowConfig as JSON or YAML. `--file -` reads stdin. Candidate
+validation does not load live configuration, resolve secrets, bootstrap project
+state, or write configuration. Check `data.valid` in the JSON envelope; validation
+errors appear in `data.errors`. Omitting `--file` retains live configuration
+validation. `--file` cannot be combined with `--actor-json`.
+
 ### `--actor-json` (transport-asserted per-user scoping)
 
 `animus workflow run`, actor-aware workflow/output reads, `animus workflow
