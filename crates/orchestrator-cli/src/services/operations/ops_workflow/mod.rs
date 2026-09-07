@@ -573,6 +573,10 @@ pub(crate) fn workflow_config_validate_application(project_root: &str, actor: Op
     Ok(config::validate_workflow_config_payload(project_root, actor))
 }
 
+pub(crate) fn workflow_config_validate_candidate(file: &str, json: bool) -> Result<()> {
+    config::validate_workflow_config_candidate_file(file, json)
+}
+
 pub(crate) fn workflow_config_source_application(file: Option<&str>) -> Result<orchestrator_core::WorkflowConfig> {
     config::read_workflow_config_source(file)
 }

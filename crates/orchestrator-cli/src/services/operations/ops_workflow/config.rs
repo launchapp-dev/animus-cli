@@ -547,6 +547,42 @@ pub(crate) fn read_workflow_config_source(file: Option<&str>) -> Result<orchestr
         .context("invalid WorkflowConfig JSON for workflow config set; expected a full config model")
 }
 
+pub(crate) fn validate_workflow_config_candidate(raw: &str) -> Value {
+    let result = (|| -> Result<orchestrator_core::WorkflowConfig> {
+        let candidate: Value = serde_yaml::from_str(raw)?;
+        let fields = candidate.as_object().context("candidate WorkflowConfig must be an object")?;
+        let mut defaults = serde_json::to_value(orchestrator_config::builtin_workflow_config_base())?;
+        defaults.as_object_mut().expect("WorkflowConfig serializes as an object").extend(fields.clone());
+        let config = serde_json::from_value(defaults)?;
+        orchestrator_core::validate_workflow_config(&config)?;
+        Ok(config)
+    })();
+    match result {
+        Ok(config) => serde_json::json!({
+            "valid": true,
+            "errors": [],
+            "warnings": [],
+            "summary": { "workflows": config.workflows.len() },
+        }),
+        Err(error) => serde_json::json!({
+            "valid": false,
+            "errors": [{ "message": error.to_string() }],
+            "warnings": [],
+        }),
+    }
+}
+
+pub(crate) fn validate_workflow_config_candidate_file(file: &str, json: bool) -> Result<()> {
+    let raw = read_json_source(Some(file))?;
+    let payload = validate_workflow_config_candidate(&raw);
+    if json {
+        crate::shared::print_value(payload, true)
+    } else {
+        print!("{}", render_validate_human(&payload));
+        Ok(())
+    }
+}
+
 /// Replace the entire raw workflow config from a typed application model. The
 /// kernel validates before writing and rejects a read-only source.
 pub(crate) fn set_workflow_config_payload(
@@ -641,6 +677,26 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn candidate_validation_accepts_json_and_yaml_without_live_config() {
+        for raw in [
+            r#"{"schema":"animus.workflow-config.v2","version":2,"mcp_servers":{"rental":{"transport":"http","url":"https://example.com/mcp","env":{"TOKEN":"${secret.TOKEN}"},"oauth":{"flow":"manual_bearer","bearer_env":"TOKEN"}}},"secrets":{"TOKEN":{"env":"TOKEN","required":true}}}"#,
+            "schema: animus.workflow-config.v2\nversion: 2\nmcp_servers:\n  rental:\n    transport: http\n    url: https://example.com/mcp\n",
+        ] {
+            let result = validate_workflow_config_candidate(raw);
+            assert_eq!(result["valid"], true, "{result}");
+        }
+    }
+
+    #[test]
+    fn candidate_validation_rejects_malformed_or_invalid_configuration() {
+        for raw in ["{broken", "schema: wrong\nversion: 2", "mcp_servers:\n  bad:\n    transport: http\n"] {
+            let result = validate_workflow_config_candidate(raw);
+            assert_eq!(result["valid"], false, "{result}");
+            assert!(!result["errors"].as_array().unwrap().is_empty());
+        }
+    }
 
     fn write_minimal_overlay(dir: &Path) {
         let animus = dir.join(".animus");

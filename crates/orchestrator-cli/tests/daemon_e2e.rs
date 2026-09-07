@@ -6,6 +6,102 @@ use serde_json::Value;
 use test_harness::CliHarness;
 
 #[test]
+fn workflow_candidate_validation_does_not_bootstrap_project_state() -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let temp = tempfile::tempdir()?;
+    let project = temp.path().join("absent-project");
+    for (raw, valid) in [("schema: animus.workflow-config.v2\nversion: 2\n", true), ("schema: invalid", false)] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_animus"))
+            .args(["--json", "--project-root"])
+            .arg(&project)
+            .args(["workflow", "config", "validate", "--file", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child.stdin.take().unwrap().write_all(raw.as_bytes())?;
+        let output = child.wait_with_output()?;
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let payload: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(payload["data"]["valid"], valid);
+        assert!(!project.exists());
+    }
+    let candidate = temp.path().join("candidate.json");
+    std::fs::write(&candidate, r#"{"schema":"animus.workflow-config.v2","version":2}"#)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_animus"))
+        .args(["--json", "--project-root"])
+        .arg(&project)
+        .args(["workflow", "config", "validate", "--file"])
+        .arg(&candidate)
+        .output()?;
+    assert!(output.status.success());
+    let payload: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(payload["data"]["valid"], true);
+    assert!(!project.exists());
+    Ok(())
+}
+
+#[test]
+fn workflow_candidate_validation_preserves_existing_global_and_metrics_state() -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let temp = tempfile::tempdir()?;
+    let project = temp.path().join("project");
+    let isolated_home = temp.path().join("isolated-home");
+    let global = isolated_home.join(".animus");
+    std::fs::create_dir_all(project.join(".animus"))?;
+    let metrics = global.join(protocol::repository_scope_for_path(&project)).join("metrics");
+    std::fs::create_dir_all(&metrics)?;
+    let mut config: protocol::Config = serde_json::from_value(serde_json::json!({}))?;
+    config.metrics = Some(protocol::MetricsConfig {
+        enabled: Some(true),
+        install_id: Some("candidate-validation-test".to_string()),
+        ..Default::default()
+    });
+    let global_bytes = serde_json::to_vec(&config)?;
+    std::fs::write(global.join("config.json"), &global_bytes)?;
+    let live_config = b"invalid live configuration must not be read";
+    std::fs::write(project.join(".animus/config.json"), live_config)?;
+    let pending_bytes = b"unparseable-pending-event-sentinel\n";
+    std::fs::write(metrics.join("pending.jsonl"), pending_bytes)?;
+    for json in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_animus"));
+        command
+            .env("HOME", &isolated_home)
+            .env("ANIMUS_CONFIG_DIR", &global)
+            .env("ANIMUS_AUTO_UPDATE_DISABLE", "0")
+            .env("ANIMUS_AUTO_UPDATE_MODE", "notify")
+            .env("ANIMUS_METRICS_DISABLE", "0")
+            .arg("--project-root")
+            .arg(&project)
+            .args(["workflow", "config", "validate", "--file", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if json {
+            command.arg("--json");
+        }
+        let mut child = command.spawn()?;
+        child.stdin.take().unwrap().write_all(b"schema: animus.workflow-config.v2\nversion: 2\n")?;
+        let output = child.wait_with_output()?;
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        if json {
+            let payload: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(payload["data"]["valid"], true);
+        } else {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("valid"));
+        }
+        assert_eq!(std::fs::read(global.join("config.json"))?, global_bytes);
+        assert_eq!(std::fs::read(project.join(".animus/config.json"))?, live_config);
+        assert_eq!(std::fs::read(metrics.join("pending.jsonl"))?, pending_bytes);
+        assert_eq!(std::fs::read_dir(&metrics)?.count(), 1);
+        assert!(!global.join("auto-update-state.json").exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn daemon_run_once_completes_single_tick_with_no_work() -> Result<()> {
     let harness = CliHarness::new()?;
 

@@ -49,7 +49,12 @@ async fn async_main() {
     match Cli::try_parse() {
         Ok(cli) => {
             let json = cli.json;
-            let startup_check = spawn_startup_update_check(&cli);
+            let candidate_validation = matches!(
+                &cli.command,
+                Command::Workflow { command: WorkflowCommand::Config { command: WorkflowConfigCommand::Validate(args) } }
+                    if args.file.is_some()
+            );
+            let startup_check = if candidate_validation { None } else { spawn_startup_update_check(&cli) };
             let project_root_override = cli.project_root.clone();
             let run_result = run(cli).await;
             let exit_code = match run_result {
@@ -59,6 +64,9 @@ async fn async_main() {
                     classify_exit_code(&error)
                 }
             };
+            if candidate_validation {
+                std::process::exit(exit_code);
+            }
             if let Some(check) = startup_check {
                 // Non-blocking modes (Notify / Off) get a tight 50ms grace
                 // window so a slow network probe never adds dead-air to the
@@ -183,6 +191,14 @@ async fn run(cli: Cli) -> Result<()> {
             version: env!("CARGO_PKG_VERSION"),
         };
         return print_value(data, cli.json);
+    }
+
+    if let Command::Workflow { command: WorkflowCommand::Config { command: WorkflowConfigCommand::Validate(args) } } =
+        &cli.command
+    {
+        if let Some(file) = args.file.as_deref() {
+            return services::operations::workflow_config_validate_candidate(file, cli.json);
+        }
     }
 
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
