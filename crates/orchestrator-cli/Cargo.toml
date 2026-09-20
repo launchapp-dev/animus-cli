@@ -82,7 +82,15 @@ webbrowser = "1"
 termimad = "0.34"
 libc = "0.2"
 fs2 = "0.4"
-reqwest = { version = "0.12", features = ["json", "blocking"] }
+# TODO(codex-p2): this uses bundled webpki-roots, not the OS trust store, so a
+# corporate/private CA installed on the host machine will not be trusted here.
+# rustls-tls-native-roots was tried instead and reverted: on macOS it eagerly
+# enumerates the entire Keychain via `security-framework` at Client
+# construction, which reproducibly (4/4 runs) broke unrelated
+# animus-mcp-oauth integration-test timing (see PR discussion for TASK-1613).
+# Revisit with either a lazily-initialized shared Client or by scoping
+# native-roots to non-test builds only.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "charset", "http2", "system-proxy", "rustls-tls-webpki-roots"] }
 colored = "3.0"
 tracing = "0.1"
 tempfile = "3"

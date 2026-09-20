@@ -161,19 +161,19 @@ fn append_line(path: &Path, line: &str) -> Result<()> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
         file.lock_exclusive()?;
         if !locked_file_still_at_path(&file, path) {
-            let _ = file.unlock();
+            let _ = fs2::FileExt::unlock(&file);
             continue;
         }
         if file.metadata()?.len() >= MAX_LOG_SIZE_BYTES {
             let rotated = path.with_extension("jsonl.1");
             if std::fs::rename(path, rotated).is_ok() {
-                let _ = file.unlock();
+                let _ = fs2::FileExt::unlock(&file);
                 continue;
             }
         }
         file.write_all(line.as_bytes())?;
         file.write_all(b"\n")?;
-        file.unlock()?;
+        fs2::FileExt::unlock(&file)?;
         return Ok(());
     }
 
@@ -181,7 +181,7 @@ fn append_line(path: &Path, line: &str) -> Result<()> {
     file.lock_exclusive()?;
     file.write_all(line.as_bytes())?;
     file.write_all(b"\n")?;
-    file.unlock()?;
+    fs2::FileExt::unlock(&file)?;
     Ok(())
 }
 

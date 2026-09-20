@@ -94,6 +94,50 @@ jobs:
         # than the prior fan-out.
         run: cargo check --locked --all-targets --workspace
 
+  android-check:
+    name: android-check (aarch64-linux-android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check orchestrator-cli for aarch64-linux-android
+        # A transitive native dependency's build.rs still invokes a real C
+        # compiler under `cargo check` (only the final link of the top-level
+        # binary is skipped), so this needs the NDK toolchain, not just the
+        # Rust target — confirmed locally, cargo check without CC_/AR_/linker
+        # env vars fails with "failed to find tool aarch64-linux-android-clang".
+        # This job exists to catch Android-target regressions from TASK-1613:
+        # reqwest must stay on rustls-tls (not the native-tls default, which
+        # needs openssl-sys — unavailable on bionic), and any new
+        # File::unlock() call site needs the explicit
+        # fs2::FileExt::unlock(&f) form, since Rust's own File::unlock has no
+        # Android implementation.
+        env:
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang
+        run: cargo check --locked -p orchestrator-cli --target aarch64-linux-android
+
   smoke-help:
     name: smoke-help
     runs-on: ubuntu-latest

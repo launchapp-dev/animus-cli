@@ -100,7 +100,7 @@ fn with_state_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result
         .lock_exclusive()
         .with_context(|| format!("failed to acquire agent state lock at {}", lock_path.display()))?;
     let result = f();
-    let _ = lock_file.unlock();
+    let _ = fs2::FileExt::unlock(&lock_file);
     result
 }
 

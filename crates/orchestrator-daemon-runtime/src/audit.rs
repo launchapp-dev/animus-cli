@@ -237,19 +237,19 @@ impl Audit {
             let mut handle = OpenOptions::new().create(true).append(true).open(&self.path)?;
             handle.lock_exclusive()?;
             if !locked_file_still_at_path(&handle, &self.path) {
-                let _ = handle.unlock();
+                let _ = fs2::FileExt::unlock(&handle);
                 continue;
             }
             if handle.metadata()?.len() >= self.max_bytes {
                 let rotated = next_rotation_path(&self.path);
                 if fs::rename(&self.path, rotated).is_ok() {
-                    let _ = handle.unlock();
+                    let _ = fs2::FileExt::unlock(&handle);
                     continue;
                 }
             }
             handle.write_all(line.as_bytes())?;
             handle.flush()?;
-            let _ = handle.unlock();
+            let _ = fs2::FileExt::unlock(&handle);
             return Ok(());
         }
 
@@ -257,7 +257,7 @@ impl Audit {
         handle.lock_exclusive()?;
         handle.write_all(line.as_bytes())?;
         handle.flush()?;
-        let _ = handle.unlock();
+        let _ = fs2::FileExt::unlock(&handle);
         Ok(())
     }
 }

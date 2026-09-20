@@ -38,7 +38,11 @@ tempfile = "3"
 axum = "0.8"
 http = "1"
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json"] }
+# TODO(codex-p2): see the identical TODO in crates/orchestrator-cli/Cargo.toml
+# — bundled webpki-roots (not the OS trust store) is a deliberate, currently
+# accepted tradeoff after rustls-tls-native-roots reproducibly broke this
+# crate's own integration-test timing on macOS.
+reqwest = { version = "0.12", default-features = false, features = ["json", "charset", "http2", "system-proxy", "rustls-tls-webpki-roots"] }
 
 [lints]
 workspace = true
