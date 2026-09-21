@@ -61,7 +61,11 @@ orchestrator-config = { workspace = true }
 # is synchronous (called from the workflow_runner plugin without a tokio
 # context guarantee). Token resolution happens once per phase, on the
 # caller thread, with on-disk caching keyed by `<server>.json`.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# TODO(codex-p2): see the identical TODO in crates/orchestrator-cli/Cargo.toml
+# — bundled webpki-roots (not the OS trust store) is a deliberate, currently
+# accepted tradeoff after rustls-tls-native-roots reproducibly broke
+# animus-mcp-oauth's integration-test timing on macOS (same dependency graph).
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "charset", "http2", "system-proxy", "rustls-tls-webpki-roots"] }
 
 [features]
 # Exposes the `phase_session::test_fault` and `phase_output::test_fault`

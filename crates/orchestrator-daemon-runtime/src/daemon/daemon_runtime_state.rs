@@ -128,7 +128,7 @@ fn with_daemon_state_lock<T>(project_root: &str, f: impl FnOnce() -> Result<T>) 
         .lock_exclusive()
         .with_context(|| format!("failed to acquire daemon state lock at {}", lock_path.display()))?;
     let result = f();
-    let _ = lock_file.unlock();
+    let _ = fs2::FileExt::unlock(&lock_file);
     result
 }
 
