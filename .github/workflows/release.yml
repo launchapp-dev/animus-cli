@@ -48,6 +48,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive_ext: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            archive_ext: tar.gz
           - os: macos-15-intel
             target: x86_64-apple-darwin
             archive_ext: tar.gz
@@ -67,9 +70,34 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Add aarch64-linux-android target to the pinned toolchain
+        # Same bug and fix as android-check in rust-workspace-ci.yml:
+        # rust-toolchain.toml pins a specific channel, which silently
+        # overrides whichever toolchain the action above resolved "stable"
+        # to and installed the target on. A bare `rustup target add` (no
+        # --toolchain flag) always operates on whichever toolchain is
+        # actually active, so it's immune to that stable-vs-pinned mismatch.
+        if: matrix.target == 'aarch64-linux-android'
+        run: rustup target add aarch64-linux-android
+
       - name: Install Linux build deps (libdbus for keyring crate)
+        # aarch64-linux-android's target string also contains "linux", but
+        # it cross-compiles against the NDK toolchain below, not glibc —
+        # this step is harmless-but-unnecessary for it (installs unused
+        # host apt packages), left as-is rather than tightened further.
         if: contains(matrix.target, 'linux')
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Android NDK
+        # Confirmed via TASK-1613: cargo check for this target still needs a
+        # real C compiler even though it skips the final link (a transitive
+        # build.rs invokes one), so a release build needs the full NDK
+        # toolchain, not just the Rust target.
+        if: matrix.target == 'aarch64-linux-android'
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
 
       - name: Cache Cargo build artifacts
         uses: Swatinem/rust-cache@v2
@@ -107,11 +135,26 @@ jobs:
 
       - name: Build release binaries
         shell: bash
+        env:
+          # Empty (unset) for every non-Android target — the "Install
+          # Android NDK" step above only runs for aarch64-linux-android, so
+          # ndk-path resolves to "" there and these env vars are simply
+          # absent for the other targets' builds.
+          CC_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path && format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang', steps.ndk.outputs.ndk-path) }}
+          CXX_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path && format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++', steps.ndk.outputs.ndk-path) }}
+          AR_aarch64_linux_android: ${{ steps.ndk.outputs.ndk-path && format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar', steps.ndk.outputs.ndk-path) }}
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: ${{ steps.ndk.outputs.ndk-path && format('{0}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang', steps.ndk.outputs.ndk-path) }}
         run: |
           cargo animus-bin-build-release --locked --target ${{ matrix.target }}
 
       - name: Verify binary version
-        if: startsWith(github.ref, 'refs/tags/v') && !contains(matrix.target, 'windows')
+        # A cross-compiled Android binary can't execute on this (x86_64
+        # Linux) runner at all, unlike the other targets which either match
+        # the host natively or are still directly runnable (e.g. macOS
+        # arm64-on-x86_64 isn't cross-executed here, but Android's ELF
+        # interpreter (/system/bin/linker64) simply doesn't exist on this
+        # host).
+        if: startsWith(github.ref, 'refs/tags/v') && !contains(matrix.target, 'windows') && matrix.target != 'aarch64-linux-android'
         shell: bash
         run: |
           set -euo pipefail

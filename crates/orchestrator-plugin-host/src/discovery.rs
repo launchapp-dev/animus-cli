@@ -1252,14 +1252,17 @@ fn scan_dir(
         let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if !is_scanned_plugin_name(file_name) || seen.contains(file_name) {
+        let Some(name) = canonical_scanned_plugin_name(file_name) else {
+            continue;
+        };
+        if seen.contains(&name) {
             continue;
         }
         // Reserve the name immediately so a duplicate file_name within the
         // same scan dir cannot enqueue a second probe candidate. Codex
         // round 1 P2.
-        seen.insert(file_name.to_string());
-        candidates.push(ProbeCandidate { name: file_name.to_string(), path, source });
+        seen.insert(name.clone());
+        candidates.push(ProbeCandidate { name, path, source });
     }
 
     let outcomes = resolve_manifests(&candidates, cache, lockfile, scope);
@@ -1305,15 +1308,39 @@ fn scan_dir(
     }
 }
 
+/// Recovers the canonical `animus-*` plugin name a scanned filename
+/// represents, or `None` if the file isn't a plugin binary the directory-scan
+/// discovery tiers (project-local dir, global install dir,
+/// `$ANIMUS_PLUGIN_PATH`, `$PATH`) should pick up.
+///
+/// Accepts two on-disk forms:
+/// - The plain form, `animus-postgres`, used everywhere else.
+/// - The Android APK packaging form, `libanimus-postgres.so`. An Android
+///   app that bundles Animus plugins via `jniLibs`/`extractNativeLibs=true`
+///   (see TASK-1641 / requirement:REQUIREMENT-084 — the wall-panel Home Hub
+///   app) has no choice about this naming: Android's PackageManager only
+///   extracts and marks executable files under `lib/<abi>/` inside the APK
+///   that match `lib*.so`. The plugin's identity everywhere else in the
+///   system (registry, lockfile, scope checks) stays the plain
+///   `animus-postgres` form regardless of which on-disk form was scanned.
+///
+/// All Animus plugin kinds share the `animus-*` executable namespace,
+/// including consolidated plugins such as `animus-postgres`. Names outside
+/// this namespace are only discoverable via a registry entry
+/// (`~/.animus/plugins.yaml` for global installs, `<project>/.animus/plugins.yaml`
+/// for project-scoped ones).
+pub(crate) fn canonical_scanned_plugin_name(file_name: &str) -> Option<String> {
+    if file_name.starts_with("animus-") {
+        return Some(file_name.to_string());
+    }
+    let android_inner = file_name.strip_prefix("lib")?.strip_suffix(".so")?;
+    android_inner.starts_with("animus-").then(|| android_inner.to_string())
+}
+
 /// Whether a binary file name is picked up by the directory-scan discovery
-/// tiers (project-local dir, global install dir, `$ANIMUS_PLUGIN_PATH`,
-/// `$PATH`). All Animus plugin kinds share the `animus-*` executable
-/// namespace, including consolidated plugins such as `animus-postgres`.
-/// Names outside this namespace are only discoverable via a
-/// registry entry (`~/.animus/plugins.yaml` for global installs,
-/// `<project>/.animus/plugins.yaml` for project-scoped ones).
+/// tiers. See [`canonical_scanned_plugin_name`] for the accepted forms.
 pub fn is_scanned_plugin_name(name: &str) -> bool {
-    name.starts_with("animus-")
+    canonical_scanned_plugin_name(name).is_some()
 }
 
 fn load_plugins_config(path: &Path) -> Result<PluginsConfig> {
@@ -1505,6 +1532,33 @@ mod tests {
         assert!(is_scanned_plugin_name("animus-postgres"));
         assert!(!is_scanned_plugin_name("postgres"));
         assert!(!is_scanned_plugin_name("unrelated-executable"));
+    }
+
+    #[test]
+    fn directory_scan_accepts_the_android_apk_lib_so_naming_form() {
+        // Android's PackageManager only extracts/marks-executable files
+        // under lib/<abi>/ matching lib*.so — a bundled plugin has no
+        // choice but to be named this way on disk (TASK-1641).
+        assert!(is_scanned_plugin_name("libanimus-postgres.so"));
+        assert!(is_scanned_plugin_name("libanimus-provider-claude.so"));
+        // Not every lib*.so is an Animus plugin — reject anything whose
+        // stripped inner name isn't in the animus- namespace.
+        assert!(!is_scanned_plugin_name("libc++_shared.so"));
+        assert!(!is_scanned_plugin_name("libsqlite3.so"));
+        // Malformed/partial matches must not slip through either.
+        assert!(!is_scanned_plugin_name("libanimus-postgres.so.1"));
+    }
+
+    #[test]
+    fn canonical_scanned_plugin_name_normalizes_the_android_form() {
+        assert_eq!(canonical_scanned_plugin_name("animus-postgres").as_deref(), Some("animus-postgres"));
+        assert_eq!(
+            canonical_scanned_plugin_name("libanimus-postgres.so").as_deref(),
+            Some("animus-postgres"),
+            "the on-disk Android form must resolve to the same canonical identity as the plain form"
+        );
+        assert_eq!(canonical_scanned_plugin_name("libc++_shared.so"), None);
+        assert_eq!(canonical_scanned_plugin_name("postgres"), None);
     }
 
     #[cfg(unix)]
@@ -1896,6 +1950,52 @@ mod tests {
         assert_eq!(discovered[0].name, "animus-provider-envoy");
         assert_eq!(discovered[0].path, plugin_path);
         assert_eq!(discovered[0].source, DiscoverySource::PluginPath);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_finds_plugins_bundled_in_the_android_lib_so_form() {
+        // Simulates an Android app's nativeLibraryDir: $ANIMUS_PLUGIN_DIR
+        // pointed at a directory whose plugin binaries are named the way
+        // Android's own APK packaging requires (TASK-1641), not the plain
+        // animus-* form used everywhere else.
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let native_lib_dir = temp.path().join("lib-arm64-v8a");
+        fs::create_dir_all(&native_lib_dir).expect("mkdir native lib dir");
+
+        let manifest = serde_json::json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "test plugin",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        // The on-disk name Android's PackageManager requires.
+        let plugin_path = native_lib_dir.join("libanimus-postgres.so");
+        fs::write(&plugin_path, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut permissions = fs::metadata(&plugin_path).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&plugin_path, permissions).expect("chmod");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &native_lib_dir);
+
+        let (discovered, warnings) =
+            PluginDiscovery::new().with_config_path(&empty_config).discover_with_warnings().expect("discover");
+
+        assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
+        assert_eq!(discovered.len(), 1, "the Android-named binary must be scanned, got {discovered:?}");
+        // The discovered identity is the canonical animus-* name, not the
+        // lib*.so filename — everything downstream (lockfile, scope checks)
+        // keys off this, and must not need to know how the binary got here.
+        assert_eq!(discovered[0].name, "animus-postgres");
+        assert_eq!(discovered[0].path, plugin_path);
     }
 
     #[test]
