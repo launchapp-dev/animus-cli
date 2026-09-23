@@ -289,6 +289,14 @@ pub(crate) fn pick_asset_for_host<'a>(
             }
         }
         let os_hit = os_aliases.iter().any(|alias| !alias.is_empty() && tokens.iter().any(|t| t.as_str() == *alias));
+        // A `linux` host must not match an `aarch64-linux-android` asset.
+        // Android's Rust target triple legitimately contains a `linux`
+        // token (bionic's kernel is Linux), so the plain OS-alias check
+        // above alone would let a real Linux host pick up an Android
+        // release asset. glibc/musl Linux binaries don't run on bionic —
+        // require the `linux` host to also NOT see an `android` token,
+        // mirroring the x86-vs-x86_64 guard just below.
+        let os_hit = if os == "linux" && tokens.iter().any(|t| t == "android") { false } else { os_hit };
         let arch_hit =
             arch_aliases.iter().any(|alias| !alias.is_empty() && tokens.iter().any(|t| t.as_str() == *alias));
         // A 32-bit `x86` host must not match an `x86_64-…` asset. The fused
@@ -335,6 +343,11 @@ fn os_aliases(os: &str) -> Vec<&'static str> {
     match os {
         "macos" => vec!["macos", "darwin", "osx", "apple"],
         "linux" => vec!["linux"],
+        // Rust's own `std::env::consts::OS` reports "android" (not "linux")
+        // when running on a real Android host, so `current_platform_token()`
+        // produces `android-<arch>` there — this is the alias that makes
+        // that token resolvable against a release asset (TASK-1641).
+        "android" => vec!["android"],
         "windows" => vec!["windows", "win64", "win32", "win"],
         "freebsd" => vec!["freebsd"],
         _ => vec![],
@@ -1147,6 +1160,55 @@ mod tests {
         }];
         let picked = pick_asset_for_host(&assets, "linux-x86_64").expect("amd64 alias");
         assert_eq!(picked.name, "animus_linux_amd64.tar.gz");
+    }
+
+    #[test]
+    fn pick_asset_for_host_matches_the_android_target_triple() {
+        let assets = vec![GithubReleaseAssetRecord {
+            name: "animus-aarch64-linux-android.tar.gz".to_string(),
+            browser_download_url: "https://example/android".to_string(),
+            digest: None,
+        }];
+        // Rust's own std::env::consts::OS reports "android", not "linux",
+        // on a real Android host — current_platform_token() would produce
+        // exactly this.
+        let picked = pick_asset_for_host(&assets, "android-aarch64").expect("android asset");
+        assert_eq!(picked.name, "animus-aarch64-linux-android.tar.gz");
+    }
+
+    #[test]
+    fn pick_asset_for_host_rejects_android_asset_for_a_plain_linux_host() {
+        // Android's Rust target triple (aarch64-linux-android) legitimately
+        // contains a "linux" token, since bionic's kernel is Linux — but a
+        // glibc/musl Linux host cannot run a bionic binary. A real Linux
+        // host must not pick up the Android asset just because "linux"
+        // appears in its filename.
+        let assets = vec![GithubReleaseAssetRecord {
+            name: "animus-aarch64-linux-android.tar.gz".to_string(),
+            browser_download_url: "https://example/android".to_string(),
+            digest: None,
+        }];
+        assert!(pick_asset_for_host(&assets, "linux-aarch64").is_none());
+    }
+
+    #[test]
+    fn pick_asset_for_host_picks_the_correct_asset_when_linux_and_android_both_ship() {
+        let assets = vec![
+            GithubReleaseAssetRecord {
+                name: "animus-aarch64-linux-android.tar.gz".to_string(),
+                browser_download_url: "https://example/android".to_string(),
+                digest: None,
+            },
+            GithubReleaseAssetRecord {
+                name: "animus-aarch64-unknown-linux-gnu.tar.gz".to_string(),
+                browser_download_url: "https://example/linux".to_string(),
+                digest: None,
+            },
+        ];
+        let for_linux = pick_asset_for_host(&assets, "linux-aarch64").expect("linux asset");
+        assert_eq!(for_linux.name, "animus-aarch64-unknown-linux-gnu.tar.gz");
+        let for_android = pick_asset_for_host(&assets, "android-aarch64").expect("android asset");
+        assert_eq!(for_android.name, "animus-aarch64-linux-android.tar.gz");
     }
 
     #[test]

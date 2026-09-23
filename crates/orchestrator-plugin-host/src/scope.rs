@@ -481,7 +481,21 @@ impl PluginScope {
             return true;
         }
         match path.file_name().and_then(|value| value.to_str()) {
-            Some(slug) => self.admits_by_name(slug),
+            // Normalize the same way discovery's own scan does (e.g. the
+            // Android APK packaging form `libanimus-postgres.so` ->
+            // `animus-postgres`, see [`crate::discovery::canonical_scanned_plugin_name`])
+            // so a legitimately admitted plugin bundled that way isn't
+            // spuriously gated out here. Still filename-derived, not
+            // manifest-derived — the security property this gate exists
+            // for (a hostile repo can't claim an admitted name via
+            // `plugins.yaml`/manifest while shipping an arbitrarily-named
+            // binary) is unchanged, since the canonicalization only
+            // recognizes a fixed, narrow on-disk naming convention, not an
+            // attacker-supplied logical name.
+            Some(slug) => {
+                let normalized = crate::discovery::canonical_scanned_plugin_name(slug);
+                self.admits_by_name(normalized.as_deref().unwrap_or(slug))
+            }
             None => false,
         }
     }
@@ -1026,6 +1040,33 @@ required = ["acme/animus-provider-enterprise"]
         );
         // No file name → conservatively refuse under a restricted scope.
         assert!(!scope.may_probe(&PathBuf::from("/")));
+    }
+
+    #[test]
+    fn may_probe_normalizes_the_android_apk_lib_so_form() {
+        // A plugin bundled inside an Android app (TASK-1641) is on disk as
+        // `libanimus-provider-claude.so` — Android's PackageManager
+        // requires that naming, but the admit set is keyed on the
+        // canonical `animus-provider-claude` slug.
+        let mut flavor: BTreeSet<String> = BTreeSet::new();
+        flavor.insert("animus-provider-claude".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
+
+        assert!(
+            scope.may_probe(&PathBuf::from("/repo/.animus/plugins/libanimus-provider-claude.so")),
+            "the Android on-disk form of an admitted plugin must still be probeable"
+        );
+        // A hostile binary shipped as e.g. `libanimus-provider-evil.so`
+        // must still be rejected — canonicalization narrows to the fixed
+        // lib*.so convention, it doesn't let an attacker supply an
+        // arbitrary logical name.
+        assert!(
+            !scope.may_probe(&PathBuf::from("/repo/.animus/plugins/libanimus-provider-evil.so")),
+            "out-of-flavor slug must NOT be probed even in the Android on-disk form"
+        );
+        // A lib*.so that isn't in the animus- namespace at all falls back
+        // to the raw filename, which (correctly) matches nothing.
+        assert!(!scope.may_probe(&PathBuf::from("/repo/.animus/plugins/libc++_shared.so")));
     }
 
     #[test]
