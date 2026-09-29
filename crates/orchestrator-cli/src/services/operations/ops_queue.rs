@@ -489,7 +489,7 @@ fn resolve_run_at(raw: &str) -> Result<String> {
 fn render_queue_list_human(response: &animus_queue_protocol::QueueListResponse) {
     if response.entries.is_empty() {
         println!("queue is empty");
-        println!("enqueue work with `animus queue enqueue --task-id <id>` (or --requirement-id / --title)");
+        println!("enqueue work with `animus queue enqueue --subject-id <id>` (or --title)");
         return;
     }
     let rows: Vec<Vec<String>> = response
