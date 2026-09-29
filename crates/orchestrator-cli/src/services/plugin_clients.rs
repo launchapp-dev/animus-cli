@@ -427,6 +427,29 @@ pub async fn require_generation_fenced_queue_backend(project_root: &Path) -> Res
     result
 }
 
+/// Whether any installed plugin serves the `queue` role.
+pub fn queue_plugin_installed(project_root: &Path) -> Result<bool> {
+    Ok(find_plugin_for_kind(project_root, PLUGIN_KIND_QUEUE)?.is_some())
+}
+
+/// Whether any installed plugin serves the `workflow_runner` role.
+pub fn workflow_runner_plugin_installed(project_root: &Path) -> Result<bool> {
+    Ok(find_plugin_for_kind(project_root, PLUGIN_KIND_WORKFLOW_RUNNER)?.is_some())
+}
+
+/// Fix command for an installed queue plugin that fails
+/// [`require_generation_fenced_queue_backend`]: reinstall the curated queue
+/// at its pinned tag. `--force` because the plugin is already installed.
+pub fn generation_fenced_queue_fix_command() -> String {
+    format!("animus plugin install {} --force", orchestrator_core::plugin_preflight::default_queue_repo())
+}
+
+/// Fix command for an installed workflow runner that fails
+/// [`require_execution_fenced_workflow_runner_backend`].
+pub fn execution_fenced_workflow_runner_fix_command() -> String {
+    format!("animus plugin install {} --force", orchestrator_core::plugin_preflight::default_workflow_runner_repo())
+}
+
 pub async fn call_queue_lease_v2(
     project_root: &Path,
     request: &queue_proto::QueueLeaseV2Request,

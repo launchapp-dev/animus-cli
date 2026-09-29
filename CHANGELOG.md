@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Default plugins now work with the 0.7 daemon.** The default queue pin moves
+  to `launchapp-dev/animus-queue-default` v0.4.0, the first release with
+  generation-fenced leases (`generation_fenced_leases_v1`); the 0.7 daemon
+  refuses to schedule work without them, so a fresh `animus plugin
+  install-defaults` (v0.3.3) could not run the daemon. The workflow runner pin
+  moves to `animus-workflow-runner-default` v0.4.74 and `animus-subject-default`
+  to v0.1.5. Animus 0.6.x must stay on queue v0.3.3: v0.4.0 refuses it at
+  `initialize`.
+- **One list of plugin pins.** `crates/orchestrator-cli/config/default-install.json`
+  no longer carries plugin tags; `animus init`'s `recommended_install`, the
+  starter `animus.toml`, and `animus plugin update` fill them in from
+  `crates/orchestrator-core/src/plugin_registry.rs`, the table
+  `install-defaults` and the daemon preflight already used. They had drifted:
+  `plugin update` would have moved the workflow runner back to v0.4.5 and the
+  Claude provider to v0.2.7.
+- **`animus daemon preflight` checks fencing.** Like `animus daemon run`, it now
+  starts the installed queue and workflow runner and fails (exit 2) when the
+  queue lacks generation-fenced leases or the runner lacks execution fences.
+  The `missing` entry carries a `reason` and a `--force` reinstall command.
+  Previously the report passed with queue v0.3.3 and the problem only showed up
+  when the daemon started.
+- **`animus daemon start --auto-install` works on a fresh install again.** The
+  daemon's fencing probe ran before auto-install and failed with "queue plugin
+  not installed"; it now skips roles with no plugin installed and leaves them to
+  the preflight that installs them.
+- **CI installs the pinned defaults and runs preflight**
+  (`scripts/check-default-install.sh`, job `default-install-preflight`), so a
+  pin the daemon can't run with fails the build.
+
 - **BREAKING — removed the deprecated `--task-id` / `--requirement-id` flags.**
   `task` and `requirement` are ordinary subject kinds now, so there is no
   task/requirement-specific CLI or MCP surface. Use `--subject-id` for every

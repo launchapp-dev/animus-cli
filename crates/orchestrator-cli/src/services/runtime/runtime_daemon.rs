@@ -870,6 +870,7 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
     let installer_ref = installer.as_ref().map(|i| i as &dyn orchestrator_core::PluginInstaller);
     let mut result = PluginPreflightRunner::run(&spec, installed, installer_ref).await?;
     result.flavor_manifest_error = flavor_error;
+    check_fencing_contracts(project_root, &mut result).await;
     // Non-fatal advisories (e.g. under-pinned workflow runner or queue plugin)
     // — surfaced in the report but never affect the OK verdict / exit code.
     let mut warnings = orchestrator_daemon_runtime::workflow_runner_warnings(project_root);
@@ -936,6 +937,38 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
         .into())
 }
 
+/// `animus daemon run` refuses to start unless the installed queue hands out
+/// generation-fenced leases and the installed workflow runner honours
+/// execution fences. Probe both here too, so the report fails for the same
+/// reasons the daemon would instead of passing on an old plugin. Roles with
+/// no plugin installed are already reported as missing and are not probed.
+async fn check_fencing_contracts(project_root: &str, result: &mut orchestrator_core::PreflightResult) {
+    use crate::services::plugin_clients;
+
+    let root = Path::new(project_root);
+    let role_satisfied = |result: &orchestrator_core::PreflightResult, role: &str| {
+        result.satisfied.iter().any(|satisfied| satisfied == role)
+    };
+    if role_satisfied(result, "queue") {
+        if let Err(error) = plugin_clients::require_generation_fenced_queue_backend(root).await {
+            result.mark_unsatisfied(
+                "queue",
+                format!("{error:#}"),
+                plugin_clients::generation_fenced_queue_fix_command(),
+            );
+        }
+    }
+    if role_satisfied(result, "workflow_runner") {
+        if let Err(error) = plugin_clients::require_execution_fenced_workflow_runner_backend(root).await {
+            result.mark_unsatisfied(
+                "workflow_runner",
+                format!("{error:#}"),
+                plugin_clients::execution_fenced_workflow_runner_fix_command(),
+            );
+        }
+    }
+}
+
 /// Render the preflight result as a human-readable checklist: one line per
 /// required role (satisfied roles marked `✓`, missing roles marked `✗` with
 /// the fix command), closing with a summary. `to_stderr` routes the output to
@@ -964,6 +997,8 @@ fn print_preflight_checklist(result: &orchestrator_core::PreflightResult, to_std
     for missing in &result.missing {
         if result.flavor_manifest_error.is_some() {
             line!("✗ {} — unsatisfied", missing.role);
+        } else if let Some(reason) = &missing.reason {
+            line!("✗ {} — {reason}; fix: {}", missing.role, missing.fix_command);
         } else {
             line!("✗ {} — missing; fix: {}", missing.role, missing.fix_command);
         }

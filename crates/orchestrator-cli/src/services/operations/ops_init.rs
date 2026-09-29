@@ -16,6 +16,7 @@ use orchestrator_core::{
 };
 use serde::Serialize;
 
+use super::default_install::default_install_json;
 use crate::{conflict_error, invalid_input_error, print_value, InitArgs};
 
 // -----------------------------------------------------------------------------
@@ -496,10 +497,8 @@ fn ensure_template_packs_available(project_root: &Path, template: &LoadedProject
     Ok(Vec::new())
 }
 
-const DEFAULT_INSTALL_MANIFEST_JSON: &str = include_str!("../../../config/default-install.json");
-
 fn default_install_manifest() -> serde_json::Value {
-    serde_json::from_str(DEFAULT_INSTALL_MANIFEST_JSON).unwrap_or_else(|_| serde_json::json!({}))
+    serde_json::from_str(default_install_json()).unwrap_or_else(|_| serde_json::json!({}))
 }
 
 /// One recommended pack pin from `config/default-install.json`.
@@ -516,7 +515,7 @@ pub(crate) fn recommended_packs() -> Vec<RecommendedPackPin> {
         #[serde(default)]
         packs: Vec<RecommendedPackPin>,
     }
-    serde_json::from_str::<Manifest>(DEFAULT_INSTALL_MANIFEST_JSON).map(|manifest| manifest.packs).unwrap_or_default()
+    serde_json::from_str::<Manifest>(default_install_json()).map(|manifest| manifest.packs).unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize)]

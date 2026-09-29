@@ -38,12 +38,13 @@ pub(crate) enum PluginCommand {
     /// Browse the public Animus plugin registry, grouped by kind.
     Browse(PluginBrowseArgs),
     /// Bulk-update installed release-source plugins to the recommended pins
-    /// declared in `default-install.json`. Selectors: `--all`, `--kind <KIND>`,
+    /// (the plugins listed in `default-install.json`, at the curated registry
+    /// tags `install-defaults` uses). Selectors: `--all`, `--kind <KIND>`,
     /// or `--name <NAME>` (exactly one required). `--check` previews the diff
     /// without writing; `--yes` skips the confirmation prompt.
     Update(PluginUpdateArgs),
     /// Report version drift for every installed plugin: installed tag vs the
-    /// recommended pin in `default-install.json` vs the latest tag published
+    /// recommended pin (see `update`) vs the latest tag published
     /// in the public plugin registry. Informational (exit 0) unless
     /// `--exit-code` is passed. Works offline against pins alone — latest is
     /// reported as unknown when the registry is unreachable.

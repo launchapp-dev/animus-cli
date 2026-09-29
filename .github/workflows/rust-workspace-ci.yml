@@ -173,3 +173,35 @@ jobs:
 
       - name: Smoke test animus help
         run: cargo run --locked -p orchestrator-cli --bin animus -- --help
+
+  default-install-preflight:
+    name: default-install-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: cargo-check
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps (libdbus for keyring crate)
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build animus
+        run: cargo build --locked -p orchestrator-cli --bin animus
+
+      - name: Install the pinned default plugins and run daemon preflight
+        # Downloads the plugin releases pinned in
+        # crates/orchestrator-core/src/plugin_registry.rs into a throwaway
+        # HOME. Preflight probes the queue for generation-fenced leases and
+        # the workflow runner for execution fences, so a pin the daemon
+        # can't run with fails here instead of reaching users.
+        run: scripts/check-default-install.sh target/debug/animus
