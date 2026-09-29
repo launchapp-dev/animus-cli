@@ -979,14 +979,28 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     let coding_scheduler = CodingScheduler::for_project(std::path::Path::new(project_root))?;
     if !runtime_options.skip_plugin_preflight {
-        crate::services::plugin_clients::require_generation_fenced_queue_backend(std::path::Path::new(project_root))
-            .await
-            .context("plugin preflight failed: generation-fenced queue backend unavailable")?;
-        crate::services::plugin_clients::require_execution_fenced_workflow_runner_backend(std::path::Path::new(
-            project_root,
-        ))
-        .await
-        .context("plugin preflight failed: execution-fenced workflow runner unavailable")?;
+        use crate::services::plugin_clients;
+        let root = std::path::Path::new(project_root);
+        // Only probe roles that have a plugin installed. A missing one is
+        // left to the plugin preflight in `run_daemon`, which installs the
+        // curated default under `--auto-install` or refuses to start with the
+        // install command; probing it here would fail before that runs.
+        if plugin_clients::queue_plugin_installed(root)? {
+            plugin_clients::require_generation_fenced_queue_backend(root).await.with_context(|| {
+                format!(
+                    "plugin preflight failed: generation-fenced queue backend unavailable; fix: `{}`",
+                    plugin_clients::generation_fenced_queue_fix_command()
+                )
+            })?;
+        }
+        if plugin_clients::workflow_runner_plugin_installed(root)? {
+            plugin_clients::require_execution_fenced_workflow_runner_backend(root).await.with_context(|| {
+                format!(
+                    "plugin preflight failed: execution-fenced workflow runner unavailable; fix: `{}`",
+                    plugin_clients::execution_fenced_workflow_runner_fix_command()
+                )
+            })?;
+        }
     }
     let owner_id = format!("animus-daemon-{}-{}", std::process::id(), uuid::Uuid::new_v4().simple());
     coding_scheduler.set_owner_id(&owner_id)?;

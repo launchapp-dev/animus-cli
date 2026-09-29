@@ -31,8 +31,6 @@ use super::ops_plugin::{
 use crate::cli_types::{AddArgs, InstallArgs, RemoveArgs};
 use crate::{invalid_input_error, not_found_error, print_value};
 
-const DEFAULT_INSTALL_MANIFEST_JSON: &str = include_str!("../../../config/default-install.json");
-
 // ---------------------------------------------------------------------------
 // install
 // ---------------------------------------------------------------------------
@@ -660,7 +658,7 @@ fn default_kernel_manifest() -> ProjectManifest {
 /// fully reproducible without relying on the curated resolution tables.
 pub(crate) fn default_install_manifest() -> ProjectManifest {
     let mut manifest = default_kernel_manifest();
-    let defaults: DefaultInstall = serde_json::from_str(DEFAULT_INSTALL_MANIFEST_JSON)
+    let defaults: DefaultInstall = serde_json::from_str(super::default_install::default_install_json())
         .unwrap_or(DefaultInstall { packs: Vec::new(), plugins: BTreeMap::new() });
 
     for group in defaults.plugins.values() {

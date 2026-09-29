@@ -302,6 +302,13 @@ impl PreflightResult {
         self.missing.is_empty() && self.flavor_manifest_error.is_none()
     }
 
+    /// Move `role` from satisfied to missing because the installed plugin
+    /// that serves it cannot do what the daemon needs (`reason`).
+    pub fn mark_unsatisfied(&mut self, role: &str, reason: String, fix_command: String) {
+        self.satisfied.retain(|satisfied| satisfied != role);
+        self.missing.push(MissingPlugin { role: role.to_string(), fix_command, reason: Some(reason) });
+    }
+
     pub fn render_missing_message(&self) -> String {
         if self.is_ok() {
             return String::new();
@@ -322,11 +329,27 @@ impl PreflightResult {
             }
             return out;
         }
-        out.push_str("plugin preflight failed: the daemon requires plugins that are not installed.\n");
-        for missing in &self.missing {
-            out.push_str(&format!("  - role `{}` unsatisfied; fix: `{}`\n", missing.role, missing.fix_command));
+        // Installed-but-unsuitable plugins (those with a `reason`) are left
+        // alone by `install-defaults` and `--auto-install`, so the install
+        // advice below only applies to absent ones.
+        let absent = self.missing.iter().filter(|missing| missing.reason.is_none()).count();
+        if absent > 0 {
+            out.push_str("plugin preflight failed: the daemon requires plugins that are not installed.\n");
+        } else {
+            out.push_str("plugin preflight failed: installed plugins cannot run this daemon.\n");
         }
-        if self.missing.len() > 1 {
+        for missing in &self.missing {
+            match &missing.reason {
+                Some(reason) => out.push_str(&format!(
+                    "  - role `{}` unsatisfied ({reason}); fix: `{}`\n",
+                    missing.role, missing.fix_command
+                )),
+                None => {
+                    out.push_str(&format!("  - role `{}` unsatisfied; fix: `{}`\n", missing.role, missing.fix_command))
+                }
+            }
+        }
+        if absent > 1 {
             // Composed fix: the default flavor's REQUIRED set covers every
             // daemon-preflight role, so one manifest-driven install
             // resolves all of the above instead of N per-role commands.
@@ -334,9 +357,11 @@ impl PreflightResult {
                 "Fix all missing roles with one command: `animus plugin install-defaults --flavor default --yes`\n",
             );
         }
-        out.push_str(
-            "Re-run with `--auto-install` to install defaults, or run `animus plugin install <repo>@<tag>` manually.\n",
-        );
+        if absent > 0 {
+            out.push_str(
+                "Re-run with `--auto-install` to install defaults, or run `animus plugin install <repo>@<tag>` manually.\n",
+            );
+        }
         out
     }
 }
@@ -345,6 +370,10 @@ impl PreflightResult {
 pub struct MissingPlugin {
     pub role: String,
     pub fix_command: String,
+    /// Why an installed plugin does not satisfy the role, e.g. a queue plugin
+    /// without generation-fenced leases. `None` when no plugin serves the role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

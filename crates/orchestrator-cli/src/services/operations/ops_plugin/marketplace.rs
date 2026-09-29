@@ -4,7 +4,8 @@
 //! * `animus plugin search` — substring + filter search against the registry index
 //! * `animus plugin browse` — grouped listing (installed vs available)
 //! * `animus plugin update` — bulk-update installed plugins to the recommended
-//!   pins declared in `crates/orchestrator-cli/config/default-install.json`,
+//!   pins: the plugins listed in `crates/orchestrator-cli/config/default-install.json`
+//!   at the tags in `orchestrator_core::plugin_registry`,
 //!   with `--all` / `--kind <KIND>` / `--name <NAME>` selectors, a `--check`
 //!   diff preview, and `--yes` for unattended runs.
 //!
@@ -406,7 +407,8 @@ pub(crate) struct PluginUpdateOutput {
     pub(crate) results: Vec<PluginUpdateRow>,
 }
 
-/// Recommended pins parsed from `crates/orchestrator-cli/config/default-install.json`.
+/// Recommended pins parsed from `crates/orchestrator-cli/config/default-install.json`
+/// (with plugin tags filled in from `orchestrator_core::plugin_registry`).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RecommendedPins {
     /// `owner/repo` -> (`tag`, `default-install.json section`).
@@ -436,8 +438,6 @@ impl RecommendedPins {
     }
 }
 
-const DEFAULT_INSTALL_MANIFEST_JSON: &str = include_str!("../../../../config/default-install.json");
-
 // TODO(codex-p2): `default-install.json` is currently a SUBSET of the slugs
 // install-defaults actually installs (it omits e.g. animus-subject-linear,
 // animus-transport-http, animus-web-ui, gemini/opencode/oai-runner). Those
@@ -447,7 +447,7 @@ const DEFAULT_INSTALL_MANIFEST_JSON: &str = include_str!("../../../../config/def
 // + `flavors/default.toml`. Tracked as a v0.5.9 follow-up so this v0.5.8 PR
 // stays scoped to the surface the task asked for.
 pub(crate) fn load_recommended_pins() -> Result<RecommendedPins> {
-    RecommendedPins::parse(DEFAULT_INSTALL_MANIFEST_JSON)
+    RecommendedPins::parse(super::super::default_install::default_install_json())
 }
 
 /// Normalize a `default-install.json` section name or singular plugin_kind
@@ -2018,6 +2018,11 @@ mod tests {
             pins.lookup("launchapp-dev/animus-queue-default").is_some(),
             "default-install.json must pin animus-queue-default"
         );
+        // The tags come from the curated registry, so `plugin update` moves
+        // plugins to the same versions `plugin install-defaults` installs.
+        for (slug, (tag, _)) in &pins.by_slug {
+            assert_eq!(orchestrator_core::resolve_tag_for_slug(slug), Some(tag.as_str()), "{slug}");
+        }
     }
 
     #[test]

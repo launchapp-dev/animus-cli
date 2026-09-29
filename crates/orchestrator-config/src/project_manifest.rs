@@ -14,7 +14,7 @@
 //!
 //! [plugins]
 //! animus-provider-claude = ">=0.2.7"                                       # curated: bare version req
-//! animus-queue-default   = { git = "launchapp-dev/animus-queue-default", tag = "v0.3.3" }  # explicit git pin
+//! animus-queue-default   = { git = "launchapp-dev/animus-queue-default", tag = "v0.4.0" }  # explicit git pin
 //! animus-config-postgres = { path = "deploy/plugin-src/animus-config-postgres" }            # vendored
 //!
 //! [packs]

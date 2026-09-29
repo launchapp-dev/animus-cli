@@ -12,6 +12,11 @@
 //!
 //! Bump the constants here when the curated launchapp-dev releases ship a
 //! new tag and the workspace agrees to roll the floor.
+//!
+//! This is also the only place plugin tags live. `config/default-install.json`
+//! in `orchestrator-cli` lists which plugins make up the starter set (for
+//! `animus init`, the starter `animus.toml`, and `animus plugin update`), but
+//! not their tags; those are filled in from here.
 
 /// Curated provider plugins installed by default. The order matters: the
 /// first entry is the one preflight points users at for
@@ -31,10 +36,15 @@ pub const DEFAULT_PROVIDER_PLUGINS: &[(&str, &str)] = &[
 /// flavor. Required for `animus daemon start` once the plugin-only path
 /// is the default (deletion gate in Wave 3 "Out of scope").
 pub const DEFAULT_WORKFLOW_RUNNER_PLUGINS: &[(&str, &str)] =
-    &[("launchapp-dev/animus-workflow-runner-default", "v0.4.8")];
+    &[("launchapp-dev/animus-workflow-runner-default", "v0.4.74")];
 
 /// v0.5 queue plugin. See [`DEFAULT_WORKFLOW_RUNNER_PLUGINS`].
-pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.3.3")];
+///
+/// The 0.7 daemon only schedules work through a queue that hands out
+/// generation-fenced leases (`generation_fenced_leases_v1`), which
+/// `animus-queue-default` has from v0.4.0. v0.4.0 refuses Animus 0.6 and
+/// older, which stay on v0.3.3.
+pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.4.0")];
 
 /// v0.6 config-source plugin (the default YAML source for the `config_source`
 /// plugin role). Published as `launchapp-dev/animus-config-yaml` v0.1.0 in the
@@ -65,7 +75,7 @@ pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-
 /// below (`default_subject_repo_for_kind`) assume each entry is listed
 /// here so preflight and install-defaults stay in lockstep.
 pub const DEFAULT_SUBJECT_PLUGINS: &[(&str, &str)] = &[
-    ("launchapp-dev/animus-subject-default", "v0.1.4"),
+    ("launchapp-dev/animus-subject-default", "v0.1.5"),
     ("launchapp-dev/animus-subject-requirements", "v0.1.7"),
     ("launchapp-dev/animus-subject-linear", "v0.1.5"),
     ("launchapp-dev/animus-subject-sqlite", "v0.1.4"),

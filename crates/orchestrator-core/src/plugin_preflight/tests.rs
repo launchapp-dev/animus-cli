@@ -359,6 +359,7 @@ fn flavor_manifest_error_leads_rendered_message_and_suppresses_install_advice() 
         missing: vec![super::MissingPlugin {
             role: "at_least_one_provider".to_string(),
             fix_command: "animus plugin install launchapp-dev/animus-provider-claude@v0.2.1".to_string(),
+            reason: None,
         }],
         auto_installed: Vec::new(),
         flavor_manifest_error: Some(
@@ -393,6 +394,7 @@ fn multiple_missing_roles_render_one_composed_flavor_fix_command() {
     let missing_role = |role: &str| super::MissingPlugin {
         role: role.to_string(),
         fix_command: format!("animus plugin install launchapp-dev/animus-{role}@v0.1.0"),
+        reason: None,
     };
     let result = super::PreflightResult {
         satisfied: Vec::new(),
@@ -420,6 +422,7 @@ fn single_missing_role_keeps_per_role_fix_without_composed_command() {
         missing: vec![super::MissingPlugin {
             role: "queue".to_string(),
             fix_command: "animus plugin install launchapp-dev/animus-queue-default@v0.3.0".to_string(),
+            reason: None,
         }],
         auto_installed: Vec::new(),
         flavor_manifest_error: None,
@@ -440,6 +443,7 @@ fn missing_roles_without_flavor_error_keep_install_advice_template() {
         missing: vec![super::MissingPlugin {
             role: "queue".to_string(),
             fix_command: "animus plugin install launchapp-dev/animus-queue-default@v0.2.0".to_string(),
+            reason: None,
         }],
         auto_installed: Vec::new(),
         flavor_manifest_error: None,
@@ -449,6 +453,54 @@ fn missing_roles_without_flavor_error_keep_install_advice_template() {
     let message = result.render_missing_message();
     assert!(message.contains("the daemon requires plugins that are not installed"), "got: {message}");
     assert!(message.contains("Re-run with `--auto-install`"), "got: {message}");
+}
+
+#[test]
+fn installed_but_unsuitable_plugin_moves_from_satisfied_to_missing() {
+    let mut result = super::PreflightResult {
+        satisfied: vec!["at_least_one_provider".to_string(), "queue".to_string()],
+        ..Default::default()
+    };
+    result.mark_unsatisfied(
+        "queue",
+        "queue plugin does not advertise generation_fenced_leases_v1".to_string(),
+        "animus plugin install launchapp-dev/animus-queue-default@v0.4.0 --force".to_string(),
+    );
+
+    assert!(!result.is_ok());
+    assert_eq!(result.satisfied, vec!["at_least_one_provider".to_string()]);
+    let message = result.render_missing_message();
+    assert!(
+        message.contains(
+            "role `queue` unsatisfied (queue plugin does not advertise generation_fenced_leases_v1); \
+             fix: `animus plugin install launchapp-dev/animus-queue-default@v0.4.0 --force`"
+        ),
+        "got: {message}"
+    );
+    let json = serde_json::to_value(&result.missing[0]).expect("serialize");
+    assert_eq!(json["reason"], "queue plugin does not advertise generation_fenced_leases_v1");
+}
+
+#[test]
+fn unsuitable_plugins_do_not_trigger_the_composed_install_defaults_fix() {
+    let mut result = super::PreflightResult {
+        satisfied: vec!["queue".to_string(), "workflow_runner".to_string()],
+        ..Default::default()
+    };
+    result.mark_unsatisfied("queue", "too old".to_string(), "fix queue".to_string());
+    result.mark_unsatisfied("workflow_runner", "too old".to_string(), "fix runner".to_string());
+
+    let message = result.render_missing_message();
+    assert!(!message.contains("install-defaults --flavor"), "install-defaults skips installed plugins. got: {message}");
+    assert!(message.contains("installed plugins cannot run this daemon"), "got: {message}");
+    assert!(!message.contains("not installed"), "got: {message}");
+    assert!(!message.contains("--auto-install"), "auto-install leaves installed plugins alone. got: {message}");
+    // Absent roles keep their plain line.
+    let absent = super::PreflightResult {
+        missing: vec![super::MissingPlugin { role: "queue".to_string(), fix_command: "x".to_string(), reason: None }],
+        ..Default::default()
+    };
+    assert!(absent.render_missing_message().contains("  - role `queue` unsatisfied; fix: `x`"));
 }
 
 #[test]

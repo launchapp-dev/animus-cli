@@ -76,7 +76,9 @@ JSON envelope is `animus.daemon.preflight.v1`.
 
 Plugins are versioned separately from the `animus` binary. `animus plugin update`
 does not chase the registry head by default; it reinstalls to the recommended
-pins declared in `crates/orchestrator-cli/config/default-install.json`.
+pins: the plugin set listed in `crates/orchestrator-cli/config/default-install.json`,
+at the tags in `crates/orchestrator-core/src/plugin_registry.rs` (the same tags
+`animus plugin install-defaults` installs).
 
 To move every installed release-source plugin to its recommended pin:
 

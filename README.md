@@ -548,8 +548,8 @@ embedded web server.
 
 **v0.5 reference plugins** (install via `animus plugin install-defaults`):
 
-- [`animus-workflow-runner-default`](https://github.com/launchapp-dev/animus-workflow-runner-default) `v0.4.1` — Rust workflow_runner plugin
-- [`animus-queue-default`](https://github.com/launchapp-dev/animus-queue-default) `v0.2.0` — Rust queue plugin with atomic `queue/lease` + `queue/release_pending`
+- [`animus-workflow-runner-default`](https://github.com/launchapp-dev/animus-workflow-runner-default) `v0.4.74` — Rust workflow_runner plugin
+- [`animus-queue-default`](https://github.com/launchapp-dev/animus-queue-default) `v0.4.0` — Rust queue plugin with generation-fenced leases (Animus 0.6.x stays on `v0.3.3`)
 - [`animus-step-durable-dbos`](https://github.com/launchapp-dev/animus-step-durable-dbos) `v0.2.0` — Postgres + DBOS-backed durable_store
 - [`animus-memory-zep`](https://github.com/launchapp-dev/animus-memory-zep) `v0.1.0` — Zep Cloud memory_store
 

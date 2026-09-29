@@ -285,7 +285,7 @@ animus
 │   ├── scaffold             Emit a minimal offline starter Cargo project for a new plugin kind
 │   ├── search               Search the public Animus plugin registry by substring + filters
 │   ├── browse               Browse the public Animus plugin registry, grouped by kind
-│   ├── update               Update installed release-source plugins to the recommended pins from `default-install.json` (`--all`, `--kind`, or `--name`)
+│   ├── update               Update installed release-source plugins to the recommended pins (the `default-install.json` plugin set at the `plugin_registry.rs` tags) (`--all`, `--kind`, or `--name`)
 │   ├── outdated             Report version drift: installed tag vs recommended pin vs latest published tag
 │   ├── install-defaults     Install every plugin the flavor manifest (`--flavor <name>`, default `default`) marks `required` from public GitHub releases. `--include-recommended` adds the recommended set. Skips plugins that are already installed
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`) — the SOURCE OF TRUTH for the installed plugin set. It records sha256 + version + source for every installed plugin; `plugins.yaml` (the registry discovery reads) is a DERIVED cache regenerated from the lock on every install/update/uninstall, so the two can never drift
@@ -438,7 +438,7 @@ kernel = ">=0.6.8"
 
 [plugins]
 animus-provider-claude = ">=0.2.7"                                                        # curated: version req
-animus-queue-default   = { git = "launchapp-dev/animus-queue-default", tag = "v0.3.3" }   # explicit git pin
+animus-queue-default   = { git = "launchapp-dev/animus-queue-default", tag = "v0.4.0" }   # explicit git pin
 animus-config-postgres = { path = "deploy/plugin-src/animus-config-postgres" }            # local/vendored
 
 [packs]
@@ -520,6 +520,16 @@ prints the exact `animus plugin install ...` command to remediate. No in-tree
 fallback runs in production; `--skip-preflight` bypasses the check but the
 daemon will fail at the first plugin RPC if the plugin really is missing.
 
+Being installed is not enough for two roles. The daemon also starts the
+installed `queue` plugin and checks that it hands out generation-fenced leases
+(`generation_fenced_leases_v1`; `animus-queue-default` has them from v0.4.0,
+and Animus 0.6.x stays on v0.3.3), and starts the `workflow_runner` plugin and
+checks that it honours execution fences (`execution_fence_v1`). An installed
+plugin without them stops startup with a reinstall command such as
+`animus plugin install launchapp-dev/animus-queue-default@v0.4.0 --force`.
+A role with no plugin installed is left to the preflight, so `--auto-install`
+installs it first.
+
 | Flag | Description |
 |---|---|
 | `--auto-install` | When preflight finds a missing role, install the daemon's recommended default plugin (pinned `owner/repo@tag`) before continuing. Avoids surprise network fetches when omitted. |
@@ -557,8 +567,9 @@ invocation, not recovered from the previous run.
 
 ### `animus daemon preflight`
 
-Standalone preflight report. Runs the same checks as daemon startup but never
-starts the daemon. Useful for CI and onboarding to confirm a project's plugin
+Standalone preflight report. Runs the same checks as daemon startup,
+including the queue and workflow runner fencing checks described above, but
+never starts the daemon. Useful for CI and onboarding to confirm a project's plugin
 prerequisites are in place. Human output renders as a checklist (one
 `[pass]`/`[fail]` line per required role), not a JSON blob; `--json` emits the
 `animus.daemon.preflight.v1` envelope.
@@ -568,14 +579,18 @@ prerequisites are in place. Human output renders as a checklist (one
 | `--auto-install` | Install missing required plugins from the daemon's recommended defaults instead of just reporting them. |
 
 JSON envelope: `animus.daemon.preflight.v1` with fields `satisfied`, `missing`,
-`auto_installed`, `flavor_manifest_error`, `ok`, `fix_message`.
+`auto_installed`, `flavor_manifest_error`, `ok`, `fix_message`. A `missing`
+entry for a role whose installed plugin fails a fencing check also carries a
+`reason` (for example `queue plugin does not advertise
+generation_fenced_leases_v1`), and its `fix_command` reinstalls the pinned
+plugin with `--force`.
 
 Exit code matrix:
 
 | Code | Meaning |
 |---|---|
 | 0 | All required roles satisfied. |
-| 2 | At least one required role is missing. The error envelope's `message` carries the `animus plugin install ...` fix per role; when more than one role is missing it also prints the one composed fix (`animus plugin install-defaults --flavor default --yes`). CI scripts and `&&` chains can rely on this. |
+| 2 | At least one required role is missing, or its installed plugin fails a fencing check. The error envelope's `message` carries the `animus plugin install ...` fix per role; when more than one role has no plugin installed it also prints the one composed fix (`animus plugin install-defaults --flavor default --yes`). CI scripts and `&&` chains can rely on this. |
 | 1 | Transient plugin discovery failure (broken install index, IO error, etc.). Distinct from "ran successfully and found gaps". |
 
 Broken flavor manifest: when `flavors/default.toml` exists on disk but fails
@@ -1233,7 +1248,9 @@ Initialize an Animus project from a template registry or a local template direct
 The template registry URL can be overridden globally via `ANIMUS_TEMPLATE_REGISTRY_URL`.
 In `--json` mode, `animus init` also returns `recommended_install`, sourced from
 `crates/orchestrator-cli/config/default-install.json`, so automations can read the
-recommended pack and plugin set without scraping prose.
+recommended pack and plugin set without scraping prose. Plugin tags in it come
+from `crates/orchestrator-core/src/plugin_registry.rs`, the same pins
+`animus plugin install-defaults` installs.
 
 Recommended pack installs are per-pack and never abort init: each pack reports
 `installed`, `already_installed`, or `failed` (with the manual

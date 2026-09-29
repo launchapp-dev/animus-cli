@@ -1,3 +1,4 @@
+mod default_install;
 mod ops_auth;
 mod ops_common;
 mod ops_cost;

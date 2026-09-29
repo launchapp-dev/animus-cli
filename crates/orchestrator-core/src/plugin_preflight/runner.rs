@@ -47,6 +47,7 @@ impl PluginPreflightRunner {
                         fix_command: format!(
                             "animus plugin install {repo_spec} --allow-shadow-builtin  # auto-install ran but role still unsatisfied",
                         ),
+                        reason: None,
                     });
                     continue;
                 }
@@ -55,6 +56,7 @@ impl PluginPreflightRunner {
             missing.push(MissingPlugin {
                 role: role_label.clone(),
                 fix_command: fix_command_for(role, auto_target.as_deref()),
+                reason: None,
             });
         }
 
