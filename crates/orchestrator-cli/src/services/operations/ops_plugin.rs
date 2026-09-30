@@ -850,7 +850,7 @@ async fn handle_plugin_install_defaults(args: PluginInstallDefaultsArgs, project
             tag: Some(tag.clone()),
             force: args.force,
             plugin_dir: args.plugin_dir.clone(),
-            allow_org: vec!["launchapp-dev".to_string()],
+            allow_org: builtin_trusted_orgs(),
             yes: args.yes,
             allow_shadow_builtin: true,
             project_root: Some(project_root.to_string()),
@@ -5275,10 +5275,18 @@ fn trusted_orgs_path() -> PathBuf {
     base.join("trusted-orgs.yaml")
 }
 
-/// Built-in trusted orgs. Pre-populated with `launchapp-dev` so a fresh
-/// install gets a safe default for the canonical animus plugins. The built-in
-/// org cannot be revoked via `animus plugin revoke-trust`.
-const BUILTIN_TRUSTED_ORGS: &[&str] = &["launchapp-dev"];
+/// Built-in trusted orgs: the publishers of the canonical Animus plugins, so a
+/// fresh install can pull the curated defaults without a trust prompt.
+/// `launchapp-dev` hosts most of them; `animus-ecosystem` hosts the API
+/// transports (`animus-transport-http`, `animus-transport-graphql`), which
+/// moved there in June 2026. Built-in orgs cannot be revoked via
+/// `animus plugin revoke-trust`.
+const BUILTIN_TRUSTED_ORGS: &[&str] = &["launchapp-dev", "animus-ecosystem"];
+
+/// `allow_org` seed for installs of curated plugins: every built-in trusted org.
+pub(crate) fn builtin_trusted_orgs() -> Vec<String> {
+    BUILTIN_TRUSTED_ORGS.iter().map(|org| (*org).to_string()).collect()
+}
 
 /// How a TOFU trust decision was made. Recorded per-entry in
 /// `trusted-orgs.yaml` so the audit trail explains why an org is trusted.
@@ -5721,10 +5729,10 @@ pub(crate) async fn run_locked_install_default(
     extra_allow_org: &[String],
     json: bool,
 ) -> Result<()> {
-    // `launchapp-dev` is always pre-trusted; the operator's `animus install
+    // The built-in orgs are always pre-trusted; the operator's `animus install
     // --allow-org <OWNER>` values are threaded through so a locked reinstall of
     // a third-party org can be trusted in a non-interactive / CI context.
-    let mut allow_org = vec!["launchapp-dev".to_string()];
+    let mut allow_org = builtin_trusted_orgs();
     allow_org.extend(extra_allow_org.iter().cloned());
     let args = PluginInstallArgs {
         source: None,
@@ -8413,14 +8421,14 @@ name = "same"
         let req = PluginInstallRequest {
             source: Some(slug.to_string()),
             tag: Some(tag.to_string()),
-            allow_org: vec!["launchapp-dev".to_string()],
+            allow_org: builtin_trusted_orgs(),
             yes: true,
             allow_shadow_builtin: true,
             ..Default::default()
         };
         assert!(req.allow_shadow_builtin, "install-defaults request must opt into shadow-builtin bypass");
         assert!(req.yes, "install-defaults request must auto-confirm TOFU");
-        assert_eq!(req.allow_org, vec!["launchapp-dev".to_string()]);
+        assert_eq!(req.allow_org, builtin_trusted_orgs());
     }
 
     #[test]
@@ -8462,6 +8470,20 @@ name = "same"
     fn launchapp_dev_is_builtin_trusted() {
         // Don't read disk in this test — only the built-in list.
         assert!(BUILTIN_TRUSTED_ORGS.contains(&"launchapp-dev"));
+    }
+
+    #[test]
+    fn every_curated_transport_org_is_builtin_trusted() {
+        // `install-defaults` installs these without a trust prompt, and
+        // `animus-transport-http` is in the default flavor's required set, so
+        // an untrusted owner here breaks non-interactive installs.
+        for (slug, _) in orchestrator_core::DEFAULT_TRANSPORT_PLUGINS {
+            let owner = slug.split('/').next().unwrap();
+            assert!(
+                BUILTIN_TRUSTED_ORGS.iter().any(|o| o.eq_ignore_ascii_case(owner)),
+                "{slug}: owner {owner} is not a built-in trusted org"
+            );
+        }
     }
 
     /// v0.4.10: serializes the trusted-orgs tests below that all mutate the
@@ -9156,8 +9178,8 @@ required = ["launchapp-dev/animus-subject-default", "launchapp-dev/animus-subjec
 recommended = ["launchapp-dev/animus-subject-linear"]
 
 [transports]
-required = ["launchapp-dev/animus-transport-http"]
-recommended = ["launchapp-dev/animus-transport-graphql"]
+required = ["animus-ecosystem/animus-transport-http"]
+recommended = ["animus-ecosystem/animus-transport-graphql"]
 
 [ui]
 recommended = ["launchapp-dev/animus-web-ui"]
@@ -9184,7 +9206,7 @@ required = ["launchapp-dev/animus-queue-default"]
             "launchapp-dev/animus-provider-claude",
             "launchapp-dev/animus-subject-default",
             "launchapp-dev/animus-subject-requirements",
-            "launchapp-dev/animus-transport-http",
+            "animus-ecosystem/animus-transport-http",
             "launchapp-dev/animus-workflow-runner-default",
             "launchapp-dev/animus-queue-default",
         ] {
@@ -9210,7 +9232,7 @@ required = ["launchapp-dev/animus-queue-default"]
         let slugs = target_slugs(&targets);
         assert!(slugs.contains(&"launchapp-dev/animus-provider-codex-mcp"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-subject-linear"), "got: {slugs:?}");
-        assert!(slugs.contains(&"launchapp-dev/animus-transport-graphql"), "got: {slugs:?}");
+        assert!(slugs.contains(&"animus-ecosystem/animus-transport-graphql"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-web-ui"), "got: {slugs:?}");
         assert!(
             !slugs.contains(&"launchapp-dev/animus-provider-ollama"),
@@ -9228,7 +9250,7 @@ required = ["launchapp-dev/animus-queue-default"]
         let targets = build_install_defaults_targets(&args, &tmp.path().to_string_lossy()).unwrap();
         let slugs = target_slugs(&targets);
         assert!(slugs.contains(&"launchapp-dev/animus-subject-linear"), "got: {slugs:?}");
-        assert!(slugs.contains(&"launchapp-dev/animus-transport-graphql"), "got: {slugs:?}");
+        assert!(slugs.contains(&"animus-ecosystem/animus-transport-graphql"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-web-ui"), "got: {slugs:?}");
         assert!(
             !slugs.contains(&"launchapp-dev/animus-provider-codex-mcp"),

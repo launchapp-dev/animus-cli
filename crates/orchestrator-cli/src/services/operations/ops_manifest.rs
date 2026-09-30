@@ -25,8 +25,8 @@ use serde_json::json;
 use super::ops_init::{recommended_packs, RecommendedPackPin};
 use super::ops_pack::install_pack_from_source_root;
 use super::ops_plugin::{
-    run_locked_install_default, run_plugin_install, run_plugin_uninstall, PluginInstallOutput, PluginInstallRequest,
-    PluginUninstallRequest,
+    builtin_trusted_orgs, run_locked_install_default, run_plugin_install, run_plugin_uninstall, PluginInstallOutput,
+    PluginInstallRequest, PluginUninstallRequest,
 };
 use crate::cli_types::{AddArgs, InstallArgs, RemoveArgs};
 use crate::{invalid_input_error, not_found_error, print_value};
@@ -402,13 +402,13 @@ pub(crate) fn ensure_project_root_gitignore(project_root: &Path) -> Result<bool>
 ///
 /// `yes: true` keeps the flow non-interactive, but it no longer silently
 /// auto-trusts unknown orgs: `enforce_org_trust` fails closed for an untrusted
-/// org in a non-interactive/server context. Only `launchapp-dev` (pre-seeded
-/// in `allow_org` and built-in trusted), already-trusted orgs, and explicit
+/// org in a non-interactive/server context. Only the built-in trusted orgs
+/// (pre-seeded in `allow_org`), already-trusted orgs, and explicit
 /// `--allow-org` targets install without a prompt. `extra_allow_org` carries
 /// the operator's `animus install --allow-org <OWNER>` values so a manifest git
 /// dependency from a third-party org can be trusted non-interactively.
 fn base_install_request(project_root: &str, force: bool, extra_allow_org: &[String]) -> PluginInstallRequest {
-    let mut allow_org = vec!["launchapp-dev".to_string()];
+    let mut allow_org = builtin_trusted_orgs();
     allow_org.extend(extra_allow_org.iter().cloned());
     PluginInstallRequest {
         force,
@@ -695,16 +695,18 @@ mod tests {
 
     #[test]
     fn base_install_request_merges_allow_org_and_stays_non_interactive() {
-        // No extra orgs: only the built-in launchapp-dev is pre-trusted, and the
+        // No extra orgs: only the built-in trusted orgs are pre-trusted, and the
         // request is left signature-policy-agnostic so it inherits env/config.
         let base = base_install_request("/proj", false, &[]);
-        assert_eq!(base.allow_org, vec!["launchapp-dev".to_string()]);
+        assert_eq!(base.allow_org, builtin_trusted_orgs());
         assert!(base.yes, "manifest installs stay non-interactive");
         assert!(base.signature_policy.is_none(), "policy inherited from env/config, not hardcoded");
         // Operator `--allow-org` values are appended so a third-party org can be
         // trusted non-interactively.
         let with_extra = base_install_request("/proj", true, &["third-party".to_string()]);
-        assert_eq!(with_extra.allow_org, vec!["launchapp-dev".to_string(), "third-party".to_string()]);
+        let mut expected = builtin_trusted_orgs();
+        expected.push("third-party".to_string());
+        assert_eq!(with_extra.allow_org, expected);
         assert!(with_extra.force);
     }
 

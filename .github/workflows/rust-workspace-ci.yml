@@ -205,3 +205,10 @@ jobs:
         # the workflow runner for execution fences, so a pin the daemon
         # can't run with fails here instead of reaching users.
         run: scripts/check-default-install.sh target/debug/animus
+
+      - name: Serve the dashboard from the pinned transport + web UI plugins
+        # Installs the --include-transports set, starts the daemon and
+        # `animus web serve`, then loads the dashboard page and runs its query
+        # through the web UI. A transport or web UI pin that can't serve the
+        # dashboard against this CLI's daemon fails here.
+        run: scripts/check-dashboard.sh target/debug/animus

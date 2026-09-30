@@ -720,7 +720,7 @@ pub(crate) async fn run_plugin_update(req: PluginUpdateRequest) -> Result<Plugin
             name: Some(plan.entry.name.clone()),
             force: true,
             project_root: req.project_root.clone(),
-            allow_org: if is_curated_pin { vec!["launchapp-dev".to_string()] } else { Vec::new() },
+            allow_org: if is_curated_pin { super::builtin_trusted_orgs() } else { Vec::new() },
             yes: is_curated_pin,
             allow_shadow_builtin: is_curated_pin,
             project: req.project,

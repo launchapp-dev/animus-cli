@@ -217,8 +217,9 @@ release source also consults a separate allowlist at
 `~/.animus/trusted-orgs.yaml`. Installing from an org not in this list
 prompts the operator at the TTY (non-suppressible) or fails non-interactively.
 
-Built-in trusted orgs: `launchapp-dev` (the trust anchor for the canonical
-Animus plugins — it cannot be revoked).
+Built-in trusted orgs: `launchapp-dev` and `animus-ecosystem` (the
+publishers of the canonical Animus plugins; `animus-ecosystem` hosts the API
+transports). They cannot be revoked.
 
 See [`docs/architecture/plugin-signing.md`](../architecture/plugin-signing.md#trusted-orgs-tofu)
 for the threat model.

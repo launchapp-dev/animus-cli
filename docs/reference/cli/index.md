@@ -1326,7 +1326,7 @@ When installing from a public repo, the CLI looks for a cosign keyless bundle ne
 
 **Policy resolution precedence** (highest first): the per-call flag above → the `ANIMUS_PLUGIN_SIGNATURE_POLICY` env (`strict`/`warn`/`skip`) → the `plugins.signature_policy` field in the global `config.json` → the `warn` default. When no flag is passed, `animus plugin install` and `animus install` inherit the env/config layer, so a cloud/CI host can set `ANIMUS_PLUGIN_SIGNATURE_POLICY=strict` once and have every install fail closed. The local default is unchanged: with no env and no config field, installs stay `warn`.
 
-**Publisher trust (TOFU) fail-closed in CI:** installing from a public repo owned by an untrusted org prompts for trust-on-first-use on an interactive terminal. In a non-interactive / server / CI context (no TTY, or `ANIMUS_SERVER=1`), `--yes`/`--force` no longer silently auto-trusts an unknown org — the install fails closed and asks you to re-run interactively or pass an explicit `--allow-org <OWNER>`. Built-in trusted orgs (`launchapp-dev`), already-trusted orgs, and `--allow-org` targets are unaffected. This closes the `git clone && animus install` hole where a hostile manifest could pull attacker-chosen plugins.
+**Publisher trust (TOFU) fail-closed in CI:** installing from a public repo owned by an untrusted org prompts for trust-on-first-use on an interactive terminal. In a non-interactive / server / CI context (no TTY, or `ANIMUS_SERVER=1`), `--yes`/`--force` no longer silently auto-trusts an unknown org — the install fails closed and asks you to re-run interactively or pass an explicit `--allow-org <OWNER>`. Built-in trusted orgs (`launchapp-dev`, `animus-ecosystem`), already-trusted orgs, and `--allow-org` targets are unaffected. This closes the `git clone && animus install` hole where a hostile manifest could pull attacker-chosen plugins.
 
 The trusted-signers file format:
 
@@ -1556,8 +1556,12 @@ commands above. Required vars declared by the selected `transport_backend` or
 | `animus web serve` | `--open`, `--json` |
 | `animus web open` | `--url <URL>`, `--path <PATH>`, `--json` |
 
-`animus web serve --open` starts the transport plugins and launches the
-resolved browser URL in one step. `animus web open --url <URL>` skips plugin
+`animus web serve` starts the API transports first, then the UI plugins. When
+a GraphQL transport is running (its `transport/schema` lists the `graphql`
+kind), the UI plugins get its bound address as `api_origin` in their
+`transport/start` config; `animus-web-ui` proxies `/graphql` there. The JSON
+envelope still lists the UI first. `animus web serve --open` starts the
+transport plugins and launches the resolved browser URL in one step. `animus web open --url <URL>` skips plugin
 discovery entirely and opens the supplied URL directly; `--path <PATH>`
 appends a sub-path such as `/runs` when the URL is resolved from installed
 plugins.

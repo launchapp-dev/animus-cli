@@ -41,10 +41,17 @@ const TRANSPORT_START_TIMEOUT: Duration = Duration::from_secs(15);
 /// point — both surfaces flatten into `PluginManifest.capabilities` at
 /// discovery time).
 ///
-/// Follow-up tracked separately: `animus-web-ui` v0.1.2 still needs to declare
-/// this capability in its manifest. Until then, `animus web open` falls back
-/// to whichever API transport sorts first and prints a warning.
+/// `animus-web-ui` declares it from v0.1.2. When no installed plugin declares
+/// it, `animus web open` falls back to whichever API transport sorts first
+/// and prints a warning.
 const WEB_UI_CAPABILITY: &str = "$ui/web";
+/// Transport method returning the plugin's `TransportSchema`, whose `kinds`
+/// say which API it serves (`graphql`, `http`, ...).
+const TRANSPORT_METHOD_SCHEMA: &str = "transport/schema";
+/// `TransportSchema.kinds` entry of the GraphQL transport. The web UI proxies
+/// its API calls to that transport, so `animus web serve` passes its address
+/// to the UI as `api_origin`.
+const GRAPHQL_TRANSPORT_KIND: &str = "graphql";
 const DEFAULT_TRANSPORT_KIND_PREFERENCE: &[&str] = &["transport-http", "transport-graphql"];
 const PLUGIN_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -76,18 +83,7 @@ async fn handle_serve(args: crate::WebServeArgs, project_root: &str, json: bool)
         return Err(missing_transport_plugins_error(json));
     }
 
-    // UI first so the URL the user is most likely to want shows up before
-    // the API URLs in both the JSON envelope and the human-facing log lines.
-    let mut running: Vec<RunningTransport> = Vec::new();
-    for plugin in web_ui_plugins.iter().chain(api_plugins.iter()) {
-        match spawn_and_keep_alive(plugin, project_root).await {
-            Ok(rt) => running.push(rt),
-            Err(err) => {
-                shutdown_running_transports(running).await;
-                return Err(err);
-            }
-        }
-    }
+    let running = start_transports(&api_plugins, &web_ui_plugins, project_root).await?;
 
     let ui_url = first_ui_url(&running);
     let api_url = first_api_url(&running);
@@ -132,6 +128,52 @@ async fn handle_serve(args: crate::WebServeArgs, project_root: &str, json: bool)
     }
     shutdown_running_transports(running).await;
     Ok(())
+}
+
+/// Start every transport plugin. API transports start first so the UI can be
+/// told where the GraphQL transport actually bound (`api_origin`); without it
+/// the UI assumes the GraphQL default port. The returned list puts UI plugins
+/// first so the UI URL leads the JSON envelope and the log lines. On failure,
+/// everything already started is shut down.
+async fn start_transports(
+    api_plugins: &[DiscoveredPlugin],
+    web_ui_plugins: &[DiscoveredPlugin],
+    project_root: &str,
+) -> Result<Vec<RunningTransport>> {
+    let mut api_running: Vec<RunningTransport> = Vec::new();
+    for plugin in api_plugins {
+        match spawn_and_keep_alive(plugin, project_root, None).await {
+            Ok(rt) => api_running.push(rt),
+            Err(err) => {
+                shutdown_running_transports(api_running).await;
+                return Err(err);
+            }
+        }
+    }
+
+    let ui_config = web_ui_start_config(api_running.iter().map(|r| &r.info));
+    let mut running: Vec<RunningTransport> = Vec::new();
+    for plugin in web_ui_plugins {
+        match spawn_and_keep_alive(plugin, project_root, ui_config.clone()).await {
+            Ok(rt) => running.push(rt),
+            Err(err) => {
+                running.extend(api_running);
+                shutdown_running_transports(running).await;
+                return Err(err);
+            }
+        }
+    }
+    running.extend(api_running);
+    Ok(running)
+}
+
+/// `transport/start` config for UI plugins: the running GraphQL transport's
+/// URL as `api_origin`, or `None` when no GraphQL transport is running.
+fn web_ui_start_config<'a>(mut api_spawns: impl Iterator<Item = &'a SpawnedTransport>) -> Option<Value> {
+    api_spawns
+        .find(|s| !s.serves_ui && s.serves_graphql)
+        .and_then(|s| s.url.clone())
+        .map(|origin| json!({ "api_origin": origin }))
 }
 
 fn first_ui_url(running: &[RunningTransport]) -> Option<String> {
@@ -230,21 +272,11 @@ async fn handle_open_foreground(
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    // UI plugins go up front so the URL we open in the browser is always the
-    // UI URL when one is installed. API plugins still get spawned so that
-    // (a) operators who installed both can see API URLs in the JSON envelope,
-    // and (b) we have a fallback URL to open if the UI plugin failed to
-    // produce one.
-    let mut running: Vec<RunningTransport> = Vec::new();
-    for plugin in web_ui_plugins.iter().chain(api_plugins.iter()) {
-        match spawn_and_keep_alive(plugin, project_root).await {
-            Ok(rt) => running.push(rt),
-            Err(err) => {
-                shutdown_running_transports(running).await;
-                return Err(err);
-            }
-        }
-    }
+    // API plugins still get spawned so that (a) the UI can reach the GraphQL
+    // API, (b) operators who installed both can see API URLs in the JSON
+    // envelope, and (c) we have a fallback URL to open if the UI plugin failed
+    // to produce one.
+    let running = start_transports(&api_plugins, &web_ui_plugins, project_root).await?;
 
     let ui_url = first_ui_url(&running);
     let api_url = first_api_url(&running);
@@ -323,7 +355,7 @@ async fn resolve_open_url(args: &crate::WebOpenArgs, project_root: &str) -> Resu
     }
     let mut url: Option<String> = None;
     for plugin in web_ui_plugins.iter().chain(api_plugins.iter()) {
-        if let Ok(info) = spawn_and_describe(plugin, project_root).await {
+        if let Ok(info) = spawn_and_describe(plugin, project_root, None).await {
             if let Some(resolved) = info.url {
                 url = Some(append_path(&resolved, &args.path));
                 break;
@@ -360,6 +392,9 @@ struct SpawnedTransport {
     /// resolution lives at the partition boundary, not scattered through the
     /// URL-picking code.
     serves_ui: bool,
+    /// `true` when the plugin's `transport/schema` lists the `graphql` kind
+    /// (or, for plugins that don't answer it, its name says graphql).
+    serves_graphql: bool,
     info: Value,
 }
 
@@ -368,7 +403,12 @@ struct RunningTransport {
     host: PluginHost,
 }
 
-async fn describe_host(plugin: &DiscoveredPlugin, host: &PluginHost, project_root: &str) -> Result<SpawnedTransport> {
+async fn describe_host(
+    plugin: &DiscoveredPlugin,
+    host: &PluginHost,
+    project_root: &str,
+    start_config: Option<Value>,
+) -> Result<SpawnedTransport> {
     let init = tokio::time::timeout(PLUGIN_HANDSHAKE_TIMEOUT, host.handshake())
         .await
         .map_err(|_| anyhow!("transport plugin {} handshake timed out", plugin.name))?
@@ -382,7 +422,8 @@ async fn describe_host(plugin: &DiscoveredPlugin, host: &PluginHost, project_roo
     // warning + continue, but new plugins MUST honor the spec to actually
     // bind.
     let is_transport_kind = plugin.manifest.serves_kind(TRANSPORT_PLUGIN_KIND);
-    let start_reply = if is_transport_kind { drive_transport_start(plugin, host, project_root).await? } else { None };
+    let start_reply =
+        if is_transport_kind { drive_transport_start(plugin, host, project_root, start_config).await? } else { None };
 
     let mut url = start_reply.as_ref().and_then(bind_url_for_kind_from_info);
     if url.is_none() {
@@ -396,13 +437,31 @@ async fn describe_host(plugin: &DiscoveredPlugin, host: &PluginHost, project_roo
         }
     }
     let serves_ui = plugin.manifest.serves_kind(WEB_UI_PLUGIN_KIND) || plugin_advertises_web_ui(plugin);
+    let serves_graphql = !serves_ui && is_transport_kind && transport_serves_graphql(plugin, host).await;
     Ok(SpawnedTransport {
         name: plugin.name.clone(),
         kind: plugin.manifest.plugin_kind.clone(),
         url,
         serves_ui,
+        serves_graphql,
         info: init_value,
     })
+}
+
+/// Ask the plugin for its `TransportSchema` and check for the `graphql` kind.
+/// Plugins that don't answer fall back to their name.
+async fn transport_serves_graphql(plugin: &DiscoveredPlugin, host: &PluginHost) -> bool {
+    match tokio::time::timeout(PLUGIN_HANDSHAKE_TIMEOUT, host.request_typed(TRANSPORT_METHOD_SCHEMA, None)).await {
+        Ok(Ok(schema)) => schema_lists_graphql(&schema),
+        _ => plugin.name.contains(GRAPHQL_TRANSPORT_KIND),
+    }
+}
+
+fn schema_lists_graphql(schema: &Value) -> bool {
+    schema
+        .get("kinds")
+        .and_then(Value::as_array)
+        .is_some_and(|kinds| kinds.iter().any(|k| k.as_str() == Some(GRAPHQL_TRANSPORT_KIND)))
 }
 
 /// Build the spec-shaped `TransportConfig` payload and issue `transport/start`
@@ -413,18 +472,23 @@ async fn drive_transport_start(
     plugin: &DiscoveredPlugin,
     host: &PluginHost,
     project_root: &str,
+    config: Option<Value>,
 ) -> Result<Option<Value>> {
     let project_root_path = std::path::PathBuf::from(project_root);
     let socket_path = control_socket_path(&project_root_path);
     // Spec shape per animus-transport-protocol v0.1.13:
     //   { control_socket_path, project_root, bind_addr?, config? }
     // bind_addr is omitted so the plugin uses its TransportSchema::default_port
-    // (HTTP plugin defaults to 127.0.0.1:8080, GraphQL to 127.0.0.1:8090). A
-    // future `animus web serve --port` flag can set this explicitly.
-    let params = json!({
+    // (HTTP 127.0.0.1:8080, GraphQL 127.0.0.1:8081, web UI 127.0.0.1:8082). A
+    // future `animus web serve --port` flag can set this explicitly. `config`
+    // carries plugin-specific keys, e.g. the web UI's `api_origin`.
+    let mut params = json!({
         "control_socket_path": socket_path,
         "project_root": project_root_path,
     });
+    if let Some(config) = config {
+        params["config"] = config;
+    }
 
     let outcome =
         tokio::time::timeout(TRANSPORT_START_TIMEOUT, host.request_typed(TRANSPORT_METHOD_START, Some(params))).await;
@@ -461,12 +525,16 @@ fn bind_url_for_kind_from_info(value: &Value) -> Option<String> {
 }
 
 #[cfg(test)]
-async fn spawn_and_describe(plugin: &DiscoveredPlugin, project_root: &str) -> Result<SpawnedTransport> {
+async fn spawn_and_describe(
+    plugin: &DiscoveredPlugin,
+    project_root: &str,
+    start_config: Option<Value>,
+) -> Result<SpawnedTransport> {
     let options = spawn_options_for_transport(plugin);
     let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
         .await
         .map_err(|err| anyhow!("failed to spawn transport plugin {}: {err}", plugin.name))?;
-    let described = describe_host(plugin, &host, project_root).await;
+    let described = describe_host(plugin, &host, project_root, start_config).await;
     // Test-only describe-and-shutdown helper. Production paths use
     // `spawn_and_keep_alive` so the plugin survives URL resolution.
     let _ = host.shutdown_transport().await;
@@ -474,12 +542,16 @@ async fn spawn_and_describe(plugin: &DiscoveredPlugin, project_root: &str) -> Re
     described
 }
 
-async fn spawn_and_keep_alive(plugin: &DiscoveredPlugin, project_root: &str) -> Result<RunningTransport> {
+async fn spawn_and_keep_alive(
+    plugin: &DiscoveredPlugin,
+    project_root: &str,
+    start_config: Option<Value>,
+) -> Result<RunningTransport> {
     let options = spawn_options_for_transport(plugin);
     let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
         .await
         .map_err(|err| anyhow!("failed to spawn transport plugin {}: {err}", plugin.name))?;
-    match describe_host(plugin, &host, project_root).await {
+    match describe_host(plugin, &host, project_root, start_config).await {
         Ok(info) => Ok(RunningTransport { info, host }),
         Err(err) => {
             // Spec: even on failure, drive the transport/shutdown drain so
@@ -655,9 +727,9 @@ fn append_path(base: &str, path: &str) -> String {
 mod tests {
     use super::{
         append_path, extract_url, first_api_url_in, first_ui_url_in, missing_transport_plugins_error,
-        partition_transport_plugins, plugin_advertises_web_ui, resolve_open_url, serve_url_summary_lines,
-        shutdown_running_transports, wait_for_shutdown_signal, SpawnedTransport, TRANSPORT_PLUGIN_KIND,
-        WEB_UI_CAPABILITY, WEB_UI_PLUGIN_KIND,
+        partition_transport_plugins, plugin_advertises_web_ui, resolve_open_url, schema_lists_graphql,
+        serve_url_summary_lines, shutdown_running_transports, wait_for_shutdown_signal, web_ui_start_config,
+        SpawnedTransport, TRANSPORT_PLUGIN_KIND, WEB_UI_CAPABILITY, WEB_UI_PLUGIN_KIND,
     };
     use crate::shared::{classify_cli_error_kind, extract_cli_error_details, CliErrorKind};
     use crate::WebOpenArgs;
@@ -693,8 +765,38 @@ mod tests {
             kind: kind.to_string(),
             url: url.map(ToString::to_string),
             serves_ui,
+            serves_graphql: false,
             info: json!({}),
         }
+    }
+
+    #[test]
+    fn schema_lists_graphql_reads_transport_kinds() {
+        assert!(schema_lists_graphql(&json!({"kinds": ["graphql"], "default_port": 8081})));
+        assert!(!schema_lists_graphql(&json!({"kinds": ["http", "static"]})));
+        assert!(!schema_lists_graphql(&json!({})));
+    }
+
+    #[test]
+    fn web_ui_start_config_passes_the_graphql_url() {
+        let http = fake_running("animus-transport-http", TRANSPORT_PLUGIN_KIND, Some("http://127.0.0.1:8080"), false);
+        let graphql = SpawnedTransport {
+            serves_graphql: true,
+            ..fake_running("animus-transport-graphql", TRANSPORT_PLUGIN_KIND, Some("http://127.0.0.1:9181"), false)
+        };
+        let config = web_ui_start_config([&http, &graphql].into_iter());
+        assert_eq!(config, Some(json!({"api_origin": "http://127.0.0.1:9181"})));
+    }
+
+    #[test]
+    fn web_ui_start_config_is_none_without_a_graphql_transport() {
+        let http = fake_running("animus-transport-http", TRANSPORT_PLUGIN_KIND, Some("http://127.0.0.1:8080"), false);
+        assert_eq!(web_ui_start_config([&http].into_iter()), None);
+        let graphql_without_url = SpawnedTransport {
+            serves_graphql: true,
+            ..fake_running("animus-transport-graphql", TRANSPORT_PLUGIN_KIND, None, false)
+        };
+        assert_eq!(web_ui_start_config([&graphql_without_url].into_iter()), None);
     }
 
     #[test]
@@ -902,6 +1004,6 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains('\n'), "human-mode message keeps multi-line install help: {message:?}");
         assert!(message.contains("animus plugin install-defaults --include-transports"));
-        assert!(message.contains("launchapp-dev/animus-transport-http"));
+        assert!(message.contains("animus-ecosystem/animus-transport-http"));
     }
 }
