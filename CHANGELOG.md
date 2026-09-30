@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **The dashboard works with the default install.** `animus plugin
+  install-defaults --include-transports` now pins `animus-web-ui` v0.1.3 (the
+  first release that embeds the dashboard and proxies `/graphql` to the
+  GraphQL transport), `animus-transport-graphql` v0.2.4 (the first release on
+  the dashboard's schema line; v0.2.0-v0.2.3 predate it) and
+  `animus-transport-http` v0.2.3. Before, `animus web serve` served an old
+  dashboard build whose API calls failed. Both transports moved to the
+  `animus-ecosystem` GitHub org and are pinned there, since releases cut after
+  the move are signed under that name. `animus-ecosystem` joins
+  `launchapp-dev` as a built-in trusted org, so `install-defaults` installs
+  them without a trust prompt (transport-http is in the default required set).
+- **`animus web serve` tells the dashboard where the API is.** API transports
+  start before UI plugins, and UI plugins get the GraphQL transport's bound
+  address as `api_origin`.
+- **The dashboard answers only local requests.** The web UI and GraphQL
+  transport releases above refuse requests whose `Host` or browser `Origin` is
+  not a loopback address, so other websites can no longer drive the daemon
+  through them.
+- **CI serves the dashboard.** `scripts/check-dashboard.sh` installs the
+  transport pins, starts the daemon and `animus web serve`, and checks the
+  dashboard page and its query.
+
 - **Default plugins now work with the 0.7 daemon.** The default queue pin moves
   to `launchapp-dev/animus-queue-default` v0.4.0, the first release with
   generation-fenced leases (`generation_fenced_leases_v1`); the 0.7 daemon

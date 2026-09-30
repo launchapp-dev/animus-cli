@@ -169,8 +169,8 @@ The reserved list lives in
 
 A separate allowlist at `~/.animus/trusted-orgs.yaml` (override with
 `$ANIMUS_TRUSTED_ORGS`) records which GitHub owners the operator has trusted
-for plugin installs. Built-in trust: `launchapp-dev` (the canonical Animus
-plugins).
+for plugin installs. Built-in trust: `launchapp-dev` and `animus-ecosystem`
+(the canonical Animus plugins; the API transports live in `animus-ecosystem`).
 
 ```yaml
 trusted_orgs:

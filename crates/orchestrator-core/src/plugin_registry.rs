@@ -83,10 +83,18 @@ pub const DEFAULT_SUBJECT_PLUGINS: &[(&str, &str)] = &[
 ];
 
 /// Transport + web UI plugins installed by `--include-transports`.
+///
+/// The two API transports moved to the `animus-ecosystem` org. Pin them
+/// there: cosign identity checks are rooted at the pinned `owner/repo`, and
+/// releases cut after the move are signed as `animus-ecosystem/...`.
+/// `animus-transport-graphql` v0.2.4 is the first release on the current
+/// schema line (v0.2.0-v0.2.3 predate it) and binds before reporting its
+/// address; `animus-web-ui` v0.1.3 is the first release that embeds the
+/// dashboard build and proxies `/graphql` to that transport.
 pub const DEFAULT_TRANSPORT_PLUGINS: &[(&str, &str)] = &[
-    ("launchapp-dev/animus-transport-http", "v0.2.1"),
-    ("launchapp-dev/animus-transport-graphql", "v0.2.3"),
-    ("launchapp-dev/animus-web-ui", "v0.1.0"),
+    ("animus-ecosystem/animus-transport-http", "v0.2.3"),
+    ("animus-ecosystem/animus-transport-graphql", "v0.2.4"),
+    ("launchapp-dev/animus-web-ui", "v0.1.3"),
 ];
 
 /// Format a registry entry into the `owner/repo@tag` spec accepted by

@@ -20,8 +20,8 @@ recommended = [
 ]
 
 [transports]
-required = ["launchapp-dev/animus-transport-http"]
-recommended = ["launchapp-dev/animus-transport-graphql"]
+required = ["animus-ecosystem/animus-transport-http"]
+recommended = ["animus-ecosystem/animus-transport-graphql"]
 
 [ui]
 recommended = ["launchapp-dev/animus-web-ui"]
