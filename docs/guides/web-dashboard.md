@@ -63,12 +63,15 @@ reaches the API even when the GraphQL transport isn't on its default port.
 Both transports talk to the daemon over its control socket, so start the
 daemon (`animus daemon start`) for the dashboard to show data.
 
-The GraphQL API has no login. The GraphQL transport and the web UI therefore
-answer only requests addressed to this machine: the `Host` header must be
-`localhost`, a `127.x.x.x` address or `[::1]`, and a browser `Origin`, when
-sent, must be one of those too. Other websites open in the same browser get
-`403`. To reach the dashboard through another host name on purpose, list it
-in the plugin's `allowed_hosts` config.
+The APIs have no login. The HTTP transport (v0.2.4+), the GraphQL transport
+and the web UI therefore answer only requests addressed to this machine: the
+`Host` header must be `localhost`, a `127.x.x.x` address or `[::1]`, and a
+browser `Origin`, when sent, must be one of those too. Other websites open in
+the same browser, including DNS-rebinding pages, get `403`. To reach the HTTP
+transport through another host name on purpose, list it in
+`ANIMUS_TRANSPORT_ALLOWED_HOSTS` (comma-separated) in the environment of
+`animus web serve`. Under `animus web serve` the GraphQL transport and the web
+UI don't accept extra host names yet.
 
 ## URL Override
 

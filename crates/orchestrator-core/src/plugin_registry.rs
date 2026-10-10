@@ -90,9 +90,11 @@ pub const DEFAULT_SUBJECT_PLUGINS: &[(&str, &str)] = &[
 /// `animus-transport-graphql` v0.2.4 is the first release on the current
 /// schema line (v0.2.0-v0.2.3 predate it) and binds before reporting its
 /// address; `animus-web-ui` v0.1.3 is the first release that embeds the
-/// dashboard build and proxies `/graphql` to that transport.
+/// dashboard build and proxies `/graphql` to that transport. All three
+/// (transport-http from v0.2.4) answer only requests addressed to this
+/// machine, which keeps DNS-rebinding pages off their unauthenticated APIs.
 pub const DEFAULT_TRANSPORT_PLUGINS: &[(&str, &str)] = &[
-    ("animus-ecosystem/animus-transport-http", "v0.2.3"),
+    ("animus-ecosystem/animus-transport-http", "v0.2.4"),
     ("animus-ecosystem/animus-transport-graphql", "v0.2.4"),
     ("launchapp-dev/animus-web-ui", "v0.1.3"),
 ];

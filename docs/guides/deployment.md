@@ -29,8 +29,7 @@ RUN curl -fsSL -o /tmp/ao.tar.gz \
 # Use a glibc-new enough base. animus binaries built on Ubuntu 24.04 need
 # GLIBC >= 2.39; debian:trixie ships 2.41.
 FROM debian:trixie-slim
-ENV DEBIAN_FRONTEND=noninteractive \
-    ANIMUS_TRANSPORT_HTTP_BIND=0.0.0.0:8080
+ENV DEBIAN_FRONTEND=noninteractive
 
 # libdbus-1-3 + libssl3: animus links them for the secret backend and TLS.
 # git + curl: plugin install uses them at build time.
@@ -67,14 +66,14 @@ RUN animus plugin install launchapp-dev/animus-provider-claude  $SIG --allow-sha
  && animus plugin install launchapp-dev/animus-subject-default  $SIG --project-root /app \
  && animus plugin install launchapp-dev/animus-queue-default    $SIG --project-root /app \
  && animus plugin install launchapp-dev/animus-workflow-runner-default $SIG --project-root /app \
- && animus plugin install launchapp-dev/animus-transport-http   $SIG --project-root /app
+ && animus plugin install animus-ecosystem/animus-transport-http $SIG --project-root /app
 
 # Confirm all required roles are satisfied before shipping the image.
 RUN animus daemon preflight --project-root /app
 
-COPY deploy/start.sh /app/deploy/start.sh
+COPY deploy/start.sh deploy/webapi-forward.js /app/deploy/
 RUN chmod +x /app/deploy/start.sh
-EXPOSE 8080
+EXPOSE 8088
 CMD ["/app/deploy/start.sh"]
 ```
 
@@ -148,18 +147,6 @@ A minimal entrypoint (`deploy/start.sh`):
 set -euo pipefail
 ROOT=/app
 
-# Write the transport bind address into project config so the plugin
-# binds an externally-reachable interface instead of loopback.
-BIND="${ANIMUS_TRANSPORT_HTTP_BIND:-0.0.0.0:8080}"
-mkdir -p "$ROOT/.animus"
-python3 - "$ROOT/.animus/config.json" "$BIND" <<'PY'
-import json, sys, pathlib
-path, bind = pathlib.Path(sys.argv[1]), sys.argv[2]
-cfg = json.loads(path.read_text()) if path.exists() and path.read_text().strip() else {}
-cfg.setdefault("transports", {}).setdefault("animus-transport-http", {})["bind_addr"] = bind
-path.write_text(json.dumps(cfg, indent=2))
-PY
-
 # Start the daemon in the foreground (correct for containers).
 # Preflight runs automatically; --auto-install installs missing required plugins
 # from pinned defaults if any were omitted from the image.
@@ -172,13 +159,61 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-# Spawn the installed transport plugin (animus-transport-http or the full stack).
+# Spawn the installed transport plugin. It binds 127.0.0.1:8080 (loopback).
 animus web serve --project-root "$ROOT" &
 WEB_PID=$!
-trap 'kill "$DAEMON_PID" "$WEB_PID" 2>/dev/null || true' EXIT
+
+# Publish the API to other containers through a forwarder that checks
+# ANIMUS_WEBAPI_TOKEN (below). Listens on 0.0.0.0:${WEBAPI_PORT:-8088}.
+node /app/deploy/webapi-forward.js &
+FWD_PID=$!
+trap 'kill "$DAEMON_PID" "$WEB_PID" "$FWD_PID" 2>/dev/null || true' EXIT
 
 wait "$DAEMON_PID"
 ```
+
+The transport always binds `127.0.0.1:8080` under `animus web serve`, so other
+containers can't reach it directly. A small forwarder in the same container
+publishes it: it listens on the container's interface, refuses requests
+without `Authorization: Bearer $ANIMUS_WEBAPI_TOKEN`, and forwards the rest to
+the transport (`deploy/webapi-forward.js`):
+
+```js
+const http = require("http");
+const SECRET = process.env.ANIMUS_WEBAPI_TOKEN || "";
+const PORT = parseInt(process.env.WEBAPI_PORT || "8088", 10);
+const TARGET = { host: "127.0.0.1", port: 8080 };
+if (!SECRET) {
+  console.error("ANIMUS_WEBAPI_TOKEN is not set; refusing to start");
+  process.exit(1);
+}
+http
+  .createServer((req, res) => {
+    if (req.headers.authorization !== `Bearer ${SECRET}`) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end('{"error":"unauthorized"}');
+    }
+    const headers = { ...req.headers };
+    delete headers.authorization;
+    // The transport answers only requests addressed to this machine.
+    headers.host = `${TARGET.host}:${TARGET.port}`;
+    delete headers.origin;
+    const upstream = http.request({ ...TARGET, path: req.url, method: req.method, headers }, (up) => {
+      res.writeHead(up.statusCode || 502, up.headers);
+      up.pipe(res);
+    });
+    upstream.on("error", () => {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end('{"error":"bad_gateway"}');
+    });
+    req.pipe(upstream);
+  })
+  .listen(PORT, "0.0.0.0");
+```
+
+Keep the `Host` rewrite: the transport refuses (`403`) any request whose
+`Host` isn't `localhost`, a `127.x.x.x` address or `[::1]` (see
+[Security model](#security-model)).
 
 The daemon and the transport are co-located in one container here. For higher
 availability, split them: one container runs the daemon without a transport,
@@ -189,8 +224,8 @@ another runs the transport pointed at the daemon's control socket.
 | Variable | Required | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes (claude provider) | Provider API key; injected into the plugin's env via process env |
-| `ANIMUS_TRANSPORT_HTTP_BIND` | No (default `0.0.0.0:8080`) | Interface and port the HTTP transport binds |
-| `ANIMUS_WEBAPI_TOKEN` | Strongly recommended | Bearer token that any gateway/proxy must present to the transport |
+| `ANIMUS_WEBAPI_TOKEN` | Yes (forwarder) | Bearer token the forwarder requires on every request |
+| `WEBAPI_PORT` | No (default `8088`) | Port the forwarder listens on |
 
 **Keychain unavailable in containers.** The OS keychain is not available in
 typical container environments. Secrets must reach the daemon and its plugins
@@ -229,7 +264,8 @@ proxy or gateway service.
 │  Service: animus  (PRIVATE — no public URL)  │
 │  ┌────────────────────────────────────────┐  │
 │  │ animus daemon run   (foreground)       │  │
-│  │ animus web serve    (transport plugin) │  │  ← binds 0.0.0.0:8080
+│  │ animus web serve    (transport plugin) │  │  ← binds 127.0.0.1:8080
+│  │ webapi-forward.js   (checks token)     │  │  ← listens 0.0.0.0:8088
 │  └────────────────────────────────────────┘  │
 │           ↑ Railway private network          │
 │  Service: gateway  (PUBLIC)                  │
@@ -237,14 +273,15 @@ proxy or gateway service.
 │  │ Hono / Express / nginx / etc.          │  │  ← public HTTPS domain
 │  │ Verifies caller auth                   │  │
 │  │ Adds Bearer header, forwards to        │  │
-│  │ http://animus.railway.internal:8080    │  │
+│  │ http://animus.railway.internal:8088    │  │
 │  └────────────────────────────────────────┘  │
 └──────────────────────────────────────────────┘
 ```
 
-In the gateway service, reach the Animus webapi using the Railway private DNS
-name: `http://<service-name>.railway.internal:8080`. The gateway should add
-`Authorization: Bearer <ANIMUS_WEBAPI_TOKEN>` to every forwarded request.
+In the gateway service, reach the Animus webapi through the forwarder using
+the Railway private DNS name: `http://<service-name>.railway.internal:8088`.
+The gateway must add `Authorization: Bearer <ANIMUS_WEBAPI_TOKEN>` to every
+forwarded request.
 
 ### Environment variables
 
@@ -253,14 +290,13 @@ Set these in the Railway dashboard under the **private `animus` service**:
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude provider API key (or the key for your chosen provider) |
-| `ANIMUS_TRANSPORT_HTTP_BIND` | Override bind address. Default: `0.0.0.0:8080` |
-| `ANIMUS_WEBAPI_TOKEN` | Bearer token the gateway must include on every request |
+| `ANIMUS_WEBAPI_TOKEN` | Bearer token the forwarder requires on every request |
 
 On the **public gateway service**, set at minimum:
 
 | Variable | Description |
 |---|---|
-| `ANIMUS_WEBAPI_URL` | `http://animus.railway.internal:8080` |
+| `ANIMUS_WEBAPI_URL` | `http://animus.railway.internal:8088` |
 | `ANIMUS_WEBAPI_TOKEN` | Must match the value set on the animus service |
 
 ### Persistence on Railway
@@ -282,7 +318,7 @@ plugin (e.g. a Postgres-backed backend) rather than relying on
 animus plugin install-defaults --include-transports
 
 # Or install only the HTTP transport:
-animus plugin install launchapp-dev/animus-transport-http
+animus plugin install animus-ecosystem/animus-transport-http
 ```
 
 ### Starting the transport
@@ -299,13 +335,11 @@ URL through the plugin's JSON-RPC `initialize` handshake.
 
 ### Bind address
 
-The HTTP transport reads its bind address from (in priority order):
-
-1. `bind_addr` in `.animus/config.json` under the `transports.animus-transport-http` key.
-2. The `ANIMUS_TRANSPORT_HTTP_BIND` environment variable (default: `127.0.0.1:8080`).
-
-In a container, configure the transport to bind `0.0.0.0` so other containers
-can reach it. The entrypoint script in Section 2 patches `config.json` at boot.
+Under `animus web serve` the HTTP transport binds `127.0.0.1:8080`. `web serve`
+passes no bind address and does not read a `transports` block from
+`.animus/config.json`, and the plugin host does not forward
+`ANIMUS_TRANSPORT_HTTP_BIND` to the plugin. To reach the API from another
+container, publish it through a forwarder (Section 2).
 
 ### REST surface — `/api/v1`
 
@@ -318,7 +352,10 @@ All endpoints return the same JSON envelope:
 
 #### Authentication
 
-Pass `ANIMUS_WEBAPI_TOKEN` as a Bearer token on every request:
+Requests through the forwarder (Section 2, port 8088) must carry
+`ANIMUS_WEBAPI_TOKEN` as a Bearer token. The transport itself ignores the
+header, so the examples below also work as-is inside the container against
+`localhost:8080`:
 
 ```bash
 curl -H "Authorization: Bearer $ANIMUS_WEBAPI_TOKEN" http://localhost:8080/api/v1/subjects
@@ -449,6 +486,14 @@ In production:
 3. **`ANIMUS_WEBAPI_TOKEN`** is a shared secret between the gateway and the
    transport-side forwarder. Set it via your platform's secret injection
    mechanism, not in source control.
+4. **The transport answers only requests addressed to this machine**
+   (animus-transport-http v0.2.4+). `Host` must be `localhost`, a `127.x.x.x`
+   address or `[::1]`, and a browser `Origin`, when sent, must be one of
+   those too; anything else gets `403`. This stops web pages in a local
+   browser from driving the API through DNS rebinding. A proxy in front of
+   the transport should send `Host: 127.0.0.1:8080`; if it can't, list the
+   names it passes on in `ANIMUS_TRANSPORT_ALLOWED_HOSTS` (comma-separated,
+   in the environment of `animus web serve`).
 
 ## 5. GraphQL (`animus-transport-graphql`)
 

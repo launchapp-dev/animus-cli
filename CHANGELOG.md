@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **The HTTP transport answers only local requests.** `install-defaults
+  --include-transports` now pins `animus-transport-http` v0.2.4, which refuses
+  (`403`) requests whose `Host` or browser `Origin` is not a loopback address.
+  Before, a web page open in the same browser could drive its unauthenticated
+  API (start workflows, change the queue, install plugins) through DNS
+  rebinding. Deployments that reach it through a proxy should send
+  `Host: 127.0.0.1:8080`, or list the names they pass on in
+  `ANIMUS_TRANSPORT_ALLOWED_HOSTS`. The deployment guide now documents the
+  token-checking forwarder that publishes the API from a container; its old
+  recipe bound `0.0.0.0` through a `.animus/config.json` key that `animus web
+  serve` never read. `scripts/check-dashboard.sh` now also checks port 8080
+  and rebound host names.
+
 - **The dashboard works with the default install.** `animus plugin
   install-defaults --include-transports` now pins `animus-web-ui` v0.1.3 (the
   first release that embeds the dashboard and proxies `/graphql` to the

@@ -162,13 +162,14 @@ daemon-side installs.
 To verify a published release artifact by hand:
 
 ```bash
-REPO=animus-transport-graphql
-VER=v0.2.3
+OWNER=animus-ecosystem
+REPO=animus-transport-http
+VER=v0.2.4
 cd /tmp && mkdir -p cosign-check && cd cosign-check
-gh release download $VER --repo launchapp-dev/$REPO --pattern '*.tar.gz' --pattern '*.bundle'
+gh release download $VER --repo $OWNER/$REPO --pattern '*.tar.gz' --pattern '*.bundle'
 for tar in *.tar.gz; do
   cosign verify-blob \
-    --certificate-identity-regexp "https://github.com/launchapp-dev/$REPO/.github/workflows/release\.yml@refs/tags/v.*" \
+    --certificate-identity-regexp "https://github.com/$OWNER/$REPO/.github/workflows/release\.yml@refs/tags/v.*" \
     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
     --bundle "$tar.bundle" \
     "$tar"
