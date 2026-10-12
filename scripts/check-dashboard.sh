@@ -8,7 +8,9 @@
 # - the dashboard's own query, sent to the web UI's /graphql, comes back with
 #   data and no errors (the web UI proxies it to the GraphQL transport,
 #   which asks the daemon);
-# - both the web UI and the GraphQL transport refuse a cross-site request.
+# - the HTTP transport answers a local request with live daemon data;
+# - all three refuse a cross-site request and a request addressed to another
+#   host name (DNS rebinding).
 #
 # So this fails when a pin in crates/orchestrator-core/src/plugin_registry.rs
 # points at a transport or web UI release that can't serve the dashboard
@@ -118,12 +120,25 @@ if ! wait_for 120 dashboard_query; then
 fi
 dashboard_query
 
-echo "== cross-site requests are refused"
-for port in 8082 8081; do
-  status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
-    -H 'content-type: application/json' -H 'origin: https://evil.example' \
-    --data '{"query":"{ __typename }"}' "http://127.0.0.1:${port}/graphql")"
-  [[ "${status}" == "403" ]] || fail "port ${port} answered a cross-site request with ${status}, expected 403"
+echo "== HTTP transport answers local requests"
+health="$(curl -fsS http://127.0.0.1:8080/api/v1/daemon/health)" \
+  || fail "HTTP transport did not answer a local request"
+python3 -c 'import json, sys; sys.exit(0 if json.loads(sys.argv[1]).get("ok") else "not ok: " + sys.argv[1][:300])' "${health}" \
+  || fail "HTTP transport health is not ok"
+
+echo "== cross-site and rebound requests are refused"
+expect_403() {
+  local what="$1" url="$2"
+  shift 2
+  local status
+  status="$(curl -sS -o /dev/null -w '%{http_code}' "$@" "${url}")"
+  [[ "${status}" == "403" ]] || fail "${what}: ${url} answered ${status}, expected 403"
+}
+for url in http://127.0.0.1:8082/graphql http://127.0.0.1:8081/graphql http://127.0.0.1:8080/api/v1/workflows/run; do
+  expect_403 "cross-site POST" "${url}" -X POST \
+    -H 'content-type: application/json' -H 'origin: https://evil.example' --data '{}'
+  expect_403 "rebound Host" "${url}" -X POST \
+    -H 'content-type: application/json' -H 'host: evil.example' --data '{}'
 done
 
 echo "dashboard OK"
